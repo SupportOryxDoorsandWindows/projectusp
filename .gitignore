@@ -1,0 +1,17 @@
+# Product data never goes into the repository. The repo is public so that
+# GitHub Pages can serve it for free; every spec, engineering note and drawing
+# lives in Supabase behind a staff sign-in instead.
+data/
+
+# The source spreadsheet is internal
+*.xlsx
+*.xlsm
+
+# Never commit keys
+.env
+.env.*
+*.pem
+
+# OS noise
+.DS_Store
+Thumbs.db
