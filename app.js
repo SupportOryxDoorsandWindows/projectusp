@@ -428,10 +428,14 @@ function answerFactQuestion(text) {
 }
 
 function figures(list) {
-  return `<div class="gallery">` + list.map(d =>
-    `<div class="fig"><img loading="lazy" src="${esc(d.url || "")}" alt="${esc(d.label)}"
-      onclick="zoom(this.src,'${esc(d.label)}')"><div class="cap">${esc(d.label)}</div></div>`
-  ).join("") + `</div>`;
+  return `<div class="gallery">` + list.map(d => {
+    // A drawing with no signed URL has not been uploaded to the bucket yet.
+    const body = d.url
+      ? `<img loading="lazy" src="${esc(d.url)}" alt="${esc(d.label)}"
+           onclick="zoom(this.src,'${esc(d.label)}')">`
+      : `<div class="fig-missing">Drawing not uploaded</div>`;
+    return `<div class="fig">${body}<div class="cap">${esc(d.label)}</div></div>`;
+  }).join("") + `</div>`;
 }
 
 function respond(text) {
