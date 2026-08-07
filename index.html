@@ -324,82 +324,40 @@ dialog .bar{
 }
 dialog::backdrop{background:rgba(2,42,58,0.55)}
 
-/* ---------- Sign-in gate ---------- */
-#gate{
+/* ---------- Loading screen ---------- */
+#loading{
   position:fixed; inset:0; z-index:60; background:var(--brand);
   display:flex; align-items:center; justify-content:center; padding:var(--space-6);
 }
-#gate[hidden]{display:none}
-.gate-card{
-  width:100%; max-width:380px; background:var(--white);
-  border-radius:var(--r-lg); box-shadow:var(--sh-modal);
-  padding:var(--space-8) var(--space-7);
+#loading[hidden]{display:none}
+.loading-card{
+  width:100%; max-width:360px; text-align:center;
 }
-/* The logo is white, so it sits on a brand-blue band as it does in the Hub */
-.gate-brand{
-  display:flex; justify-content:center; align-items:center;
-  background:var(--brand); border-radius:var(--r-md);
-  padding:var(--space-5) var(--space-6); margin-bottom:var(--space-7);
+/* The logo is white, so it stays on the brand-blue ground as in the Hub */
+.loading-brand{margin-bottom:var(--space-7)}
+.loading-brand img{height:40px; width:auto; display:inline-block}
+#loadingMsg{
+  font-family:var(--font-display); font-weight:500; font-size:11.5px;
+  letter-spacing:0.12em; text-transform:uppercase; color:var(--silver);
+  margin:0;
 }
-.gate-brand img{height:34px; width:auto; display:block}
-.gate-card h2{margin:0 0 var(--space-1); font-size:18px; text-align:center}
-.gate-sub{
-  font-family:var(--font-display); font-weight:500; font-size:11px;
-  letter-spacing:0.08em; text-transform:uppercase; color:var(--text-muted-light);
-  text-align:center; margin:0 0 var(--space-7);
+#loadingDetail{
+  font-size:12.5px; color:var(--silver); margin:var(--space-4) 0 0; line-height:1.6;
 }
-.gate-field{margin-bottom:var(--space-5)}
-.gate-card .btn-primary{width:100%; margin-top:var(--space-2)}
-#gateStatus{
-  min-height:18px; margin-top:var(--space-4); font-size:12.5px;
-  color:var(--text-muted); text-align:center;
-}
-#gateStatus.err{color:var(--danger)}
-.gate-foot{
-  margin-top:var(--space-6); padding-top:var(--space-5);
-  border-top:1px solid var(--line-soft);
-  font-size:11.5px; color:var(--text-muted-light); text-align:center; line-height:1.6;
-}
-/* Sign-in gate is dark-ground: the logo sits on brand blue as in the Hub */
-.who{
-  font-family:var(--font-display); font-weight:500; font-size:11px;
-  letter-spacing:0.06em; color:var(--silver);
-}
-#signOut{
-  font-family:var(--font-display); font-weight:600; font-size:11px;
-  letter-spacing:0.06em; text-transform:uppercase;
-  background:none; border:1px solid rgba(255,255,255,0.22);
-  color:rgba(255,255,255,0.72); border-radius:var(--r-pill);
-  padding:var(--space-1) var(--space-4); cursor:pointer;
-  transition:background .15s ease, color .15s ease, border-color .15s ease;
-}
-#signOut:hover{background:rgba(255,255,255,0.1); color:var(--white); border-color:rgba(255,255,255,0.4)}
+#loading.err #loadingMsg{color:var(--accent)}
+#loading.err #loadingDetail{color:rgba(255,255,255,0.72)}
 </style>
 </head>
 <body>
 
-<!-- Sign-in gate. Nothing below it is rendered until Supabase authenticates. -->
-<div id="gate" hidden>
-  <div class="gate-card">
-    <div class="gate-brand">
+<!-- Shown while the knowledge base loads from Supabase. No sign-in required. -->
+<div id="loading">
+  <div class="loading-card">
+    <div class="loading-brand">
       <img src="assets/logos/oryx-logo-white.png" alt="Oryx Doors &amp; Windows">
     </div>
-    <h2>Product Selector</h2>
-    <p class="gate-sub">Oryx staff sign-in</p>
-    <form id="gateForm">
-      <div class="gate-field">
-        <label class="field-label" for="gateEmail">Work email</label>
-        <input id="gateEmail" type="email" autocomplete="username" required>
-      </div>
-      <div class="gate-field">
-        <label class="field-label" for="gatePassword">Password</label>
-        <input id="gatePassword" type="password" autocomplete="current-password" required>
-      </div>
-      <button class="btn-primary" type="submit">Sign in</button>
-    </form>
-    <div id="gateStatus"></div>
-    <div class="gate-foot">Accounts are created by the IT team.<br>
-      Product data is not available without a sign-in.</div>
+    <p id="loadingMsg">Loading product data…</p>
+    <p id="loadingDetail"></p>
   </div>
 </div>
 
@@ -417,8 +375,6 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
     <div class="header-actions">
       <span class="stat-pill">Systems: <strong id="sysCount">0</strong></span>
       <span class="stat-pill">Drawings: <strong id="drwCount">0</strong></span>
-      <span class="who" id="whoami"></span>
-      <button id="signOut" type="button">Sign out</button>
       <nav>
         <button data-v="ask" class="on">Ask the bot</button>
         <button data-v="check">Opening checker</button>

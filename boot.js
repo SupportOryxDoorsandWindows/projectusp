@@ -1,9 +1,11 @@
-/* Sign-in gate and data loader.
+/* Data loader.
  *
- * Nothing product-related ships in this repository. On a successful sign-in
- * this file pulls the knowledge base out of Supabase, assembles it into the
- * shape app.js expects (window.ORYX_KB), signs URLs for the drawings in the
- * private bucket, and only then loads the application. */
+ * No sign-in: the app is open to anyone who opens the page. This file pulls the
+ * knowledge base out of Supabase, assembles it into the shape app.js expects
+ * (window.ORYX_KB), resolves the drawing URLs, and then loads the application.
+ *
+ * The key in config.js is read-only. No table has an insert, update or delete
+ * policy, so nothing can be changed through it. */
 
 (function () {
   const CFG = window.ORYX_CONFIG;
@@ -13,7 +15,7 @@
   /* ---------------------------------------------------------------- *
    * Turn the seven tables back into the single object app.js expects.
    * Kept pure and exposed as window.assembleKB so it can be tested
-   * without signing in.
+   * independently of the network.
    * ---------------------------------------------------------------- */
   function assembleKB(t, urls) {
     const byId = (rows) => {
@@ -66,7 +68,7 @@
   window.assembleKB = assembleKB;
 
   /* ---------------------------------------------------------------- *
-   * Load the knowledge base
+   * Fetch
    * ---------------------------------------------------------------- */
   async function loadKB() {
     const get = async (table, order) => {
@@ -87,86 +89,49 @@
         get("kb_meta"),
       ]);
 
-    // One signed URL per drawing, requested in a single call.
-    const paths = drawings.map((d) => d.storage_path);
-    const urls = {};
-    if (paths.length) {
-      const { data, error } = await sb.storage
-        .from(CFG.drawingsBucket)
-        .createSignedUrls(paths, CFG.signedUrlSeconds);
-      if (error) throw new Error("drawings: " + error.message);
-      data.forEach((r) => {
-        if (r.signedUrl) urls[r.path] = r.signedUrl;
-      });
+    if (!systems.length) {
+      throw new Error(
+        "No systems came back. If the sign-in was removed recently, " +
+        "open-read-access.sql still needs running in the Supabase SQL editor.");
     }
+
+    // Public bucket, so these URLs are permanent and need no refreshing.
+    const urls = {};
+    drawings.forEach((d) => {
+      urls[d.storage_path] = sb.storage
+        .from(CFG.drawingsBucket)
+        .getPublicUrl(d.storage_path).data.publicUrl;
+    });
 
     return assembleKB(
       { systems, configs, options, drawings, notes, glossary, meta }, urls);
   }
 
   /* ---------------------------------------------------------------- *
-   * Start the app once, after the data is in place
+   * Start
    * ---------------------------------------------------------------- */
-  let started = false;
   async function start() {
-    if (started) return;
-    started = true;
-    setStatus("Loading product data…");
     try {
       window.ORYX_KB = await loadKB();
     } catch (e) {
-      started = false;
-      setStatus("Could not load the product data: " + e.message, true);
+      fail(e.message);
       return;
     }
     const s = document.createElement("script");
     s.src = "app.js";
     s.onload = () => {
-      $("#gate").hidden = true;
+      $("#loading").hidden = true;
       $("#appShell").hidden = false;
-      const email = (window.ORYX_USER && window.ORYX_USER.email) || "";
-      $("#whoami").textContent = email;
     };
-    s.onerror = () => setStatus("Could not load app.js.", true);
+    s.onerror = () => fail("Could not load app.js.");
     document.body.appendChild(s);
   }
 
-  function setStatus(msg, isError) {
-    const el = $("#gateStatus");
-    el.textContent = msg || "";
-    el.classList.toggle("err", !!isError);
+  function fail(msg) {
+    $("#loadingMsg").textContent = "Could not load the product data.";
+    $("#loadingDetail").textContent = msg;
+    $("#loading").classList.add("err");
   }
 
-  /* ---------------------------------------------------------------- *
-   * Auth
-   * ---------------------------------------------------------------- */
-  $("#gateForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = $("#gateEmail").value.trim();
-    const password = $("#gatePassword").value;
-    if (!email || !password) return setStatus("Enter your email and password.", true);
-    setStatus("Signing in…");
-    const { data, error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) return setStatus(error.message, true);
-    window.ORYX_USER = data.user;
-    $("#gatePassword").value = "";
-    start();
-  });
-
-  document.addEventListener("click", (e) => {
-    if (e.target && e.target.id === "signOut") {
-      sb.auth.signOut().then(() => location.reload());
-    }
-  });
-
-  // Resume an existing session so a reload does not ask again.
-  sb.auth.getSession().then(({ data }) => {
-    if (data.session) {
-      window.ORYX_USER = data.session.user;
-      start();
-    } else {
-      $("#gate").hidden = false;
-      $("#gateEmail").focus();
-    }
-  });
+  start();
 })();

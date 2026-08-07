@@ -4,7 +4,8 @@ A technical assistant for the doors, windows and shading range. It answers produ
 questions and tells you whether a given opening can be built in a given system —
 and what to use instead when it cannot.
 
-Hosted on GitHub Pages, with the product data in Supabase behind a staff sign-in.
+Hosted on GitHub Pages, with the product data in Supabase. No sign-in — open to
+anyone with the link.
 
 Built from two sources:
 
@@ -19,18 +20,37 @@ Built from two sources:
 | Layer | Where |
 |---|---|
 | App — HTML, CSS, JS, logo | GitHub Pages, free, from a public repository |
-| Product data — specs, engineering notes, glossary | Supabase Postgres, read-only, staff sign-in required |
-| 170 technical drawings | Supabase Storage, private bucket, signed URLs |
-| Sign-in | Supabase Auth, email and password |
+| Product data — specs, engineering notes, glossary | Supabase Postgres, read-only |
+| 170 technical drawings | Supabase Storage, public bucket |
 
-**Nothing product-related is in this repository.** The public repo holds only the
-interface. Every sash limit, engineering note and drawing sits in Supabase behind
-authentication, protected by Row Level Security. Someone who finds the URL sees a
-sign-in screen and nothing else.
+There is **no sign-in**. Anyone who opens the page can use it.
 
-`config.js` contains the Supabase URL and the *publishable* key. That is safe to
-commit — it grants only what Row Level Security allows, and every table restricts
-reads to signed-in users. The `service_role` key must never go in this repo.
+`config.js` holds the Supabase URL and the *publishable* key. It is read-only —
+no table has an insert, update or delete policy, so nothing can be changed
+through it. The `service_role` key must never go in this repo.
+
+## Who can see the data
+
+Be clear-eyed about this: **the product data is public.** The page is served from
+a public GitHub Pages site and its key is visible in the source, so the sash
+limits, engineering notes and all 170 drawings can be read by anyone who finds
+the URL — not only Oryx staff.
+
+That was a deliberate choice to keep the tool frictionless for the team. Nothing
+can be *changed* by an outsider, only read.
+
+### Restoring the sign-in
+
+Two steps, if you later want it staff-only:
+
+1. Run `revert-read-access.sql` in the Supabase SQL editor.
+2. Restore the gate in the app. Commit `701e5b0` has the working version —
+   `git show 701e5b0 -- index.html boot.js` — which adds an email and password
+   screen, hides everything behind it, and signs drawing URLs instead of using
+   public ones.
+
+Then create users under **Authentication → Users → Add user**, ticking
+*Auto Confirm User*.
 
 ## Running it locally
 
@@ -38,19 +58,10 @@ reads to signed-in users. The `service_role` key must never go in this repo.
 python3 serve.py
 ```
 
-Then open http://localhost:8731 and sign in. Stop the server with Ctrl-C.
+Then open http://localhost:8731. Stop the server with Ctrl-C.
 
 It needs a server rather than opening `index.html` directly, because the browser
 blocks the Supabase requests from a `file://` page.
-
-## Staff accounts
-
-There is no self-signup, deliberately. Create accounts in the Supabase dashboard:
-
-**Authentication → Users → Add user** — enter the work email, set a password, and
-tick *Auto Confirm User*.
-
-To remove someone's access, delete their user in the same place.
 
 ## What it does
 
@@ -166,9 +177,11 @@ Three decisions worth knowing about:
 
 | File | Purpose |
 |---|---|
-| `index.html` | Interface, sign-in gate, and the full design-system token block |
+| `index.html` | Interface and the full design-system token block |
 | `config.js` | Supabase URL and publishable key |
-| `boot.js` | Sign-in, loads the knowledge base from Supabase, then starts the app |
+| `boot.js` | Loads the knowledge base from Supabase, then starts the app |
+| `open-read-access.sql` | Makes the data readable without a sign-in (already applied) |
+| `revert-read-access.sql` | Puts the staff sign-in requirement back |
 | `app.js` | Sizing engine, knowledge retrieval, UI |
 | `assets/logos/` | Oryx logo and favicon |
 | `build_kb.py` | Spreadsheet → `data/`; also holds the engineering notes and glossary |
@@ -178,7 +191,7 @@ Three decisions worth knowing about:
 
 ## Database
 
-Seven tables, all read-only to signed-in staff:
+Seven tables, all read-only:
 
 | Table | Holds |
 |---|---|
