@@ -78,6 +78,16 @@ It also answers specification questions — thresholds, drainage, sightlines,
 glass, hardware, configurations — and cross-range questions such as
 *"which systems have automation?"* or *"what is the tallest system?"*
 
+**Chat history.** Recent conversations are listed in a sidebar next to the chat,
+each with an automatic title taken from the first question (its size, system or
+topic) and a note of when it expires. Click one to reopen and continue it; the ×
+removes it. History is saved **only in the person's own browser** (localStorage),
+never sent anywhere, so a browser only ever holds its own chats — nothing to leak
+and no write endpoint to abuse. Each conversation is deleted automatically two
+days after its last message, which also frees the space it used. If the browser
+blocks storage (private mode, full quota), the sidebar simply hides and the bot
+still works.
+
 **Opening checker.** The same engine as a form, with filters for family,
 threshold, automation and maximum panel count. Shows every system that fits and
 why each of the others does not.

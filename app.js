@@ -466,13 +466,182 @@ function say(html, who) {
   chat.scrollTop = chat.scrollHeight;
 }
 
+/* ------------------------------------------------------------------ *
+ * Chat history
+ *
+ * Saved in THIS browser only (localStorage) — never sent anywhere.
+ * That makes it private by construction: no other person's browser
+ * ever holds these chats, so there is nothing to leak and no write
+ * endpoint to abuse. Each conversation is removed automatically two
+ * days after its last message, which also frees the space it used.
+ * ------------------------------------------------------------------ */
+
+const HIST_KEY = "oryx_chats_v1";
+const EXPIRY_MS = 2 * 24 * 60 * 60 * 1000;   // 2 days after the last message
+const MAX_CONVERSATIONS = 40;                 // keep browser storage bounded
+
+// Wrap localStorage so private mode or a full quota degrades to
+// "history off, bot still works" rather than throwing.
+const store = {
+  ok: (() => {
+    try { const k = "__oryx_t"; localStorage.setItem(k, "1"); localStorage.removeItem(k); return true; }
+    catch { return false; }
+  })(),
+  read() {
+    if (!this.ok) return [];
+    try { return JSON.parse(localStorage.getItem(HIST_KEY) || "[]"); } catch { return []; }
+  },
+  write(list) {
+    if (!this.ok) return;
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(list)); } catch { /* quota — skip */ }
+  },
+};
+
+const clock = () => Date.now();
+
+// Drop conversations whose last message is older than the expiry window.
+// Keep one id alive (the open chat) so it can't vanish mid-view.
+function sweep(list, keepId) {
+  const cut = clock() - EXPIRY_MS;
+  const kept = (list || []).filter(c => c.id === keepId || (c.updatedAt || 0) > cut);
+  if (kept.length !== (list || []).length) store.write(kept);
+  return kept;
+}
+
+function uid() {
+  return (crypto.randomUUID && crypto.randomUUID()) ||
+         "c" + Math.random().toString(36).slice(2) + clock().toString(36);
+}
+
+let conversations = sweep(store.read());
+let currentId = null;
+
+const historyEl = $("#history");
+const historyList = $("#historyList");
+
+// A short, honest title from the first question — no invention, just a
+// summary of what was actually asked (size, system and/or topic).
+function titleFor(text) {
+  const dims = parseDims(text);
+  const named = systemsNamedIn(text).map(s => s.name);
+  const cat = (CATEGORY_HINTS.find(([re]) => re.test(text.toLowerCase())) || [])[1];
+  if (dims && named.length) return `${named[0]} · ${fmt(dims.W)}×${fmt(dims.H)}`;
+  if (dims)                 return `${fmt(dims.W)} × ${fmt(dims.H)} opening`;
+  if (named.length)         return cat ? `${named[0]} — ${cat}` : named[0];
+  let t = text.replace(/\s+/g, " ").trim().replace(/^[^\p{L}\p{N}]+/u, "");
+  if (t.length > 46) t = t.slice(0, 44).replace(/\s+\S*$/, "") + "…";
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "New chat";
+}
+
+function expiryLabel(c) {
+  const left = c.updatedAt + EXPIRY_MS - clock();
+  if (left <= 0) return "Expiring…";
+  const h = left / 36e5;
+  if (h >= 24) { const d = Math.round(h / 24); return `Expires in ${d} day${d === 1 ? "" : "s"}`; }
+  if (h >= 1)  return `Expires in ${Math.round(h)}h`;
+  return `Expires in ${Math.max(1, Math.round(left / 60000))}m`;
+}
+
+function renderHistory() {
+  if (!store.ok) { historyEl.hidden = true; return; }
+  const list = conversations.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+  if (!list.length) {
+    historyList.innerHTML = `<p class="history-empty">No saved chats yet. Ask a question to start one.</p>`;
+    return;
+  }
+  historyList.innerHTML = list.map(c => `
+    <div class="history-item${c.id === currentId ? " on" : ""}" data-id="${c.id}" role="button" tabindex="0">
+      <div class="hi-main">
+        <div class="hi-title">${esc(c.title)}</div>
+        <div class="hi-exp">${esc(expiryLabel(c))}</div>
+      </div>
+      <button class="hi-del" data-del="${c.id}" type="button" title="Delete this chat" aria-label="Delete this chat">×</button>
+    </div>`).join("");
+}
+
+function currentConv() { return conversations.find(c => c.id === currentId) || null; }
+
+const INTRO = `<h4>Technical assistant</h4><p>Give me an opening size and I will tell you which systems fit,
+  how many panels are needed and what to use instead if a system does not work.
+  I also answer specification questions — thresholds, drainage, sightlines, glass, hardware.</p>
+  <p class="small muted">Every answer comes from the USP data and the approved engineering notes.
+  If something is not recorded, I will say so rather than guess.</p>`;
+
+function startNewChat(focus) {
+  currentId = null;
+  chat.innerHTML = "";
+  say(INTRO, "b");
+  renderHistory();
+  if (focus) $("#askInput").focus();
+}
+
+function openChat(id) {
+  const c = conversations.find(x => x.id === id);
+  if (!c) return;
+  currentId = id;
+  chat.innerHTML = "";
+  if (!c.messages.length) say(INTRO, "b");
+  else c.messages.forEach(m => say(m.who === "u" ? m.text : m.html, m.who));
+  renderHistory();
+}
+
+function deleteChat(id) {
+  conversations = conversations.filter(c => c.id !== id);
+  store.write(conversations);
+  if (currentId === id) startNewChat();
+  else renderHistory();
+}
+
+// Persist a message, creating the conversation on the first user turn.
+function recordMessage(who, payload) {
+  let c = currentConv();
+  if (!c) {
+    c = { id: uid(), title: who === "u" ? titleFor(payload) : "New chat",
+          createdAt: clock(), updatedAt: clock(), messages: [] };
+    conversations.push(c);
+    currentId = c.id;
+    if (conversations.length > MAX_CONVERSATIONS) {
+      conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+      conversations = conversations.slice(0, MAX_CONVERSATIONS);
+    }
+  }
+  c.messages.push(who === "u" ? { who, text: payload } : { who, html: payload });
+  c.updatedAt = clock();
+  store.write(conversations);
+  renderHistory();
+}
+
+historyList.addEventListener("click", e => {
+  const del = e.target.closest("[data-del]");
+  if (del) { e.stopPropagation(); deleteChat(del.dataset.del); return; }
+  const item = e.target.closest(".history-item");
+  if (item) openChat(item.dataset.id);
+});
+historyList.addEventListener("keydown", e => {
+  const item = e.target.closest && e.target.closest(".history-item");
+  if (item && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openChat(item.dataset.id); }
+});
+$("#newChat").addEventListener("click", () => startNewChat(true));
+
+// Refresh the expiry labels and clear anything that has just expired,
+// while the page stays open.
+setInterval(() => {
+  conversations = sweep(conversations, currentId);
+  renderHistory();
+}, 60000);
+
 $("#askForm").addEventListener("submit", e => {
   e.preventDefault();
   const q = $("#askInput").value.trim();
   if (!q) return;
   say(q, "u");
+  recordMessage("u", q);
   $("#askInput").value = "";
-  setTimeout(() => say(respond(q), "b"), 90);
+  setTimeout(() => {
+    const html = respond(q);
+    say(html, "b");
+    recordMessage("b", html);
+  }, 90);
 });
 
 const SAMPLES = [
@@ -492,11 +661,8 @@ $("#chips").addEventListener("click", e => {
   $("#askForm").requestSubmit();
 });
 
-say(`<h4>Technical assistant</h4><p>Give me an opening size and I will tell you which systems fit,
-  how many panels are needed and what to use instead if a system does not work.
-  I also answer specification questions — thresholds, drainage, sightlines, glass, hardware.</p>
-  <p class="small muted">Every answer comes from the USP data and the approved engineering notes.
-  If something is not recorded, I will say so rather than guess.</p>`, "b");
+// First paint: a fresh, unsaved chat with the sidebar alongside it.
+startNewChat();
 
 // ---- tabs ----
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => {

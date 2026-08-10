@@ -268,6 +268,49 @@ tbody tr:hover{background:var(--line-soft)}
 .chip:hover{background:var(--neutral-hover); border-color:var(--brand);
   color:var(--brand); transform:translateY(-1px)}
 
+/* ---------- Chat history sidebar ---------- */
+.ask-layout{display:grid; grid-template-columns:264px minmax(0,1fr);
+  gap:var(--space-6); align-items:start}
+.history{
+  background:var(--white); border:1px solid var(--line); border-radius:var(--r-lg);
+  box-shadow:var(--sh-card); padding:var(--space-5); position:sticky; top:96px;
+}
+.history[hidden]{display:none}
+.history-head{display:flex; align-items:center; justify-content:space-between;
+  gap:var(--space-3); margin-bottom:var(--space-4)}
+.history-title{font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted)}
+.btn-new{padding:var(--space-1) var(--space-4); font-size:12px}
+.history-list{display:flex; flex-direction:column; gap:var(--space-2);
+  max-height:min(52vh,460px); overflow-y:auto}
+.history-item{
+  display:flex; align-items:center; gap:var(--space-2);
+  border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:var(--space-3); cursor:pointer; background:var(--white);
+  transition:background .15s ease, border-color .15s ease;
+}
+.history-item:hover{background:var(--panel); border-color:var(--brand)}
+.history-item.on{background:var(--panel); border-color:var(--brand); box-shadow:var(--sh-subtle)}
+.history-item:focus-visible{outline:none; border-color:var(--brand); box-shadow:var(--sh-focus)}
+.hi-main{flex:1; min-width:0}
+.hi-title{font-family:var(--font-display); font-weight:600; font-size:12.5px; color:var(--brand);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hi-exp{font-size:11px; color:var(--text-muted-light); margin-top:1px}
+.hi-del{
+  border:none; background:transparent; color:var(--text-muted-light);
+  font-size:18px; line-height:1; cursor:pointer; padding:2px 6px; border-radius:var(--r-xs);
+  transition:color .15s ease, background .15s ease; flex:none;
+}
+.hi-del:hover{color:var(--danger); background:var(--danger-bg)}
+.history-empty{font-size:12.5px; color:var(--text-muted-light); margin:0}
+.history-note{font-size:11px; color:var(--text-muted-light);
+  margin:var(--space-4) 0 0; line-height:1.5}
+@media (max-width:860px){
+  .ask-layout{grid-template-columns:1fr}
+  .history{position:static; top:auto}
+  .history-list{max-height:210px}
+}
+
 /* ---------- Drawings ---------- */
 .gallery{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
   gap:var(--space-4); margin-top:var(--space-3)}
@@ -389,13 +432,24 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 
 <!-- ============================= ASK ============================= -->
 <section id="v-ask" class="view on">
-  <div class="card">
-    <div class="chat" id="chat"></div>
-    <form class="ask" id="askForm">
-      <input id="askInput" autocomplete="off" placeholder="e.g. I have a 4200 x 2700 opening — will Series 2 work?">
-      <button class="btn-accent">Ask</button>
-    </form>
-    <div class="chips" id="chips"></div>
+  <div class="ask-layout">
+    <aside class="history" id="history">
+      <div class="history-head">
+        <span class="history-title">Recent chats</span>
+        <button class="ghost btn-new" id="newChat" type="button">+ New</button>
+      </div>
+      <div class="history-list" id="historyList"></div>
+      <p class="history-note">Saved only in this browser. Each chat is removed
+        automatically 2 days after your last message.</p>
+    </aside>
+    <div class="card chat-card">
+      <div class="chat" id="chat"></div>
+      <form class="ask" id="askForm">
+        <input id="askInput" autocomplete="off" placeholder="e.g. I have a 4200 x 2700 opening — will Series 2 work?">
+        <button class="btn-accent">Ask</button>
+      </form>
+      <div class="chips" id="chips"></div>
+    </div>
   </div>
 </section>
 
