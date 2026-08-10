@@ -465,7 +465,16 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
   <div class="card">
     <h2>Check an opening</h2>
     <form id="chkForm">
-      <div class="row">
+      <div class="row" id="chkSaveRow">
+        <div style="grid-column:1 / -1">
+          <label class="field-label" for="chkTitle">Save this check as</label>
+          <div style="display:flex; gap:var(--space-3)">
+            <input id="chkTitle" autocomplete="off" placeholder="e.g. Villa 12 — living room" style="flex:1">
+            <button class="ghost" type="button" id="chkSave" style="white-space:nowrap">Save check</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:var(--space-4)">
         <div><label class="field-label" for="ow">Opening width (mm)</label><input id="ow" type="number" min="1" placeholder="4200"></div>
         <div><label class="field-label" for="oh">Opening height (mm)</label><input id="oh" type="number" min="1" placeholder="2700"></div>
         <div><label class="field-label" for="fam">Family</label>
@@ -478,15 +487,6 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
           <select id="autom"><option value="">Not required</option><option value="yes">Yes</option></select></div>
         <div><label class="field-label" for="maxp">Maximum panels</label><input id="maxp" type="number" min="1" placeholder="No limit"></div>
         <div style="display:flex;align-items:flex-end"><button class="btn-primary" type="submit">Check opening</button></div>
-      </div>
-      <div class="row" style="margin-top:var(--space-4)" id="chkSaveRow">
-        <div style="grid-column:1 / -1">
-          <label class="field-label" for="chkTitle">Save this check as</label>
-          <div style="display:flex; gap:var(--space-3)">
-            <input id="chkTitle" autocomplete="off" placeholder="e.g. Villa 12 — living room" style="flex:1">
-            <button class="ghost" type="button" id="chkSave" style="white-space:nowrap">Save check</button>
-          </div>
-        </div>
       </div>
     </form>
     <div class="note">Panel sizes are the nominal equal division of the opening (opening width ÷ number of panels).
