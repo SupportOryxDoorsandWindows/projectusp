@@ -118,7 +118,11 @@
       return;
     }
     const s = document.createElement("script");
-    s.src = "app.js";
+    // Cache-buster: GitHub Pages and browsers cache "app.js" aggressively, so a
+    // plain filename can keep running old logic after a deploy. A per-load query
+    // string forces the current version every time. app.js is small, so the
+    // cost is negligible and correctness is guaranteed.
+    s.src = "app.js?v=" + Date.now();
     s.onload = () => {
       $("#loading").hidden = true;
       $("#appShell").hidden = false;

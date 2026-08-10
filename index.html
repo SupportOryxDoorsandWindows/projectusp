@@ -512,8 +512,9 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 </div><!-- /#appShell -->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="config.js"></script>
-<!-- boot.js authenticates, loads the knowledge base from Supabase, then loads app.js -->
-<script src="boot.js"></script>
+<script src="config.js?v=2"></script>
+<!-- boot.js loads the knowledge base from Supabase, then loads app.js.
+     Bump ?v= when config.js or boot.js change so browsers fetch the new file. -->
+<script src="boot.js?v=2"></script>
 </body>
 </html>
