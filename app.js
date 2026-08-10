@@ -46,6 +46,18 @@ function checkSystem(sys, W, H, opt = {}) {
         : " is not recorded for this system.")]
     };
 
+  // A requested exact panel count must be one the system actually offers.
+  // We never quietly substitute a different count.
+  if (opt.panels) {
+    const offered = leafOptions(sys);
+    if (!offered.includes(opt.panels))
+      return {
+        sys, fits: false, configMiss: true,
+        reasons: [`does not offer ${article(opt.panels)} ${opt.panels}-panel configuration` +
+          (offered.length ? ` (it supports ${offered.join(", ")})` : "") + "."]
+      };
+  }
+
   // Height cannot be split — it is a hard gate.
   if (sys.sash_h_max && H > sys.sash_h_max) {
     reasons.push(`Opening height ${fmt(H)} mm exceeds the maximum sash height of ${fmt(sys.sash_h_max)} mm.`);
@@ -56,8 +68,10 @@ function checkSystem(sys, W, H, opt = {}) {
 
   let best = null;
   const tried = [];
-  for (const n of leafOptions(sys)) {
-    if (opt.maxPanels && n > opt.maxPanels) continue;
+  // With an exact count requested, evaluate only that count. Otherwise the
+  // fewest panel count that fits wins.
+  for (const n of (opt.panels ? [opt.panels] : leafOptions(sys))) {
+    if (!opt.panels && opt.maxPanels && n > opt.maxPanels) continue;
     const sw = W / n, sh = H;
     const area = (sw * sh) / 1e6;
     const bad = [];
@@ -78,7 +92,7 @@ function checkSystem(sys, W, H, opt = {}) {
     if (!tried.length) reasons.push("No panel count is available within the limits you set.");
     else {
       const t = tried[tried.length - 1];
-      reasons.push(`Even at ${t.n} panels the ${t.bad.join(" and ")}.`);
+      reasons.push(`${opt.panels ? "At" : "Even at"} ${t.n} panels the ${t.bad.join(" and ")}.`);
     }
   }
   return { sys, fits: false, reasons, tried };
@@ -100,6 +114,8 @@ function checkOpening(W, H, opt = {}) {
 }
 
 const fmt = n => Math.round(n).toLocaleString("en-GB");
+// "a" / "an" for a panel count — 8, 11 and 18 take "an".
+const article = n => ([8, 11, 18].includes(Number(n)) ? "an" : "a");
 
 /* ------------------------------------------------------------------ *
  * Knowledge index — every stored fact becomes a searchable card
@@ -341,6 +357,19 @@ function parseDims(text) {
   return null;
 }
 
+// An explicit panel/leaf count in the question ("4-panel", "4 panels",
+// "four leaf"). Returned as an exact requirement — never a maximum.
+function parsePanels(text) {
+  const t = text.toLowerCase();
+  const words = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
+  const unit = "(?:panel|pane|leaf|leaves|sash|track|vent)s?";
+  let m = t.match(new RegExp("(\\d+)\\s*-?\\s*" + unit + "\\b"));
+  if (m) { const n = parseInt(m[1], 10); return n >= 2 && n <= 20 ? n : null; }
+  m = t.match(new RegExp("\\b(one|two|three|four|five|six|seven|eight)\\s*-?\\s*" + unit + "\\b"));
+  if (m) { const n = words[m[1]]; return n >= 2 ? n : null; }
+  return null;
+}
+
 function askedFamily(text) {
   const t = text.toLowerCase();
   if (/\bslid|slider|patio\b/.test(t)) return "Sliding";
@@ -361,29 +390,53 @@ function answerSizeQuestion(text, dims) {
   const fam = askedFamily(text);
   if (fam) opt.family = fam;
   if (/\bautomat|motoris|motoriz/.test(text.toLowerCase())) opt.automation = "yes";
+  const panels = parsePanels(text);
+  if (panels) opt.panels = panels;
 
   const asked = systemsNamedIn(text);
   const r = checkOpening(dims.W, dims.H, opt);
   let html = `<h4>Opening ${fmt(dims.W)} × ${fmt(dims.H)} mm (width × height)</h4>`;
+
+  // Make the requested configuration explicit, so it is clear it was respected.
+  if (panels)
+    html += `<p class="small muted">Requested: ${article(panels)} <b>${panels}-panel</b> configuration${fam ? `, ${fam.toLowerCase()}` : ""} —
+      nominal panel width ${fmt(dims.W)} ÷ ${panels} = <b>${fmt(dims.W / panels)} mm</b>.</p>`;
 
   if (asked.length) {
     const v = checkSystem(asked[0], dims.W, dims.H, opt);
     html += v.fits
       ? `<p><span class="tag ok">SUITABLE</span> <b>${esc(v.sys.name)}</b> works at
          <b>${v.panels.n} panels</b> — ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm each
-         (${v.panels.area.toFixed(2)} m² per panel).<br>
-         Configuration${v.configs.length > 1 ? "s" : ""}: ${esc(v.configs.join(", "))}.</p>`
+         (${v.panels.area.toFixed(2)} m² per panel).</p>${configList(v.configs, v.panels.n)}`
       : `<p><span class="tag no">NOT SUITABLE</span> <b>${esc(v.sys.name)}</b> — ${esc(v.reasons.join(" "))}</p>`;
     if (v.fits) {
       html += optionLine(v.sys);
       return html;
     }
-    html += `<p>Better suited to this opening:</p>`;
+    if (r.fits.length)
+      html += `<p>${panels ? `Other systems that support ${article(panels)} ${panels}-panel layout here:` : "Better suited to this opening:"}</p>`;
   }
 
   if (!r.fits.length) {
-    html += `<p><span class="tag no">NO MATCH</span> Nothing in the range covers this opening as a single unit`
+    html += `<p><span class="tag no">NO MATCH</span> ${panels
+      ? `No system supports ${article(panels)} ${panels}-panel configuration for this opening`
+      : "Nothing in the range covers this opening as a single unit"}`
       + (fam ? ` within the ${fam} family` : "") + `.</p>`;
+
+    if (panels) {
+      // Explain why, system by system, rather than quietly changing the count.
+      const why = r.misses.filter(m => !asked.some(a => a.id === m.sys.id));
+      if (why.length)
+        html += `<p class="small muted">Why each was ruled out:</p><ul>` +
+          why.map(m => `<li><b>${esc(m.sys.name)}</b> — <span class="small muted">${esc(m.reasons.join(" "))}</span></li>`).join("") +
+          `</ul>`;
+      if (r.excluded.length)
+        html += `<p class="small muted">${r.excluded.length} system(s) excluded by the filters you set.</p>`;
+      html += `<p class="small muted">Ask without a fixed panel count to see the configurations that do fit,
+        or raise it with the technical team.</p>`;
+      return html;
+    }
+
     const hardest = r.misses.filter(m => m.heightFail);
     if (hardest.length) {
       const tallest = SYS.reduce((a, b) => (b.sash_h_max > a.sash_h_max ? b : a));
@@ -399,11 +452,36 @@ function answerSizeQuestion(text, dims) {
   html += `<ul>` + top.map(v =>
     `<li><b>${esc(v.sys.name)}</b> <span class="tag n">${v.panels.n} panels</span>
       ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm per panel${v.sys.sash_sqm_max ? `, ${v.panels.area.toFixed(2)} m²` : ""}
-      <br><span class="small muted">${esc(v.configs.slice(0, 3).join(" · "))}${v.configs.length > 3 ? " · …" : ""}</span></li>`
+      <br><span class="small muted">${configSummary(v.configs)}</span></li>`
   ).join("") + `</ul>`;
-  html += `<p class="small muted">Ranked by fewest panels, which gives the largest glass and the cleanest elevation.
+  html += `<p class="small muted">${panels
+    ? `All shown as ${panels}-panel layouts, ${fmt(dims.W / panels)} × ${fmt(dims.H)} mm per panel.`
+    : "Ranked by fewest panels, which gives the largest glass and the cleanest elevation."}
     Panel width is the nominal opening ÷ panels; frame and interlock allowances are confirmed by the technical team.</p>`;
   return html;
+}
+
+/* A system usually offers several alternative layouts at a given panel count
+   (all-sliding, sliding with fixed ends, and so on). Each label already lists
+   exactly that many leaves — the point below is to keep the alternatives
+   visually separate so two 4-panel options never read as one 8-panel run. */
+
+// Full, unambiguous list — one layout per line.
+function configList(configs, n) {
+  if (!configs || !configs.length) return "";
+  if (configs.length === 1)
+    return `<p class="small muted">Layout: ${esc(configs[0])}.</p>`;
+  return `<p class="small muted">${n}-panel layout options (any one of these):</p>` +
+    `<ul class="small muted" style="margin:4px 0 0">` +
+    configs.map(c => `<li>${esc(c)}</li>`).join("") + `</ul>`;
+}
+
+// Compact one-line summary for the ranked list: one layout plus a count.
+function configSummary(configs) {
+  if (!configs || !configs.length) return "";
+  const more = configs.length - 1;
+  return esc(configs[0]) +
+    (more > 0 ? ` (or ${more} other ${more === 1 ? "layout" : "layouts"})` : "");
 }
 
 function optionLine(s) {
