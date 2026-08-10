@@ -785,6 +785,101 @@ $("#chkForm").addEventListener("submit", e => {
   $("#chkOut").innerHTML = out;
 });
 
+/* ---- saved opening checks ------------------------------------------ *
+ * Named presets kept in this browser only (localStorage), until deleted.
+ * They hold input values only — no personal content. Reuses uid/clock and
+ * the store.ok flag from the chat-history section above.
+ * ------------------------------------------------------------------ */
+const CHK_KEY = "oryx_checks_v1";
+const readChecks = () => {
+  if (!store.ok) return [];
+  try { return JSON.parse(localStorage.getItem(CHK_KEY) || "[]"); } catch { return []; }
+};
+const writeChecks = list => {
+  if (!store.ok) return;
+  try { localStorage.setItem(CHK_KEY, JSON.stringify(list)); } catch { /* quota — skip */ }
+};
+let savedChecks = readChecks();
+
+function chkSummary(c) {
+  const bits = [`${fmt(c.W)} × ${fmt(c.H)} mm`];
+  if (c.family) bits.push(c.family);
+  if (c.threshold) bits.push(c.threshold);
+  if (c.automation === "yes") bits.push("Automation");
+  if (c.maxPanels) bits.push(`≤ ${c.maxPanels} panels`);
+  return bits.join(" · ");
+}
+
+function renderChecks() {
+  const wrap = $("#chkSavedWrap"), list = $("#chkSaved");
+  if (!store.ok || !savedChecks.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  list.innerHTML = savedChecks.slice().sort((a, b) => b.savedAt - a.savedAt).map(c => `
+    <div class="history-item" data-id="${c.id}" role="button" tabindex="0" title="Load and run this check">
+      <div class="hi-main">
+        <div class="hi-title">${esc(c.title)}</div>
+        <div class="hi-exp">${esc(chkSummary(c))}</div>
+      </div>
+      <button class="hi-del" data-del="${c.id}" type="button" title="Delete this saved check" aria-label="Delete this saved check">×</button>
+    </div>`).join("");
+}
+
+function loadCheck(id) {
+  const c = savedChecks.find(x => x.id === id);
+  if (!c) return;
+  $("#ow").value = c.W || "";
+  $("#oh").value = c.H || "";
+  $("#fam").value = c.family || "";
+  $("#thr").value = c.threshold || "";
+  $("#autom").value = c.automation || "";
+  $("#maxp").value = c.maxPanels || "";
+  $("#chkTitle").value = c.title || "";
+  $("#chkForm").requestSubmit();
+}
+
+$("#chkSave").addEventListener("click", () => {
+  const W = +$("#ow").value, H = +$("#oh").value;
+  if (!W || !H) {
+    $("#chkOut").innerHTML = `<div class="card">Enter a width and a height before saving.</div>`;
+    return;
+  }
+  const title = $("#chkTitle").value.trim();
+  savedChecks.unshift({
+    id: uid(),
+    title: title || `${fmt(W)} × ${fmt(H)} mm`,
+    W, H,
+    family: $("#fam").value || "",
+    threshold: $("#thr").value || "",
+    automation: $("#autom").value || "",
+    maxPanels: +$("#maxp").value || "",
+    savedAt: clock(),
+  });
+  writeChecks(savedChecks);
+  renderChecks();
+  $("#chkForm").requestSubmit();   // also run it, so the result shows
+});
+
+$("#chkSaved").addEventListener("click", e => {
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    e.stopPropagation();
+    savedChecks = savedChecks.filter(c => c.id !== del.dataset.del);
+    writeChecks(savedChecks);
+    renderChecks();
+    return;
+  }
+  const item = e.target.closest(".history-item");
+  if (item) loadCheck(item.dataset.id);
+});
+$("#chkSaved").addEventListener("keydown", e => {
+  const item = e.target.closest && e.target.closest(".history-item");
+  if (item && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); loadCheck(item.dataset.id); }
+});
+
+// If the browser blocks storage, hide the save controls entirely.
+if (!store.ok) $("#chkSaveRow").hidden = true;
+renderChecks();
+
 // ---- systems browser ----
 $("#sysnav").innerHTML = SYS.map((s, i) =>
   `<button class="ghost" data-i="${i}">${esc(s.name)}</button>`).join("");
