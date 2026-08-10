@@ -718,6 +718,7 @@ $("#sysnav").addEventListener("click", e => {
 
 function showSystem(i) {
   const s = SYS[i];
+  $("#sysnav").querySelectorAll("button").forEach((b, idx) => b.classList.toggle("on", idx === i));
   const flags = o => Object.entries(o).map(([k, v]) =>
     `<span class="${v === true ? "yes" : "nope"}">${MARK(v)} ${esc(k)}${v === null ? " <i>(not recorded)</i>" : ""}</span>`)
     .join("<br>") || "<span class='nope'>—</span>";

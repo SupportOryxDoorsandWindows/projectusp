@@ -184,6 +184,9 @@ button.ghost{
   transition:background .15s ease, border-color .15s ease, transform .15s ease;
 }
 button.ghost:hover{background:var(--line-soft); border-color:var(--brand); transform:translateY(-1px)}
+/* Selected pill — the currently open system */
+button.ghost.on{background:var(--white); border-color:var(--brand); box-shadow:var(--sh-focus)}
+button.ghost.on:hover{transform:none; background:var(--white)}
 
 /* ---------- Notes ---------- */
 .note{
