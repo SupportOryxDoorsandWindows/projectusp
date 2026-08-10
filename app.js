@@ -476,12 +476,11 @@ function configList(configs, n) {
     configs.map(c => `<li>${esc(c)}</li>`).join("") + `</ul>`;
 }
 
-// Compact one-line summary for the ranked list: one layout plus a count.
+// One-line summary for the ranked list: the actual alternative arrangements,
+// separated by "or", so the choice is clear without counting.
 function configSummary(configs) {
   if (!configs || !configs.length) return "";
-  const more = configs.length - 1;
-  return esc(configs[0]) +
-    (more > 0 ? ` (or ${more} other ${more === 1 ? "layout" : "layouts"})` : "");
+  return configs.map(c => esc(c)).join(" &nbsp;<i>or</i>&nbsp; ");
 }
 
 function optionLine(s) {
