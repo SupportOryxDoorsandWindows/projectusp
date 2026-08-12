@@ -526,10 +526,11 @@ function chevron(nearX, apexX, y0, y1) {
 // technical drawings (frame, glass, dashed diagonals on opening sashes) —
 // so a generated schematic and a real drawing read as one family, not two
 // different kinds of image. Sliding panels point toward the nearest fixed
-// panel — the one they slide against; with no fixed panel in the config
-// they point inward to the middle instead. Drawn purely from the label
-// already in the data — exact handing is not recorded and is confirmed by
-// the technical team.
+// panel — the one they slide against. With no fixed panel in the config,
+// every sliding panel points the same way instead, since panels sliding
+// past each other move as one group, not toward each other. Drawn purely
+// from the label already in the data — exact handing is not recorded and
+// is confirmed by the technical team.
 function panelSVG(tokens) {
   const pw = 38, ph = 52, inset = 4;
   const w = tokens.length * pw;
@@ -548,17 +549,15 @@ function panelSVG(tokens) {
       fill="url(#${gid})" stroke="#5b6b72" stroke-width="1.4"/>`;
 
     if (!/fixed/i.test(tok)) {
-      let dir;
+      let dir = 1; // no fixed panel to reference — every sliding panel points the same way
       if (fixedIdx.length) {
         const nearest = fixedIdx.reduce((a, b) => (Math.abs(b - i) < Math.abs(a - i) ? b : a));
         dir = nearest < i ? -1 : 1;
-      } else {
-        dir = i < tokens.length / 2 ? 1 : i > (tokens.length - 1) / 2 ? -1 : 0;
       }
-      const near0 = gx0 + 3, near1 = gx1 - 3, mid = (gx0 + gx1) / 2;
-      if (dir === 0) svg += chevron(near0, mid, gy0 + 2, gy1 - 2) + chevron(near1, mid, gy0 + 2, gy1 - 2);
-      else if (dir === 1) svg += chevron(near0, near1, gy0 + 2, gy1 - 2);
-      else svg += chevron(near1, near0, gy0 + 2, gy1 - 2);
+      const near0 = gx0 + 3, near1 = gx1 - 3;
+      svg += dir === 1
+        ? chevron(near0, near1, gy0 + 2, gy1 - 2)
+        : chevron(near1, near0, gy0 + 2, gy1 - 2);
     }
     if (i > 0) svg += `<line x1="${x}" y1="0" x2="${x}" y2="${ph}" stroke="#5b6b72" stroke-width="2.2"/>`;
   });
@@ -582,7 +581,7 @@ function anyConfigSVG() {
     const x = i * pw, gx0 = x + inset, gx1 = x + pw - inset, gy0 = inset, gy1 = ph - inset;
     svg += `<rect x="${gx0}" y="${gy0}" width="${gx1 - gx0}" height="${gy1 - gy0}"
       fill="url(#${gid})" fill-opacity="0.6" stroke="#93A4AB" stroke-width="1.4" stroke-dasharray="3 2"/>`;
-    svg += i === 0 ? chevron(gx0 + 3, gx1 - 3, gy0 + 2, gy1 - 2) : chevron(gx1 - 3, gx0 + 3, gy0 + 2, gy1 - 2);
+    svg += chevron(gx0 + 3, gx1 - 3, gy0 + 2, gy1 - 2);
   });
   return svg + `</svg>`;
 }
