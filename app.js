@@ -407,7 +407,7 @@ function answerSizeQuestion(text, dims) {
     html += v.fits
       ? `<p><span class="tag ok">SUITABLE</span> <b>${esc(v.sys.name)}</b> works at
          <b>${v.panels.n} panels</b> — ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm each
-         (${v.panels.area.toFixed(2)} m² per panel).</p>${configList(v.configs, v.panels.n)}`
+         (${v.panels.area.toFixed(2)} m² per panel).</p>${configList(v.configs, v.panels.n, v.sys)}`
       : `<p><span class="tag no">NOT SUITABLE</span> <b>${esc(v.sys.name)}</b> — ${esc(v.reasons.join(" "))}</p>`;
     if (v.fits) {
       html += optionLine(v.sys);
@@ -449,10 +449,11 @@ function answerSizeQuestion(text, dims) {
   }
 
   const top = r.fits.slice(0, asked.length ? 3 : 4);
-  html += `<ul>` + top.map(v =>
-    `<li><b>${esc(v.sys.name)}</b> <span class="tag n">${v.panels.n} panels</span>
+  html += `<ul class="cfg-list">` + top.map(v =>
+    `<li class="cfg-row"><div class="cfg-text"><b>${esc(v.sys.name)}</b> <span class="tag n">${v.panels.n} panels</span>
       ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm per panel${v.sys.sash_sqm_max ? `, ${v.panels.area.toFixed(2)} m²` : ""}
-      <br><span class="small muted">${configSummary(v.configs)}</span></li>`
+      <br><span class="small muted">${configSummary(v.configs)}</span></div>
+      ${configVisual(v.sys, v.configs)}</li>`
   ).join("") + `</ul>`;
   html += `<p class="small muted">${panels
     ? `All shown as ${panels}-panel layouts, ${fmt(dims.W / panels)} × ${fmt(dims.H)} mm per panel.`
@@ -467,13 +468,14 @@ function answerSizeQuestion(text, dims) {
    visually separate so two 4-panel options never read as one 8-panel run. */
 
 // Full, unambiguous list — one layout per line.
-function configList(configs, n) {
+function configList(configs, n, sys) {
   if (!configs || !configs.length) return "";
-  if (configs.length === 1)
-    return `<p class="small muted">Layout: ${esc(configs[0])}.</p>`;
-  return `<p class="small muted">${n}-panel layout options (any one of these):</p>` +
-    `<ul class="small muted" style="margin:4px 0 0">` +
-    configs.map(c => `<li>${esc(c)}</li>`).join("") + `</ul>`;
+  const text = configs.length === 1
+    ? `<p class="small muted">Layout: ${esc(configs[0])}.</p>`
+    : `<p class="small muted">${n}-panel layout options (any one of these):</p>` +
+      `<ul class="small muted" style="margin:4px 0 0">` +
+      configs.map(c => `<li>${esc(c)}</li>`).join("") + `</ul>`;
+  return text + configVisual(sys, configs);
 }
 
 // One-line summary for the ranked list: the actual alternative arrangements,
@@ -481,6 +483,80 @@ function configList(configs, n) {
 function configSummary(configs) {
   if (!configs || !configs.length) return "";
   return configs.map(c => esc(c)).join(" &nbsp;<i>or</i>&nbsp; ");
+}
+
+/* A small visual for a configuration, built only from data already in the
+   knowledge base. Casement and Folding systems have real stored drawings,
+   but the source spreadsheet does not record which drawing matches which
+   panel count, so those show as one gallery of everything on file rather
+   than guessing a match. Every other family has no drawing of its panel
+   layout at all, so a schematic is generated straight from the
+   configuration label itself (e.g. "Sliding + Fixed"). */
+const CFG_GALLERY_CAP = 6;
+function configVisual(sys, configs) {
+  const real = sys.drawings.filter(d => d.kind === "configuration");
+  if (real.length) {
+    const shown = real.slice(0, CFG_GALLERY_CAP);
+    const rest = real.length - shown.length;
+    return `<div class="cfg-gallery">${figures(shown)}
+      <p class="small muted cfg-gallery-note">${rest ? `Showing ${shown.length} of ${real.length}` : `${real.length}`}
+      real technical drawing${real.length === 1 ? "" : "s"} on file for ${esc(sys.name)}. The source data doesn't
+      record which one matches this exact panel count, so these are shown rather than guessing a match.
+      ${rest ? `See the Systems tab for all ${real.length}.` : ""}</p></div>`;
+  }
+  if (!configs || !configs.length) return "";
+  return `<div class="cfg-visual">` + configs.map(c => `
+    <div class="diagram-chip">${c === "Any configuration" ? anyConfigSVG() : panelSVG(c.split(/\s*\+\s*/))}
+      <div class="cap">${esc(c)}</div></div>`).join("") + `</div>`;
+}
+
+// Renders a config label like "Sliding + Fixed + Sliding" as a row of panels.
+// Sliding panels point toward the nearest fixed panel — the one they slide
+// against; with no fixed panel in the config they point inward to the middle
+// instead. Drawn purely from the label already in the data — exact handing
+// is not recorded and is confirmed by the technical team.
+function panelSVG(tokens) {
+  const pw = 30, ph = 40, gap = 3;
+  const w = tokens.length * pw + (tokens.length - 1) * gap;
+  const fixedIdx = tokens.map((t, i) => (/fixed/i.test(t) ? i : -1)).filter(i => i >= 0);
+  let svg = `<svg width="${w}" height="${ph}" viewBox="0 0 ${w} ${ph}" xmlns="http://www.w3.org/2000/svg">`;
+  tokens.forEach((tok, i) => {
+    const x = i * (pw + gap);
+    if (/fixed/i.test(tok)) {
+      svg += `<rect x="${x}" y="0" width="${pw}" height="${ph}" fill="#EAEFF1" stroke="#022A3A" stroke-width="1"/>
+        <line x1="${x + pw * 0.32}" y1="4" x2="${x + pw * 0.32}" y2="${ph - 4}" stroke="#93A4AB" stroke-width="0.6"/>
+        <line x1="${x + pw * 0.68}" y1="4" x2="${x + pw * 0.68}" y2="${ph - 4}" stroke="#93A4AB" stroke-width="0.6"/>`;
+      return;
+    }
+    svg += `<rect x="${x}" y="0" width="${pw}" height="${ph}" fill="#F6F8F9" stroke="#022A3A" stroke-width="1"/>`;
+    let dir;
+    if (fixedIdx.length) {
+      const nearest = fixedIdx.reduce((a, b) => (Math.abs(b - i) < Math.abs(a - i) ? b : a));
+      dir = nearest < i ? -1 : 1;
+    } else {
+      dir = i < tokens.length / 2 ? 1 : i > (tokens.length - 1) / 2 ? -1 : 0;
+    }
+    if (dir === 0)
+      svg += `<path d="M ${x + 5} 7 L ${x + pw / 2} ${ph / 2} L ${x + 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>
+        <path d="M ${x + pw - 5} 7 L ${x + pw / 2} ${ph / 2} L ${x + pw - 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>`;
+    else if (dir === 1)
+      svg += `<path d="M ${x + 5} 7 L ${x + pw - 5} ${ph / 2} L ${x + 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>`;
+    else
+      svg += `<path d="M ${x + pw - 5} 7 L ${x + 5} ${ph / 2} L ${x + pw - 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>`;
+  });
+  return svg + `</svg>`;
+}
+
+// Neutral icon for "any configuration" systems — never invents a specific
+// layout for a system whose real answer is that any arrangement is offered.
+function anyConfigSVG() {
+  const pw = 30, ph = 40, gap = 3, x2 = pw + gap, w = pw * 2 + gap;
+  return `<svg width="${w}" height="${ph}" viewBox="0 0 ${w} ${ph}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="${pw}" height="${ph}" fill="#F6F8F9" stroke="#93A4AB" stroke-width="1" stroke-dasharray="3 2"/>
+    <path d="M 8 8 L ${pw - 8} ${ph / 2} L 8 ${ph - 8}" fill="none" stroke="#93A4AB" stroke-width="0.8"/>
+    <rect x="${x2}" y="0" width="${pw}" height="${ph}" fill="#F6F8F9" stroke="#93A4AB" stroke-width="1" stroke-dasharray="3 2"/>
+    <path d="M ${x2 + pw - 8} 8 L ${x2 + 8} ${ph / 2} L ${x2 + pw - 8} ${ph - 8}" fill="none" stroke="#93A4AB" stroke-width="0.8"/>
+  </svg>`;
 }
 
 function optionLine(s) {
@@ -770,6 +846,7 @@ $("#chkForm").addEventListener("submit", e => {
       <h4>${esc(v.sys.name)} <span class="tag ok">SUITABLE</span> <span class="tag n">${v.panels.n} panels</span></h4>
       <div class="small">Panel size ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm · ${v.panels.area.toFixed(2)} m² per panel</div>
       <div class="small muted" style="margin-top:5px">${esc(v.configs.join(" · "))}</div>
+      ${configVisual(v.sys, v.configs)}
       ${optionLine(v.sys)}
     </div>`).join("");
   if (r.misses.length) {
