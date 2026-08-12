@@ -510,53 +510,81 @@ function configVisual(sys, configs) {
       <div class="cap">${esc(c)}</div></div>`).join("") + `</div>`;
 }
 
-// Renders a config label like "Sliding + Fixed + Sliding" as a row of panels.
-// Sliding panels point toward the nearest fixed panel — the one they slide
-// against; with no fixed panel in the config they point inward to the middle
-// instead. Drawn purely from the label already in the data — exact handing
-// is not recorded and is confirmed by the technical team.
+let _svgUid = 0;
+
+// A single V-shaped diagonal, drawn like the dashed "opening direction" lines
+// on the real technical drawings: two corners on one side of the pane
+// converging to a point on the other side, where the sash swings/slides to.
+function chevron(nearX, apexX, y0, y1) {
+  const midY = (y0 + y1) / 2;
+  return `<path d="M ${nearX} ${y0} L ${apexX} ${midY} L ${nearX} ${y1}"
+    fill="none" stroke="#4a5b66" stroke-width="1" stroke-dasharray="3 2"/>`;
+}
+
+// Renders a config label like "Sliding + Fixed + Sliding" as a row of
+// aluminium-framed glass panes, in the same visual language as the real
+// technical drawings (frame, glass, dashed diagonals on opening sashes) —
+// so a generated schematic and a real drawing read as one family, not two
+// different kinds of image. Sliding panels point toward the nearest fixed
+// panel — the one they slide against; with no fixed panel in the config
+// they point inward to the middle instead. Drawn purely from the label
+// already in the data — exact handing is not recorded and is confirmed by
+// the technical team.
 function panelSVG(tokens) {
-  const pw = 30, ph = 40, gap = 3;
-  const w = tokens.length * pw + (tokens.length - 1) * gap;
+  const pw = 38, ph = 52, inset = 4;
+  const w = tokens.length * pw;
+  const gid = "cfgGlass" + (_svgUid++);
   const fixedIdx = tokens.map((t, i) => (/fixed/i.test(t) ? i : -1)).filter(i => i >= 0);
-  let svg = `<svg width="${w}" height="${ph}" viewBox="0 0 ${w} ${ph}" xmlns="http://www.w3.org/2000/svg">`;
+
+  let svg = `<svg width="${w}" height="${ph}" viewBox="0 0 ${w} ${ph}" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf3fb"/><stop offset="1" stop-color="#bcd7ec"/>
+    </linearGradient></defs>`;
+
   tokens.forEach((tok, i) => {
-    const x = i * (pw + gap);
-    if (/fixed/i.test(tok)) {
-      svg += `<rect x="${x}" y="0" width="${pw}" height="${ph}" fill="#EAEFF1" stroke="#022A3A" stroke-width="1"/>
-        <line x1="${x + pw * 0.32}" y1="4" x2="${x + pw * 0.32}" y2="${ph - 4}" stroke="#93A4AB" stroke-width="0.6"/>
-        <line x1="${x + pw * 0.68}" y1="4" x2="${x + pw * 0.68}" y2="${ph - 4}" stroke="#93A4AB" stroke-width="0.6"/>`;
-      return;
+    const x = i * pw;
+    const gx0 = x + inset, gx1 = x + pw - inset, gy0 = inset, gy1 = ph - inset;
+    svg += `<rect x="${gx0}" y="${gy0}" width="${gx1 - gx0}" height="${gy1 - gy0}"
+      fill="url(#${gid})" stroke="#5b6b72" stroke-width="1.4"/>`;
+
+    if (!/fixed/i.test(tok)) {
+      let dir;
+      if (fixedIdx.length) {
+        const nearest = fixedIdx.reduce((a, b) => (Math.abs(b - i) < Math.abs(a - i) ? b : a));
+        dir = nearest < i ? -1 : 1;
+      } else {
+        dir = i < tokens.length / 2 ? 1 : i > (tokens.length - 1) / 2 ? -1 : 0;
+      }
+      const near0 = gx0 + 3, near1 = gx1 - 3, mid = (gx0 + gx1) / 2;
+      if (dir === 0) svg += chevron(near0, mid, gy0 + 2, gy1 - 2) + chevron(near1, mid, gy0 + 2, gy1 - 2);
+      else if (dir === 1) svg += chevron(near0, near1, gy0 + 2, gy1 - 2);
+      else svg += chevron(near1, near0, gy0 + 2, gy1 - 2);
     }
-    svg += `<rect x="${x}" y="0" width="${pw}" height="${ph}" fill="#F6F8F9" stroke="#022A3A" stroke-width="1"/>`;
-    let dir;
-    if (fixedIdx.length) {
-      const nearest = fixedIdx.reduce((a, b) => (Math.abs(b - i) < Math.abs(a - i) ? b : a));
-      dir = nearest < i ? -1 : 1;
-    } else {
-      dir = i < tokens.length / 2 ? 1 : i > (tokens.length - 1) / 2 ? -1 : 0;
-    }
-    if (dir === 0)
-      svg += `<path d="M ${x + 5} 7 L ${x + pw / 2} ${ph / 2} L ${x + 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>
-        <path d="M ${x + pw - 5} 7 L ${x + pw / 2} ${ph / 2} L ${x + pw - 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>`;
-    else if (dir === 1)
-      svg += `<path d="M ${x + 5} 7 L ${x + pw - 5} ${ph / 2} L ${x + 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>`;
-    else
-      svg += `<path d="M ${x + pw - 5} 7 L ${x + 5} ${ph / 2} L ${x + pw - 5} ${ph - 7}" fill="none" stroke="#022A3A" stroke-width="0.8"/>`;
+    if (i > 0) svg += `<line x1="${x}" y1="0" x2="${x}" y2="${ph}" stroke="#5b6b72" stroke-width="2.2"/>`;
   });
-  return svg + `</svg>`;
+
+  return svg + `<rect x="1" y="1" width="${w - 2}" height="${ph - 2}"
+    fill="none" stroke="#3d4952" stroke-width="1.6"/></svg>`;
 }
 
 // Neutral icon for "any configuration" systems — never invents a specific
 // layout for a system whose real answer is that any arrangement is offered.
+// Same glass-and-frame language as panelSVG, but dashed frame edges mark it
+// as generic rather than one specific real layout.
 function anyConfigSVG() {
-  const pw = 30, ph = 40, gap = 3, x2 = pw + gap, w = pw * 2 + gap;
-  return `<svg width="${w}" height="${ph}" viewBox="0 0 ${w} ${ph}" xmlns="http://www.w3.org/2000/svg">
-    <rect x="0" y="0" width="${pw}" height="${ph}" fill="#F6F8F9" stroke="#93A4AB" stroke-width="1" stroke-dasharray="3 2"/>
-    <path d="M 8 8 L ${pw - 8} ${ph / 2} L 8 ${ph - 8}" fill="none" stroke="#93A4AB" stroke-width="0.8"/>
-    <rect x="${x2}" y="0" width="${pw}" height="${ph}" fill="#F6F8F9" stroke="#93A4AB" stroke-width="1" stroke-dasharray="3 2"/>
-    <path d="M ${x2 + pw - 8} 8 L ${x2 + 8} ${ph / 2} L ${x2 + pw - 8} ${ph - 8}" fill="none" stroke="#93A4AB" stroke-width="0.8"/>
-  </svg>`;
+  const pw = 38, ph = 52, inset = 4, w = pw * 2;
+  const gid = "cfgGlass" + (_svgUid++);
+  let svg = `<svg width="${w}" height="${ph}" viewBox="0 0 ${w} ${ph}" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf3fb"/><stop offset="1" stop-color="#bcd7ec"/>
+    </linearGradient></defs>`;
+  [0, 1].forEach(i => {
+    const x = i * pw, gx0 = x + inset, gx1 = x + pw - inset, gy0 = inset, gy1 = ph - inset;
+    svg += `<rect x="${gx0}" y="${gy0}" width="${gx1 - gx0}" height="${gy1 - gy0}"
+      fill="url(#${gid})" fill-opacity="0.6" stroke="#93A4AB" stroke-width="1.4" stroke-dasharray="3 2"/>`;
+    svg += i === 0 ? chevron(gx0 + 3, gx1 - 3, gy0 + 2, gy1 - 2) : chevron(gx1 - 3, gx0 + 3, gy0 + 2, gy1 - 2);
+  });
+  return svg + `</svg>`;
 }
 
 function optionLine(s) {
