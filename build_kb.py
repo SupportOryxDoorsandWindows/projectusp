@@ -11,11 +11,17 @@ Run again whenever the source spreadsheet changes:
 
 Notes on the source file
 ------------------------
-The spreadsheet stores its drawings as Excel "in-cell images" (rich values).
-openpyxl reports those cells as #VALUE! errors, so the drawings are recovered
-directly from the .xlsx package (xl/richData/*) and mapped back to their cell.
-An image present in an option column means that option IS supported by the
-system; a blank or "N/A" means it is not.
+Drawings live in this workbook in two different ways, and both have to be
+read or real drawings go missing silently:
+  - Newer "in-cell images" (rich values). openpyxl reports these cells as
+    #VALUE! errors, so they're recovered directly from the .xlsx package
+    (xl/richData/*) and mapped back to their cell — see extract_cell_images.
+  - Older "floating" pictures anchored over a cell (xl/drawings/*.xml) — a
+    plain Insert > Picture, not placed "in" the cell. Every Sliding system's
+    drainage drawings are stored this way. See extract_floating_images.
+An image present in an option column, by either mechanism and anywhere in
+the system's row block, means that option IS supported by the system; a
+blank or "N/A" means it is not.
 """
 
 import json
@@ -62,6 +68,67 @@ def extract_cell_images(xlsx_path, dest_dir):
         cells = {}
         for cell, vm in re.findall(r'<c r="([A-Z]+\d+)"[^>]*vm="(\d+)"', sheet_xml):
             media = relmap[rels[rv[rvb[int(vm) - 1]]]]
+            fname = "%s_%s%s" % (name.lower(), cell, os.path.splitext(media)[1])
+            cells[cell] = fname
+            if fname not in used:
+                with z.open("xl/media/" + media) as src, open(
+                    os.path.join(dest_dir, fname), "wb"
+                ) as dst:
+                    shutil.copyfileobj(src, dst)
+                used.add(fname)
+        mapping[name] = cells
+    z.close()
+    return mapping
+
+
+def extract_floating_images(xlsx_path, dest_dir):
+    """Some drawings in this workbook are older-style "floating" pictures
+    anchored over a cell (xl/drawings/*.xml) rather than the newer in-cell
+    rich-value images extract_cell_images() reads. Both mechanisms are used
+    inconsistently across the file — e.g. every Sliding system's drainage
+    drawings are floating pictures — so both need reading, or real drawings
+    the technical team already provided get silently dropped."""
+    z = zipfile.ZipFile(xlsx_path)
+
+    def read(p):
+        return z.read(p).decode("utf-8")
+
+    def col_letter(idx):
+        s = ""
+        idx += 1
+        while idx:
+            idx, r = divmod(idx - 1, 26)
+            s = chr(65 + r) + s
+        return s
+
+    wbrels = read("xl/_rels/workbook.xml.rels")
+    sheets = re.findall(r'<sheet name="([^"]+)"[^>]*r:id="(rId\d+)"', read("xl/workbook.xml"))
+
+    mapping = {}
+    used = set()
+    for name, rid in sheets:
+        sheet_target = re.search(r'Id="%s"[^>]*Target="(worksheets/[^"]+)"' % rid, wbrels).group(1)
+        sheet_num = re.search(r"sheet(\d+)\.xml", sheet_target).group(1)
+        sheet_rels_path = "xl/worksheets/_rels/sheet%s.xml.rels" % sheet_num
+        if sheet_rels_path not in z.namelist():
+            continue
+        drawing_match = re.search(r'Target="\.\./(drawings/drawing\d+\.xml)"', read(sheet_rels_path))
+        if not drawing_match:
+            continue
+        drawing_num = re.search(r"drawing(\d+)\.xml", drawing_match.group(1)).group(1)
+        drawing_rels = read("xl/drawings/_rels/drawing%s.xml.rels" % drawing_num)
+        relmap = dict(re.findall(r'Id="(rId\d+)"[^>]*Target="\.\./media/([^"]+)"', drawing_rels))
+
+        cells = {}
+        anchors = re.findall(
+            r"<xdr:from><xdr:col>(\d+)</xdr:col>.*?<xdr:row>(\d+)</xdr:row>.*?</xdr:from>"
+            r'.*?r:embed="(rId\d+)"',
+            read("xl/drawings/drawing%s.xml" % drawing_num), re.S)
+        for col, row, embed_rid in anchors:
+            media = relmap.get(embed_rid)
+            if not media:
+                continue
+            cell = "%s%d" % (col_letter(int(col)), int(row) + 1)
             fname = "%s_%s%s" % (name.lower(), cell, os.path.splitext(media)[1])
             cells[cell] = fname
             if fname not in used:
@@ -221,6 +288,11 @@ def build(xlsx_path):
         os.remove(os.path.join(OUT_IMG, f))
 
     images = extract_cell_images(xlsx_path, OUT_IMG)
+    floating = extract_floating_images(xlsx_path, OUT_IMG)
+    for sheet, cells in floating.items():
+        sheet_images = images.setdefault(sheet, {})
+        for cell, fname in cells.items():
+            sheet_images.setdefault(cell, fname)
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
 
     systems = []
@@ -299,12 +371,16 @@ def build(xlsx_path):
         opts = {"threshold": {}, "drainage": {}, "sightline": {}}
         drawings = []
         for col, (kind, label) in b["cols"].items():
+            # A drawing can be anchored anywhere in the block's row range, not
+            # only the first row — floating pictures in particular rarely
+            # land exactly on r0 — so "is this option offered" has to check
+            # the whole block, not just its first row.
+            if kind in opts:
+                block_has_img = any("%s%d" % (col, r) in imap for r in range(r0, r1 + 1))
+                opts[kind][label] = supported(ws["%s%d" % (col, r0)].value, block_has_img)
             for r in range(r0, r1 + 1):
                 ref = "%s%d" % (col, r)
-                has_img = ref in imap
-                if kind in opts and r == r0:
-                    opts[kind][label] = supported(ws[ref].value, has_img)
-                if has_img:
+                if ref in imap:
                     drawings.append(dict(kind=kind, label=label, file=imap[ref], cell=ref))
 
         systems.append(dict(

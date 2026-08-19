@@ -122,7 +122,6 @@ guessing.
 
 A blank option in the spreadsheet is reported as **not recorded**, which is not
 the same as **not available**. An explicit "N/A" is reported as not available.
-Drainage is currently blank for Series 1, 2, 3 and HY40 — worth filling in.
 
 ## Updating the data
 
