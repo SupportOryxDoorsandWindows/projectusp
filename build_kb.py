@@ -359,10 +359,34 @@ ENGINEERING = {
         "On Top of FFL - what you see": "Bottom track 42 mm + sash 47 mm = 89 mm visible.",
         "Stepped Floor - what you see": "Inside reads as Floor Flushed. Outside reads as On Top of FFL: 42 mm track + 47 mm sash = 89 mm visible externally.",
         "Floor Integrated": "Not available on Series 1.",
-        "Hardware": "Latch handle with latch lock mechanism.",
-        "Why no pop-out handle": "Series 1 is designed around the latch lock mechanism. The internal profile geometry does not leave space for a pop-out locking mechanism.",
+        "Hardware": "Latch handle with latch lock mechanism. Pop-out lock is also available.",
+        "Locking options": "Latch lock and pop-out lock available.",
+        "Drainage options": "Visible, concealed and gutter drainage available.",
         "Interlock and fabrication": "The 26 mm interlock is a visible sightline. Do not treat it automatically as a fabrication deduction.",
-    }
+    },
+    "series-2": {
+        "Locking options": "Latch lock and pop-out lock available.",
+        "Drainage options": "Visible, concealed and gutter drainage available.",
+        "Track depth": "2-track: 167 mm. 3-track: 240 mm. 4-track: 329 mm.",
+        "R62 visible sash": "45 mm visible sash sightline with flush track. 80 mm visible sash with top track. If above FFL: 102 mm.",
+    },
+    "series-3": {
+        "Glass stock": "Current stock available for 36 mm glass. 40 mm glass requires new glazing bead stock, ordered depending on the design.",
+        "Drainage options": "Visible and concealed drainage available.",
+    },
+    "hinged-window": {
+        "Glass thickness — pending spreadsheet correction": "Confirmed at 30 mm by the technical team; the spec above still reads 28 mm until the source spreadsheet's Glass Thickness column is corrected and rebuilt.",
+    },
+    "tilt-turn": {
+        "Glass thickness — pending spreadsheet correction": "Confirmed at 30 mm by the technical team; the spec above still reads 28 mm until the source spreadsheet's Glass Thickness column is corrected and rebuilt.",
+    },
+    "fixed-window": {
+        "Drainage": "Visible drainage cap available.",
+    },
+    "single-door": {
+        "Maximum sash size — pending spreadsheet correction": "Confirmed at 1,200 × 3,500 mm by the technical team; the spec above still reads 1,200 × 3,000 mm until the source spreadsheet's height limit is corrected and rebuilt.",
+        "Threshold options": "Mobility threshold and powder-coated flush threshold available.",
+    },
 }
 
 GLOSSARY = {
