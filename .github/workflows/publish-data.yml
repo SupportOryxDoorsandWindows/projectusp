@@ -1,0 +1,47 @@
+name: Publish product data
+
+# Click "Run workflow" on this page (Actions tab) whenever a new spreadsheet
+# has been uploaded to the private "source-files" bucket in Supabase Storage.
+# This does exactly what running build_kb.py + push_to_supabase.py by hand
+# used to do — nobody needs to open Terminal or type the password anymore.
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install openpyxl
+
+      - name: Download the spreadsheet from private storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          curl -sSL --fail \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            "$SUPABASE_URL/storage/v1/object/source-files/Copy%20of%20Slider%20USP.xlsx" \
+            -o "source.xlsx"
+          # Confirm we actually got a spreadsheet, not an error page, before
+          # handing it to build_kb.py.
+          file source.xlsx | grep -qi "Microsoft Excel\|Zip archive" || \
+            (echo "Downloaded file doesn't look like a spreadsheet — aborting." && exit 1)
+
+      - name: Build the knowledge base
+        run: python3 build_kb.py source.xlsx
+
+      - name: Publish to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python3 push_to_supabase.py
