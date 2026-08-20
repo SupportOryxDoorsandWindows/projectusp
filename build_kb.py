@@ -195,12 +195,10 @@ BLOCKS = [
     dict(id="hy40", sheet="Sliding", family="Sliding", name="HY40",
          rows=(31, 36), cols=COL_SLIDING, cfg_col="G", track_col="H",
          w="C31", h="D31", sqm="E31", glass="F31", auto="Q31", lock="R31"),
-    dict(id="s22-36", sheet="Sliding", family="Sliding", name="S22 (36 mm glass)",
-         rows=(39, 44), cols=COL_SLIDING, cfg_col="G", track_col="H",
-         w="C39", h="D39", sqm=None, glass="F39", auto="Q39", lock="R39"),
-    dict(id="s22-44", sheet="Sliding", family="Sliding", name="S22 (44 mm glass)",
-         rows=(45, 46), cols=COL_SLIDING, cfg_col="G", track_col="H",
-         w="C45", h="D45", sqm=None, glass="F45", auto="Q45", lock="R45"),
+    # S22 (36 mm / 44 mm glass) removed from the tool at the business's
+    # request — rows 39-46 on the Sliding sheet are no longer read. The
+    # spreadsheet itself is untouched; re-add these two blocks to bring it
+    # back.
     # --- Casement --------------------------------------------------------
     dict(id="hinged-window", sheet="Casement", family="Casement", name="Hinged Window",
          rows=(3, 6), cols=COL_CASEMENT, cfg_col=None, track_col=None,
