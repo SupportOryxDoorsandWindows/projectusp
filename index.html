@@ -284,6 +284,12 @@ tbody tr:hover{background:var(--line-soft)}
   display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
   gap:var(--space-4); margin:var(--space-6) 0 var(--space-4);
 }
+/* File inputs are hidden from view but must stay in the DOM (not display:none)
+   so that clicking their <label> triggers the picker reliably in every browser. */
+.visually-hidden{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); border:0;
+}
 .inv-drop{
   display:flex; align-items:center; gap:var(--space-4);
   padding:var(--space-5); border:2px dashed var(--line);
@@ -644,16 +650,16 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
     uploaded anywhere. This is a preview only: no stock is actually changed.</p>
 
     <div class="inv-drops">
-      <label class="inv-drop" id="invDropPdf">
-        <input type="file" id="invPdf" accept="application/pdf,.pdf" hidden>
+      <label class="inv-drop" id="invDropPdf" for="invPdf">
+        <input type="file" id="invPdf" accept="application/pdf,.pdf" class="visually-hidden">
         <div class="inv-drop-icon">PDF</div>
         <div class="inv-drop-main">
           <div class="inv-drop-title">FP Pro optimisation PDF</div>
           <div class="inv-drop-sub" id="invPdfName">Click or drop the PDF file here</div>
         </div>
       </label>
-      <label class="inv-drop" id="invDropXlsx">
-        <input type="file" id="invXlsx" accept=".xlsx,.xls" hidden>
+      <label class="inv-drop" id="invDropXlsx" for="invXlsx">
+        <input type="file" id="invXlsx" accept=".xlsx,.xls" class="visually-hidden">
         <div class="inv-drop-icon">XLSX</div>
         <div class="inv-drop-main">
           <div class="inv-drop-title">Freedom item list (.xlsx)</div>

@@ -446,7 +446,9 @@
   /* --------------------------- Wire-up ------------------------ */
 
   function wireDrop(dropEl, inputEl, kind) {
-    dropEl.addEventListener("click", () => inputEl.click());
+    // No JS click handler: the wrapping <label for="..."> triggers the input
+    // natively, and adding a manual click here would fire it twice (which
+    // Chrome silently ignores, so the picker never appears to open).
     dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("dragover"); });
     dropEl.addEventListener("dragleave", () => dropEl.classList.remove("dragover"));
     dropEl.addEventListener("drop", (e) => {
