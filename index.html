@@ -317,6 +317,20 @@ tbody tr:hover{background:var(--line-soft)}
   display:flex; align-items:center; gap:var(--space-3);
   margin-bottom:var(--space-5); flex-wrap:wrap;
 }
+.inv-clientrow{margin:var(--space-4) 0 var(--space-5)}
+.inv-clientrow input{max-width:340px}
+.inv-clientrow p{margin-top:var(--space-2)}
+.inv-clientrow .field-label{
+  display:block; font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+  margin-bottom:var(--space-1);
+}
+.inv-apply-note{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--space-3) var(--space-4); margin:var(--space-4) 0;
+  font-size:12.5px; color:var(--text-muted); display:flex; gap:var(--space-2);
+}
+.inv-apply-note b{color:var(--brand); font-family:var(--font-display)}
 .inv-jobcard{
   background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
   padding:var(--space-4) var(--space-5); margin-bottom:var(--space-5);
@@ -666,11 +680,26 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
           <div class="inv-drop-sub" id="invXlsxName">Click or drop the item-list file here</div>
         </div>
       </label>
+      <label class="inv-drop" id="invDropStock" for="invStock">
+        <input type="file" id="invStock" accept=".xlsx,.xls" class="visually-hidden">
+        <div class="inv-drop-icon">STOCK</div>
+        <div class="inv-drop-main">
+          <div class="inv-drop-title">Flyscreen stock file (.xlsx) <span class="small muted">— for actual deduction</span></div>
+          <div class="inv-drop-sub" id="invStockName">Optional: only needed to apply the deduction</div>
+        </div>
+      </label>
+    </div>
+
+    <div class="inv-clientrow">
+      <label class="field-label" for="invClient">Client name (for the new job column)</label>
+      <input id="invClient" type="text" autocomplete="off" placeholder="e.g. STEVE CASS">
+      <p class="small muted">The Stock file's job columns follow a job-number + client-name pattern (e.g. "26249-Steve Cass"). We'll use "&lt;job number&gt;-&lt;this name&gt;" as the header of the new column.</p>
     </div>
 
     <div class="inv-actions">
       <button class="btn-primary" id="invRun" disabled>Preview deduction</button>
       <button class="ghost" id="invDownload" disabled>Download preview as Excel</button>
+      <button class="btn-accent" id="invApply" disabled>Apply to stock file &amp; download</button>
       <span class="small muted" id="invStatus"></span>
     </div>
 

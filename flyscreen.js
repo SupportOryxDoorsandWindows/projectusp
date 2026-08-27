@@ -41,6 +41,7 @@
   const state = {
     pdfFile: null,
     xlsxFile: null,
+    stockFile: null,
     itemList: null,   // array of { code, description, category, cost, inventory, length }
     parsed: null,     // { job, fittings: [...], bars: [...] }
     matched: null,    // last preview result
@@ -405,6 +406,218 @@
     `;
   }
 
+  /* --------------------------- Apply to Stock file ------------
+   *
+   * Reads a copy of the Flyscreen Stock Excel file in the browser, adds a
+   * new column with the deducted quantities (matching your manual process
+   * of adding a per-job column), and writes a fresh file to download. The
+   * original file is never modified — the user always ends up with two
+   * files: their unchanged source and the newly generated one.
+   *
+   * The Stock sheet's columns of interest, from row 2 (headers):
+   *   G  = "Child Profile Part code"  (row-level identifier)
+   *   N-AL = individual job columns  (this is where we add ours)
+   *   AO = "Consumption"              (row totals — updated directly)
+   *   AU = "Available Stock"          (updated directly so the "current
+   *          stock" number is correct in the new file even if a formula
+   *          didn't exist for it in the source)
+   *
+   * We match the PDF's numeric codes against the leading token of column G
+   * (e.g. "10003" from "10003-Nylon Cord"). If a code appears in the PDF
+   * but doesn't match any Stock row, it's captured and reported so nothing
+   * is silently dropped.
+   * ----------------------------------------------------------- */
+
+  function codeFromPartName(partName) {
+    if (!partName) return "";
+    const m = String(partName).match(/^\s*(\d+[A-Z]?)/);
+    return m ? m[1] : "";
+  }
+
+  function colLetter(idx) {
+    // 0-indexed column number to Excel letter (0 -> A, 25 -> Z, 26 -> AA…).
+    let s = "";
+    idx += 1;
+    while (idx) {
+      const r = (idx - 1) % 26;
+      s = String.fromCharCode(65 + r) + s;
+      idx = Math.floor((idx - 1) / 26);
+    }
+    return s;
+  }
+
+  async function applyToStock() {
+    if (!state.stockFile || !state.matched) return;
+    const XLSX = window.XLSX;
+    const jobRef = (state.parsed.job.ref || "job").trim();
+    const client = ($("#invClient").value || "").trim();
+    const newColHeader = `${jobRef}-${client}`;
+
+    status("Reading the Stock file (this can take a few seconds)…");
+    const buf = await state.stockFile.arrayBuffer();
+    // cellStyles preserves colouring and formatting where SheetJS can; formula
+    // preservation is best-effort.
+    const wb = XLSX.read(buf, { type: "array", cellStyles: true });
+    if (!wb.Sheets["STOCK"]) {
+      throw new Error('The uploaded file has no "STOCK" sheet — is it the right file?');
+    }
+    const ws = wb.Sheets["STOCK"];
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+
+    // Identify column positions from row 2 (the header row).
+    const HEADER_ROW = 1; // 0-indexed
+    const headers = {};
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: HEADER_ROW, c })];
+      if (cell && cell.v != null) headers[c] = String(cell.v).trim();
+    }
+    // Find special columns by header text.
+    let partCodeCol = null, consumptionCol = null, availStockCol = null;
+    for (const [c, h] of Object.entries(headers)) {
+      const hh = h.toUpperCase();
+      if (partCodeCol === null && /CHILD PROFILE PART CODE|PART CODE/.test(hh)) partCodeCol = +c;
+      if (consumptionCol === null && hh === "CONSUMPTION") consumptionCol = +c;
+      if (availStockCol === null && hh === "AVAILABLE STOCK") availStockCol = +c;
+    }
+    if (partCodeCol === null) throw new Error('Could not find the "Child Profile Part code" column in row 2.');
+
+    // Pick the target column for the new job. Preference:
+    //  1. If any of the job-columns (14..40) is empty, use the first empty one.
+    //  2. Otherwise, insert a new column at (consumptionCol - 1) — shifting
+    //     the consumption/available-stock columns to the right.
+    // Option 1 is far safer for existing formulas: we don't move anything.
+    let targetCol = null;
+    for (let c = 13; c <= 40; c++) { // columns N..AO span
+      if (!headers[c] || headers[c] === "") { targetCol = c; break; }
+    }
+    let insertedColumn = false;
+    if (targetCol === null) {
+      // Fall back: place immediately before Consumption (if we know where
+      // that is) by inserting a new column.
+      targetCol = consumptionCol != null ? consumptionCol : range.e.c + 1;
+      // Shift all cells at or right of targetCol one column to the right.
+      shiftColumnsRight(ws, targetCol, range);
+      insertedColumn = true;
+      // Update tracked column positions.
+      if (consumptionCol != null && consumptionCol >= targetCol) consumptionCol++;
+      if (availStockCol != null && availStockCol >= targetCol) availStockCol++;
+    }
+
+    // Write the header for the new column.
+    ws[XLSX.utils.encode_cell({ r: HEADER_ROW, c: targetCol })] = { t: "s", v: newColHeader };
+
+    // Build a code -> deduction map from the matched preview.
+    const dedByCode = new Map();
+    for (const r of state.matched.matched) {
+      const cur = dedByCode.get(r.code) || 0;
+      dedByCode.set(r.code, cur + (r.qty || 0));
+    }
+
+    // Walk data rows and fill in the new column. Also update Available Stock
+    // directly so the current-stock number is right in the new file even if
+    // no formula recomputes.
+    //
+    // The Stock file has multiple rows for the same code sometimes (OLD vs
+    // NEW variants, or by Product family). We only deduct from the FIRST
+    // matching row per code — deducting from all of them would over-count.
+    // Codes with duplicates are collected and warned about, so the user can
+    // manually re-allocate if the first match wasn't the intended one.
+    const missingCodes = new Set(dedByCode.keys());
+    const codesWithDuplicates = [];
+    const rowsPerCode = new Map(); // code -> [row, row, …]
+    let rowsTouched = 0;
+    for (let r = HEADER_ROW + 1; r <= range.e.r; r++) {
+      const partCell = ws[XLSX.utils.encode_cell({ r, c: partCodeCol })];
+      const partName = partCell && partCell.v != null ? String(partCell.v) : "";
+      const code = codeFromPartName(partName);
+      if (!code || !dedByCode.has(code)) continue;
+      const seen = rowsPerCode.get(code) || [];
+      seen.push(r);
+      rowsPerCode.set(code, seen);
+      if (seen.length > 1) continue; // only the first matching row is deducted
+
+      const qty = dedByCode.get(code);
+
+      // Write quantity into the new job column.
+      ws[XLSX.utils.encode_cell({ r, c: targetCol })] = { t: "n", v: qty };
+
+      // Update Available Stock directly (numeric value, replacing any formula).
+      if (availStockCol != null) {
+        const avCellRef = XLSX.utils.encode_cell({ r, c: availStockCol });
+        const cur = ws[avCellRef];
+        const curVal = cur && typeof cur.v === "number" ? cur.v : 0;
+        ws[avCellRef] = { t: "n", v: curVal - qty };
+      }
+
+      missingCodes.delete(code);
+      rowsTouched++;
+    }
+    for (const [code, rows] of rowsPerCode) {
+      if (rows.length > 1) codesWithDuplicates.push({ code, count: rows.length });
+    }
+
+    // Widen the sheet range to include any inserted column.
+    const newRange = { s: range.s, e: { r: range.e.r, c: Math.max(range.e.c, targetCol) } };
+    ws["!ref"] = XLSX.utils.encode_range(newRange);
+
+    // Compose a filename with the source name + today's date.
+    const srcName = state.stockFile.name.replace(/\.xlsx?$/i, "");
+    const today = new Date();
+    const iso = today.toISOString().slice(0, 10);
+    const outName = `${srcName} - ${iso}.xlsx`;
+    XLSX.writeFile(wb, outName);
+
+    const unmatchedFromStock = [...missingCodes];
+    status(
+      `Deduction applied. ${rowsTouched} stock rows updated. ` +
+      (unmatchedFromStock.length
+        ? `${unmatchedFromStock.length} PDF code${unmatchedFromStock.length === 1 ? "" : "s"} did not match any Stock row and were skipped.`
+        : "Every code matched a Stock row.")
+    );
+    if (unmatchedFromStock.length) {
+      $("#invOut").insertAdjacentHTML("afterbegin", `
+        <div class="inv-warn">
+          <h4>${unmatchedFromStock.length} PDF code${unmatchedFromStock.length === 1 ? "" : "s"} did not match any Stock row</h4>
+          <p class="small">The updated Stock file was still generated, but these items were not deducted because their code doesn't appear in the Stock sheet's Part Code column. Add them to the Stock file if they should be tracked:</p>
+          <ul>${unmatchedFromStock.map((c) => `<li><code>${esc(c)}</code></li>`).join("")}</ul>
+        </div>`);
+    }
+    if (codesWithDuplicates.length) {
+      $("#invOut").insertAdjacentHTML("afterbegin", `
+        <div class="inv-warn">
+          <h4>${codesWithDuplicates.length} code${codesWithDuplicates.length === 1 ? " has" : "s have"} more than one Stock row</h4>
+          <p class="small">Your Stock file has multiple rows for the same code (usually OLD vs NEW variants). We deducted from the <b>first matching row</b> only, so nothing gets over-counted. If a different variant should have been used, re-allocate manually in the downloaded file.</p>
+          <ul>${codesWithDuplicates.map((d) => `<li><code>${esc(d.code)}</code> — appears in ${d.count} rows</li>`).join("")}</ul>
+        </div>`);
+    }
+    if (insertedColumn) {
+      $("#invOut").insertAdjacentHTML("afterbegin", `
+        <div class="inv-apply-note">
+          <b>Note:</b> your Stock file had no empty job columns left, so a new column
+          was inserted before "Consumption". Formulas that reference specific column ranges
+          (e.g. <code>SUM(N3:AL3)</code>) may need to be widened by one column in the new file.
+        </div>`);
+    }
+  }
+
+  // Shift every populated cell at column ≥ fromCol one column to the right,
+  // preserving cell values and formats. Used only if we need to insert a new
+  // column into the middle of the sheet.
+  function shiftColumnsRight(ws, fromCol, range) {
+    const XLSX = window.XLSX;
+    // Walk from right to left so we don't overwrite cells we still need.
+    for (let c = range.e.c; c >= fromCol; c--) {
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        const from = XLSX.utils.encode_cell({ r, c });
+        const to = XLSX.utils.encode_cell({ r, c: c + 1 });
+        if (ws[from]) {
+          ws[to] = ws[from];
+          delete ws[from];
+        }
+      }
+    }
+  }
+
   /* --------------------------- Excel export ------------------- */
 
   function downloadExcel(job, result) {
@@ -465,13 +678,23 @@
       if (kind === "pdf") {
         state.pdfFile = f;
         $("#invPdfName").textContent = f.name;
-      } else {
+      } else if (kind === "xlsx") {
         state.xlsxFile = f;
         $("#invXlsxName").textContent = f.name;
+      } else if (kind === "stock") {
+        state.stockFile = f;
+        $("#invStockName").textContent = f.name;
       }
       dropEl.classList.add("ready");
       $("#invRun").disabled = !(state.pdfFile && state.xlsxFile);
+      updateApplyState();
     });
+  }
+
+  function updateApplyState() {
+    // "Apply" needs a preview + a Stock file + a client name.
+    const client = ($("#invClient").value || "").trim();
+    $("#invApply").disabled = !(state.matched && state.stockFile && client);
   }
 
   function status(text, kind) {
@@ -496,6 +719,7 @@
       render(state.parsed.job, state.matched);
       status(`Preview ready — ${state.matched.matched.length} items matched, ${state.matched.unmatched.length} unmatched.`);
       $("#invDownload").disabled = false;
+      updateApplyState();
     } catch (err) {
       console.error(err);
       status("Could not read the files: " + err.message, "err");
@@ -510,10 +734,25 @@
     if (!$("#invRun")) { setTimeout(init, 50); return; }
     wireDrop($("#invDropPdf"), $("#invPdf"), "pdf");
     wireDrop($("#invDropXlsx"), $("#invXlsx"), "xlsx");
+    wireDrop($("#invDropStock"), $("#invStock"), "stock");
     $("#invRun").addEventListener("click", run);
     $("#invDownload").addEventListener("click", () => {
       if (state.parsed && state.matched) downloadExcel(state.parsed.job, state.matched);
     });
+    $("#invApply").addEventListener("click", async () => {
+      const btn = $("#invApply");
+      btn.disabled = true;
+      try {
+        await applyToStock();
+      } catch (err) {
+        console.error(err);
+        status("Could not apply deduction: " + err.message, "err");
+      } finally {
+        // Re-enable if all prerequisites are still there.
+        updateApplyState();
+      }
+    });
+    $("#invClient").addEventListener("input", updateApplyState);
   }
 
   init();
