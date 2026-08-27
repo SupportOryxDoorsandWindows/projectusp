@@ -77,10 +77,11 @@ def wipe():
     """Clear in dependency order. Cascades would work, but be explicit."""
     for table in ("drawings", "engineering_notes", "system_options",
                   "configurations", "systems", "glossary", "kb_meta"):
-        # neq on the primary key matches every row
-        col = {"glossary": "term", "kb_meta": "id", "systems": "id"}.get(table, "id")
-        sentinel = "0" if col == "id" and table in ("kb_meta",) else "__none__"
-        request("DELETE", "/rest/v1/%s?%s=neq.%s" % (table, col, sentinel),
+        # "is not null" matches every row (a real primary key is never null)
+        # regardless of whether the column is text or a numeric id — unlike a
+        # neq sentinel, which broke on any table with a bigint primary key.
+        col = {"glossary": "term"}.get(table, "id")
+        request("DELETE", "/rest/v1/%s?%s=not.is.null" % (table, col),
                 extra={"Prefer": "return=minimal"})
 
 

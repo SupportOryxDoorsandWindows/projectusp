@@ -278,6 +278,101 @@ tbody tr:hover{background:var(--line-soft)}
 .cfg-gallery{flex-basis:100%; margin-top:var(--space-2)}
 .cfg-gallery .gallery{margin-top:0}
 .cfg-gallery-note{margin-top:var(--space-2)}
+
+/* ---------- Inventory (Flyscreen) tab ---------- */
+.inv-drops{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+  gap:var(--space-4); margin:var(--space-6) 0 var(--space-4);
+}
+.inv-drop{
+  display:flex; align-items:center; gap:var(--space-4);
+  padding:var(--space-5); border:2px dashed var(--line);
+  border-radius:var(--r-md); background:var(--panel);
+  cursor:pointer; transition:border-color .2s ease, background .2s ease;
+}
+.inv-drop:hover, .inv-drop.dragover{border-color:var(--brand); background:var(--white)}
+.inv-drop.ready{border-style:solid; border-color:var(--brand); background:var(--white)}
+.inv-drop-icon{
+  font-family:var(--font-display); font-weight:700; font-size:12px;
+  letter-spacing:0.04em; color:var(--white); background:var(--brand);
+  padding:8px 12px; border-radius:var(--r-tag); flex:none;
+}
+.inv-drop-main{flex:1; min-width:0}
+.inv-drop-title{
+  font-family:var(--font-display); font-weight:600; font-size:13px;
+  color:var(--brand); margin-bottom:2px;
+}
+.inv-drop-sub{
+  font-size:12px; color:var(--text-muted); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;
+}
+.inv-drop.ready .inv-drop-sub{color:var(--black)}
+.inv-actions{
+  display:flex; align-items:center; gap:var(--space-3);
+  margin-bottom:var(--space-5); flex-wrap:wrap;
+}
+.inv-jobcard{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--space-4) var(--space-5); margin-bottom:var(--space-5);
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:var(--space-4);
+}
+.inv-jobfield{}
+.inv-jobfield label{
+  display:block; font-family:var(--font-display); font-weight:600; font-size:10px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+  margin-bottom:3px;
+}
+.inv-jobfield strong{font-family:var(--font-display); font-weight:600; color:var(--brand); font-size:15px}
+.inv-tally{
+  display:flex; gap:var(--space-6); flex-wrap:wrap; margin:var(--space-4) 0;
+  padding:var(--space-4); background:var(--panel); border-radius:var(--r-md);
+}
+.inv-tally-item strong{
+  display:block; font-family:var(--font-display); font-weight:700; font-size:22px;
+  color:var(--brand); font-variant-numeric:tabular-nums;
+}
+.inv-tally-item span{
+  font-family:var(--font-display); font-weight:600; font-size:10px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+}
+.inv-table{width:100%; border-collapse:collapse; font-size:13px}
+.inv-table th{
+  font-family:var(--font-display); font-weight:600; font-size:10.5px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:var(--space-2) var(--space-3);
+  border-bottom:1px solid var(--line); background:var(--panel);
+  position:sticky; top:0;
+}
+.inv-table td{
+  padding:var(--space-2) var(--space-3);
+  border-bottom:1px solid var(--line-soft); vertical-align:top;
+}
+.inv-table tr:hover td{background:var(--line-soft)}
+.inv-table td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+.inv-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
+.inv-cat{
+  font-family:var(--font-display); font-weight:600; font-size:10px;
+  letter-spacing:0.04em; text-transform:uppercase; color:var(--text-muted);
+  padding:2px 8px; border-radius:var(--r-pill); background:var(--panel);
+  border:1px solid var(--line); display:inline-block;
+}
+.inv-warn{
+  border-left:4px solid var(--alert); background:var(--danger-bg);
+  border-radius:var(--r-md); padding:var(--space-4) var(--space-5);
+  margin-top:var(--space-5);
+}
+.inv-warn h4{
+  font-family:var(--font-display); font-weight:600; font-size:13.5px;
+  color:var(--danger); margin:0 0 var(--space-2);
+}
+.inv-warn ul{margin:var(--space-2) 0 0; padding-left:20px; font-size:12.5px}
+.inv-warn code{font-family:var(--font-mono); font-size:11.5px; background:var(--white); padding:1px 5px; border-radius:4px}
+.inv-section-h{
+  font-family:var(--font-display); font-weight:600; font-size:14px;
+  color:var(--brand); margin:var(--space-6) 0 var(--space-3);
+}
+.inv-scroll{max-height:520px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
+.inv-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:820px}
 .ask{display:flex; gap:var(--space-3); margin-top:var(--space-5)}
 .ask input{flex:1}
 .chips{display:flex; gap:var(--space-2); flex-wrap:wrap; margin-top:var(--space-4)}
@@ -450,6 +545,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <button data-v="check">Opening checker</button>
         <button data-v="systems">Systems</button>
         <button data-v="matrix">Comparison</button>
+        <button data-v="inv">Inventory</button>
       </nav>
     </div>
   </div>
@@ -539,6 +635,43 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
   </div>
 </section>
 
+<!-- =========================== INVENTORY (Flyscreen) =========================== -->
+<section id="v-inv" class="view">
+  <div class="card">
+    <h2>Flyscreen inventory preview</h2>
+    <p class="lede">Upload an FP Pro optimisation PDF together with your item-list Excel to
+    see exactly what would be deducted from stock. Files stay in your browser — nothing is
+    uploaded anywhere. This is a preview only: no stock is actually changed.</p>
+
+    <div class="inv-drops">
+      <label class="inv-drop" id="invDropPdf">
+        <input type="file" id="invPdf" accept="application/pdf,.pdf" hidden>
+        <div class="inv-drop-icon">PDF</div>
+        <div class="inv-drop-main">
+          <div class="inv-drop-title">FP Pro optimisation PDF</div>
+          <div class="inv-drop-sub" id="invPdfName">Click or drop the PDF file here</div>
+        </div>
+      </label>
+      <label class="inv-drop" id="invDropXlsx">
+        <input type="file" id="invXlsx" accept=".xlsx,.xls" hidden>
+        <div class="inv-drop-icon">XLSX</div>
+        <div class="inv-drop-main">
+          <div class="inv-drop-title">Freedom item list (.xlsx)</div>
+          <div class="inv-drop-sub" id="invXlsxName">Click or drop the item-list file here</div>
+        </div>
+      </label>
+    </div>
+
+    <div class="inv-actions">
+      <button class="btn-primary" id="invRun" disabled>Preview deduction</button>
+      <button class="ghost" id="invDownload" disabled>Download preview as Excel</button>
+      <span class="small muted" id="invStatus"></span>
+    </div>
+
+    <div id="invOut"></div>
+  </div>
+</section>
+
 </main>
 
 <dialog id="lightbox">
@@ -550,8 +683,9 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js?v=2"></script>
-<!-- boot.js loads the knowledge base from Supabase, then loads app.js.
-     Bump ?v= when config.js or boot.js change so browsers fetch the new file. -->
-<script src="boot.js?v=2"></script>
+<!-- boot.js loads the knowledge base from Supabase, then loads app.js and
+     flyscreen.js. Bump ?v= when config.js or boot.js change so browsers
+     fetch the new file. -->
+<script src="boot.js?v=3"></script>
 </body>
 </html>

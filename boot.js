@@ -126,6 +126,12 @@
     s.onload = () => {
       $("#loading").hidden = true;
       $("#appShell").hidden = false;
+      // flyscreen.js runs the Inventory tab. Loaded after app.js so it can
+      // hook into the main event loop; cache-busted the same way as app.js
+      // so a redeploy takes effect on the next page load.
+      const f = document.createElement("script");
+      f.src = "flyscreen.js?v=" + Date.now();
+      document.body.appendChild(f);
     };
     s.onerror = () => fail("Could not load app.js.");
     document.body.appendChild(s);
