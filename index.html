@@ -279,190 +279,68 @@ tbody tr:hover{background:var(--line-soft)}
 .cfg-gallery .gallery{margin-top:0}
 .cfg-gallery-note{margin-top:var(--space-2)}
 
-/* ---------- Inventory (Flyscreen) tab ---------- */
-.inv-drops{
-  display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-  gap:var(--space-4); margin:var(--space-6) 0 var(--space-4);
-}
+/* ---------- FP Pro Optimization tab ---------- */
 /* File inputs are hidden from view but must stay in the DOM (not display:none)
    so that clicking their <label> triggers the picker reliably in every browser. */
 .visually-hidden{
   position:absolute; width:1px; height:1px; padding:0; margin:-1px;
   overflow:hidden; clip:rect(0,0,0,0); border:0;
 }
-.inv-drop{
+.fp-drop{
   display:flex; align-items:center; gap:var(--space-4);
   padding:var(--space-5); border:2px dashed var(--line);
   border-radius:var(--r-md); background:var(--panel);
   cursor:pointer; transition:border-color .2s ease, background .2s ease;
+  margin:var(--space-6) 0 var(--space-4); max-width:560px;
 }
-.inv-drop:hover, .inv-drop.dragover{border-color:var(--brand); background:var(--white)}
-.inv-drop.ready{border-style:solid; border-color:var(--brand); background:var(--white)}
-.inv-drop-icon{
+.fp-drop:hover, .fp-drop.dragover{border-color:var(--brand); background:var(--white)}
+.fp-drop.ready{border-style:solid; border-color:var(--brand); background:var(--white)}
+.fp-drop-icon{
   font-family:var(--font-display); font-weight:700; font-size:12px;
   letter-spacing:0.04em; color:var(--white); background:var(--brand);
   padding:8px 12px; border-radius:var(--r-tag); flex:none;
 }
-.inv-drop-main{flex:1; min-width:0}
-.inv-drop-title{
+.fp-drop-main{flex:1; min-width:0}
+.fp-drop-title{
   font-family:var(--font-display); font-weight:600; font-size:13px;
   color:var(--brand); margin-bottom:2px;
 }
-.inv-drop-sub{
+.fp-drop-sub{
   font-size:12px; color:var(--text-muted); overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap;
 }
-.inv-drop.ready .inv-drop-sub{color:var(--black)}
-.inv-actions{
+.fp-drop.ready .fp-drop-sub{color:var(--black)}
+.fp-actions{
   display:flex; align-items:center; gap:var(--space-3);
   margin-bottom:var(--space-5); flex-wrap:wrap;
 }
-.inv-step-h{
-  font-family:var(--font-display); font-weight:600; font-size:11px;
-  letter-spacing:0.08em; text-transform:uppercase; color:var(--accent-deep);
-  margin:var(--space-6) 0 var(--space-3);
+.fp-jobline{
+  font-size:12.5px; color:var(--text-muted);
+  margin:var(--space-4) 0 var(--space-3);
 }
-.inv-jobrow{
-  display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
-  gap:var(--space-4); margin-bottom:var(--space-5);
-}
-.inv-jobrow-field .field-label{
-  display:block; font-family:var(--font-display); font-weight:600; font-size:11px;
-  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
-  margin-bottom:var(--space-1);
-}
-.inv-jobrow-field input{width:100%}
-.inv-apply-note{
-  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
-  padding:var(--space-3) var(--space-4); margin:var(--space-4) 0;
-  font-size:12.5px; color:var(--text-muted); display:flex; gap:var(--space-2);
-}
-.inv-apply-note b{color:var(--brand); font-family:var(--font-display)}
-.inv-confirmbar{
-  display:flex; align-items:center; justify-content:space-between;
-  padding:var(--space-5) var(--space-6); gap:var(--space-4); flex-wrap:wrap;
-  background:var(--brand); color:var(--white); border-radius:var(--r-md);
-  margin:var(--space-6) 0 var(--space-5); position:sticky; bottom:var(--space-3); z-index:2;
-  box-shadow:var(--sh-raised);
-}
-.inv-confirmbar-title{
-  font-family:var(--font-display); font-weight:600; font-size:16px;
-}
-.inv-confirmbar .small.muted{color:rgba(255,255,255,0.75)}
-.inv-confirmbar button:disabled{opacity:0.4; cursor:not-allowed}
-.inv-status-ok{
-  background:var(--brand); color:var(--white);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-}
-.inv-status-short{
-  background:var(--danger-bg); color:var(--danger);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-}
-.inv-status-unmatched{
-  background:var(--accent); color:var(--brand);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-}
-.inv-status-fuzzy{
-  background:var(--panel); color:var(--accent-deep);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-  border:1px solid var(--accent);
-}
-.inv-status-skip{
-  background:var(--panel); color:var(--text-muted);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-  border:1px solid var(--line);
-}
-.inv-batch-actions{margin-left:var(--space-2); display:inline-flex; gap:var(--space-1); flex-wrap:wrap}
-.inv-batch-actions button{
-  font-family:var(--font-display); font-weight:600; font-size:11px;
-  padding:2px 8px; border-radius:var(--r-tag);
-  background:var(--white); color:var(--danger); border:1px solid var(--danger);
-  cursor:pointer;
-}
-.inv-batch-actions button:hover{background:var(--danger-bg-hover)}
-.inv-skipped td{opacity:0.55}
-.inv-row-actions{display:flex; gap:var(--space-1); flex-wrap:wrap}
-.inv-row-actions button{
-  font-family:var(--font-display); font-weight:600; font-size:11px;
-  padding:3px 8px; border-radius:var(--r-tag);
-  background:var(--panel); color:var(--brand); border:1px solid var(--line);
-  cursor:pointer;
-}
-.inv-row-actions button:hover{background:var(--white); border-color:var(--brand)}
-.inv-row-actions button.on{background:var(--brand); color:var(--white); border-color:var(--brand)}
-.inv-done{
-  background:var(--panel); border-left:4px solid var(--brand); border-radius:var(--r-md);
-  padding:var(--space-5) var(--space-6); margin-top:var(--space-5);
-}
-.inv-done h3{font-family:var(--font-display); font-weight:600; font-size:16px; color:var(--brand); margin:0 0 var(--space-2)}
-.inv-done .inv-done-actions{display:flex; gap:var(--space-3); flex-wrap:wrap; margin-top:var(--space-4)}
-.inv-jobcard{
-  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
-  padding:var(--space-4) var(--space-5); margin-bottom:var(--space-5);
-  display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:var(--space-4);
-}
-.inv-jobfield{}
-.inv-jobfield label{
-  display:block; font-family:var(--font-display); font-weight:600; font-size:10px;
-  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
-  margin-bottom:3px;
-}
-.inv-jobfield strong{font-family:var(--font-display); font-weight:600; color:var(--brand); font-size:15px}
-.inv-tally{
-  display:flex; gap:var(--space-6); flex-wrap:wrap; margin:var(--space-4) 0;
-  padding:var(--space-4); background:var(--panel); border-radius:var(--r-md);
-}
-.inv-tally-item strong{
-  display:block; font-family:var(--font-display); font-weight:700; font-size:22px;
-  color:var(--brand); font-variant-numeric:tabular-nums;
-}
-.inv-tally-item span{
-  font-family:var(--font-display); font-weight:600; font-size:10px;
-  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
-}
-.inv-table{width:100%; border-collapse:collapse; font-size:13px}
-.inv-table th{
+.fp-jobline b{color:var(--brand); font-family:var(--font-display); font-weight:600}
+.fp-table{width:100%; border-collapse:collapse; font-size:13px}
+.fp-table th{
   font-family:var(--font-display); font-weight:600; font-size:10.5px;
   letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
   text-align:left; padding:var(--space-2) var(--space-3);
   border-bottom:1px solid var(--line); background:var(--panel);
   position:sticky; top:0;
 }
-.inv-table td{
+.fp-table td{
   padding:var(--space-2) var(--space-3);
   border-bottom:1px solid var(--line-soft); vertical-align:top;
 }
-.inv-table tr:hover td{background:var(--line-soft)}
-.inv-table td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
-.inv-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
-.inv-cat{
-  font-family:var(--font-display); font-weight:600; font-size:10px;
-  letter-spacing:0.04em; text-transform:uppercase; color:var(--text-muted);
-  padding:2px 8px; border-radius:var(--r-pill); background:var(--panel);
-  border:1px solid var(--line); display:inline-block;
+.fp-table tr:hover td{background:var(--line-soft)}
+.fp-table td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+.fp-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
+.fp-scroll{max-height:640px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
+.fp-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:560px}
+.fp-section-h{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+  margin:var(--space-5) 0 var(--space-2);
 }
-.inv-warn{
-  border-left:4px solid var(--alert); background:var(--danger-bg);
-  border-radius:var(--r-md); padding:var(--space-4) var(--space-5);
-  margin-top:var(--space-5);
-}
-.inv-warn h4{
-  font-family:var(--font-display); font-weight:600; font-size:13.5px;
-  color:var(--danger); margin:0 0 var(--space-2);
-}
-.inv-warn ul{margin:var(--space-2) 0 0; padding-left:20px; font-size:12.5px}
-.inv-warn code{font-family:var(--font-mono); font-size:11.5px; background:var(--white); padding:1px 5px; border-radius:4px}
-.inv-section-h{
-  font-family:var(--font-display); font-weight:600; font-size:14px;
-  color:var(--brand); margin:var(--space-6) 0 var(--space-3);
-}
-.inv-scroll{max-height:520px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
-.inv-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:820px}
 .ask{display:flex; gap:var(--space-3); margin-top:var(--space-5)}
 .ask input{flex:1}
 .chips{display:flex; gap:var(--space-2); flex-wrap:wrap; margin-top:var(--space-4)}
@@ -635,7 +513,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <button data-v="check">Opening checker</button>
         <button data-v="systems">Systems</button>
         <button data-v="matrix">Comparison</button>
-        <button data-v="inv">Inventory</button>
+        <button data-v="fp">FP Pro Optimization</button>
       </nav>
     </div>
   </div>
@@ -726,71 +604,28 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 </section>
 
 <!-- =========================== INVENTORY (Flyscreen) =========================== -->
-<section id="v-inv" class="view">
+<section id="v-fp" class="view">
   <div class="card">
-    <h2>Flyscreen inventory allocation</h2>
-    <p class="lede">Upload an FP Pro optimisation PDF, your item list, and your stock file.
-    The tool matches every item, checks stock, flags anything that needs your attention,
-    and only after you click <b>Confirm allocation</b> does it produce an updated stock file.
-    Everything runs in your browser — nothing is sent anywhere.</p>
+    <h2>FP Pro Optimization</h2>
+    <p class="lede">Upload an FP Pro optimisation PDF and the tool extracts every item and its
+    required quantity into a clean table. Everything runs in your browser — nothing is uploaded.</p>
 
-    <div class="inv-step-h">Step 1 — Upload the three files</div>
-    <div class="inv-drops">
-      <label class="inv-drop" id="invDropPdf" for="invPdf">
-        <input type="file" id="invPdf" accept="application/pdf,.pdf" class="visually-hidden">
-        <div class="inv-drop-icon">PDF</div>
-        <div class="inv-drop-main">
-          <div class="inv-drop-title">FP Pro optimisation PDF</div>
-          <div class="inv-drop-sub" id="invPdfName">Click or drop the PDF file here</div>
-        </div>
-      </label>
-      <label class="inv-drop" id="invDropXlsx" for="invXlsx">
-        <input type="file" id="invXlsx" accept=".xlsx,.xls" class="visually-hidden">
-        <div class="inv-drop-icon">ITEMS</div>
-        <div class="inv-drop-main">
-          <div class="inv-drop-title">Freedom item list (.xlsx)</div>
-          <div class="inv-drop-sub" id="invXlsxName">Click or drop the item-list file here</div>
-        </div>
-      </label>
-      <label class="inv-drop" id="invDropStock" for="invStock">
-        <input type="file" id="invStock" accept=".xlsx,.xls" class="visually-hidden">
-        <div class="inv-drop-icon">STOCK</div>
-        <div class="inv-drop-main">
-          <div class="inv-drop-title">Flyscreen stock file (.xlsx)</div>
-          <div class="inv-drop-sub" id="invStockName">Click or drop the stock file here</div>
-        </div>
-      </label>
-    </div>
-
-    <div class="inv-step-h">Step 2 — Job details</div>
-    <div class="inv-jobrow">
-      <div class="inv-jobrow-field">
-        <label class="field-label" for="invJobNumber">Job number</label>
-        <input id="invJobNumber" type="text" autocomplete="off" placeholder="Auto-filled from the PDF; you can edit it">
+    <label class="fp-drop" id="fpDrop" for="fpPdf">
+      <input type="file" id="fpPdf" accept="application/pdf,.pdf" class="visually-hidden">
+      <div class="fp-drop-icon">PDF</div>
+      <div class="fp-drop-main">
+        <div class="fp-drop-title">FP Pro optimisation PDF</div>
+        <div class="fp-drop-sub" id="fpPdfName">Click or drop the PDF file here</div>
       </div>
-      <div class="inv-jobrow-field">
-        <label class="field-label" for="invClient">Client name</label>
-        <input id="invClient" type="text" autocomplete="off" placeholder="e.g. AHMED KHAN">
-      </div>
+    </label>
+
+    <div class="fp-actions">
+      <button class="btn-primary" id="fpExtract" disabled>Extract items</button>
+      <button class="ghost" id="fpReset">Reset</button>
+      <span class="small muted" id="fpStatus"></span>
     </div>
 
-    <div class="inv-actions">
-      <button class="btn-primary" id="invAnalyse" disabled>Analyse and preview</button>
-      <button class="ghost" id="invReset">Reset</button>
-      <span class="small muted" id="invStatus"></span>
-    </div>
-
-    <div id="invOut"></div>
-
-    <div class="inv-confirmbar" id="invConfirmBar" hidden>
-      <div>
-        <div class="inv-confirmbar-title">Ready to allocate</div>
-        <div class="small muted" id="invConfirmSummary"></div>
-      </div>
-      <button class="btn-accent" id="invConfirm" disabled>Confirm allocation</button>
-    </div>
-
-    <div id="invDone"></div>
+    <div id="fpOut"></div>
   </div>
 </section>
 
@@ -806,8 +641,8 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js?v=2"></script>
 <!-- boot.js loads the knowledge base from Supabase, then loads app.js and
-     flyscreen.js. Bump ?v= when config.js or boot.js change so browsers
+     fp-pro.js. Bump ?v= when config.js or boot.js change so browsers
      fetch the new file. -->
-<script src="boot.js?v=3"></script>
+<script src="boot.js?v=4"></script>
 </body>
 </html>
