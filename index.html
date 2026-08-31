@@ -317,20 +317,90 @@ tbody tr:hover{background:var(--line-soft)}
   display:flex; align-items:center; gap:var(--space-3);
   margin-bottom:var(--space-5); flex-wrap:wrap;
 }
-.inv-clientrow{margin:var(--space-4) 0 var(--space-5)}
-.inv-clientrow input{max-width:340px}
-.inv-clientrow p{margin-top:var(--space-2)}
-.inv-clientrow .field-label{
+.inv-step-h{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.08em; text-transform:uppercase; color:var(--accent-deep);
+  margin:var(--space-6) 0 var(--space-3);
+}
+.inv-jobrow{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:var(--space-4); margin-bottom:var(--space-5);
+}
+.inv-jobrow-field .field-label{
   display:block; font-family:var(--font-display); font-weight:600; font-size:11px;
   letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
   margin-bottom:var(--space-1);
 }
+.inv-jobrow-field input{width:100%}
 .inv-apply-note{
   background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
   padding:var(--space-3) var(--space-4); margin:var(--space-4) 0;
   font-size:12.5px; color:var(--text-muted); display:flex; gap:var(--space-2);
 }
 .inv-apply-note b{color:var(--brand); font-family:var(--font-display)}
+.inv-confirmbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:var(--space-5) var(--space-6); gap:var(--space-4); flex-wrap:wrap;
+  background:var(--brand); color:var(--white); border-radius:var(--r-md);
+  margin:var(--space-6) 0 var(--space-5); position:sticky; bottom:var(--space-3); z-index:2;
+  box-shadow:var(--sh-raised);
+}
+.inv-confirmbar-title{
+  font-family:var(--font-display); font-weight:600; font-size:16px;
+}
+.inv-confirmbar .small.muted{color:rgba(255,255,255,0.75)}
+.inv-confirmbar button:disabled{opacity:0.4; cursor:not-allowed}
+.inv-status-ok{
+  background:var(--brand); color:var(--white);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+}
+.inv-status-short{
+  background:var(--danger-bg); color:var(--danger);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+}
+.inv-status-unmatched{
+  background:var(--accent); color:var(--brand);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+}
+.inv-status-fuzzy{
+  background:var(--panel); color:var(--accent-deep);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+  border:1px solid var(--accent);
+}
+.inv-status-skip{
+  background:var(--panel); color:var(--text-muted);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+  border:1px solid var(--line);
+}
+.inv-batch-actions{margin-left:var(--space-2); display:inline-flex; gap:var(--space-1); flex-wrap:wrap}
+.inv-batch-actions button{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  padding:2px 8px; border-radius:var(--r-tag);
+  background:var(--white); color:var(--danger); border:1px solid var(--danger);
+  cursor:pointer;
+}
+.inv-batch-actions button:hover{background:var(--danger-bg-hover)}
+.inv-skipped td{opacity:0.55}
+.inv-row-actions{display:flex; gap:var(--space-1); flex-wrap:wrap}
+.inv-row-actions button{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  padding:3px 8px; border-radius:var(--r-tag);
+  background:var(--panel); color:var(--brand); border:1px solid var(--line);
+  cursor:pointer;
+}
+.inv-row-actions button:hover{background:var(--white); border-color:var(--brand)}
+.inv-row-actions button.on{background:var(--brand); color:var(--white); border-color:var(--brand)}
+.inv-done{
+  background:var(--panel); border-left:4px solid var(--brand); border-radius:var(--r-md);
+  padding:var(--space-5) var(--space-6); margin-top:var(--space-5);
+}
+.inv-done h3{font-family:var(--font-display); font-weight:600; font-size:16px; color:var(--brand); margin:0 0 var(--space-2)}
+.inv-done .inv-done-actions{display:flex; gap:var(--space-3); flex-wrap:wrap; margin-top:var(--space-4)}
 .inv-jobcard{
   background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
   padding:var(--space-4) var(--space-5); margin-bottom:var(--space-5);
@@ -658,11 +728,13 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 <!-- =========================== INVENTORY (Flyscreen) =========================== -->
 <section id="v-inv" class="view">
   <div class="card">
-    <h2>Flyscreen inventory preview</h2>
-    <p class="lede">Upload an FP Pro optimisation PDF together with your item-list Excel to
-    see exactly what would be deducted from stock. Files stay in your browser — nothing is
-    uploaded anywhere. This is a preview only: no stock is actually changed.</p>
+    <h2>Flyscreen inventory allocation</h2>
+    <p class="lede">Upload an FP Pro optimisation PDF, your item list, and your stock file.
+    The tool matches every item, checks stock, flags anything that needs your attention,
+    and only after you click <b>Confirm allocation</b> does it produce an updated stock file.
+    Everything runs in your browser — nothing is sent anywhere.</p>
 
+    <div class="inv-step-h">Step 1 — Upload the three files</div>
     <div class="inv-drops">
       <label class="inv-drop" id="invDropPdf" for="invPdf">
         <input type="file" id="invPdf" accept="application/pdf,.pdf" class="visually-hidden">
@@ -674,7 +746,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
       </label>
       <label class="inv-drop" id="invDropXlsx" for="invXlsx">
         <input type="file" id="invXlsx" accept=".xlsx,.xls" class="visually-hidden">
-        <div class="inv-drop-icon">XLSX</div>
+        <div class="inv-drop-icon">ITEMS</div>
         <div class="inv-drop-main">
           <div class="inv-drop-title">Freedom item list (.xlsx)</div>
           <div class="inv-drop-sub" id="invXlsxName">Click or drop the item-list file here</div>
@@ -684,26 +756,41 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <input type="file" id="invStock" accept=".xlsx,.xls" class="visually-hidden">
         <div class="inv-drop-icon">STOCK</div>
         <div class="inv-drop-main">
-          <div class="inv-drop-title">Flyscreen stock file (.xlsx) <span class="small muted">— for actual deduction</span></div>
-          <div class="inv-drop-sub" id="invStockName">Optional: only needed to apply the deduction</div>
+          <div class="inv-drop-title">Flyscreen stock file (.xlsx)</div>
+          <div class="inv-drop-sub" id="invStockName">Click or drop the stock file here</div>
         </div>
       </label>
     </div>
 
-    <div class="inv-clientrow">
-      <label class="field-label" for="invClient">Client name (for the new job column)</label>
-      <input id="invClient" type="text" autocomplete="off" placeholder="e.g. AHMED KHAN">
-      <p class="small muted">The Stock file's job columns follow a job-number + client-name pattern (e.g. "26249-Steve Cass"). We'll use "&lt;job number&gt;-&lt;this name&gt;" as the header of the new column.</p>
+    <div class="inv-step-h">Step 2 — Job details</div>
+    <div class="inv-jobrow">
+      <div class="inv-jobrow-field">
+        <label class="field-label" for="invJobNumber">Job number</label>
+        <input id="invJobNumber" type="text" autocomplete="off" placeholder="Auto-filled from the PDF; you can edit it">
+      </div>
+      <div class="inv-jobrow-field">
+        <label class="field-label" for="invClient">Client name</label>
+        <input id="invClient" type="text" autocomplete="off" placeholder="e.g. AHMED KHAN">
+      </div>
     </div>
 
     <div class="inv-actions">
-      <button class="btn-primary" id="invRun" disabled>Preview deduction</button>
-      <button class="ghost" id="invDownload" disabled>Download preview as Excel</button>
-      <button class="btn-accent" id="invApply" disabled>Apply to stock file &amp; download</button>
+      <button class="btn-primary" id="invAnalyse" disabled>Analyse and preview</button>
+      <button class="ghost" id="invReset">Reset</button>
       <span class="small muted" id="invStatus"></span>
     </div>
 
     <div id="invOut"></div>
+
+    <div class="inv-confirmbar" id="invConfirmBar" hidden>
+      <div>
+        <div class="inv-confirmbar-title">Ready to allocate</div>
+        <div class="small muted" id="invConfirmSummary"></div>
+      </div>
+      <button class="btn-accent" id="invConfirm" disabled>Confirm allocation</button>
+    </div>
+
+    <div id="invDone"></div>
   </div>
 </section>
 
