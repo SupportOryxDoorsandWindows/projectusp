@@ -286,12 +286,15 @@ tbody tr:hover{background:var(--line-soft)}
   position:absolute; width:1px; height:1px; padding:0; margin:-1px;
   overflow:hidden; clip:rect(0,0,0,0); border:0;
 }
+.fp-drops{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+  gap:var(--space-4); margin:var(--space-4) 0;
+}
 .fp-drop{
   display:flex; align-items:center; gap:var(--space-4);
   padding:var(--space-5); border:2px dashed var(--line);
   border-radius:var(--r-md); background:var(--panel);
   cursor:pointer; transition:border-color .2s ease, background .2s ease;
-  margin:var(--space-6) 0 var(--space-4); max-width:560px;
 }
 .fp-drop:hover, .fp-drop.dragover{border-color:var(--brand); background:var(--white)}
 .fp-drop.ready{border-style:solid; border-color:var(--brand); background:var(--white)}
@@ -310,15 +313,120 @@ tbody tr:hover{background:var(--line-soft)}
   text-overflow:ellipsis; white-space:nowrap;
 }
 .fp-drop.ready .fp-drop-sub{color:var(--black)}
+.fp-step-h{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.08em; text-transform:uppercase; color:var(--accent-deep);
+  margin:var(--space-6) 0 var(--space-3);
+}
+.fp-jobrow{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:var(--space-4); margin-bottom:var(--space-5);
+}
+.fp-jobrow-field .field-label{
+  display:block; font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+  margin-bottom:var(--space-1);
+}
+.fp-jobrow-field input{width:100%}
 .fp-actions{
   display:flex; align-items:center; gap:var(--space-3);
   margin-bottom:var(--space-5); flex-wrap:wrap;
 }
-.fp-jobline{
-  font-size:12.5px; color:var(--text-muted);
-  margin:var(--space-4) 0 var(--space-3);
+.fp-jobcard{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--space-4) var(--space-5); margin-bottom:var(--space-5);
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:var(--space-4);
 }
-.fp-jobline b{color:var(--brand); font-family:var(--font-display); font-weight:600}
+.fp-jobfield label{
+  display:block; font-family:var(--font-display); font-weight:600; font-size:10px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+  margin-bottom:3px;
+}
+.fp-jobfield strong{font-family:var(--font-display); font-weight:600; color:var(--brand); font-size:15px}
+.fp-tally{
+  display:flex; gap:var(--space-6); flex-wrap:wrap; margin:var(--space-4) 0;
+  padding:var(--space-4); background:var(--panel); border-radius:var(--r-md);
+}
+.fp-tally-item strong{
+  display:block; font-family:var(--font-display); font-weight:700; font-size:22px;
+  color:var(--brand); font-variant-numeric:tabular-nums;
+}
+.fp-tally-item span{
+  font-family:var(--font-display); font-weight:600; font-size:10px;
+  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
+}
+.fp-warn{
+  border-left:4px solid var(--alert); background:var(--danger-bg);
+  border-radius:var(--r-md); padding:var(--space-4) var(--space-5);
+  margin-top:var(--space-5);
+}
+.fp-warn h4{
+  font-family:var(--font-display); font-weight:600; font-size:13.5px;
+  color:var(--danger); margin:0 0 var(--space-2);
+}
+.fp-warn ul{margin:var(--space-2) 0 0; padding-left:20px; font-size:12.5px}
+.fp-warn code{font-family:var(--font-mono); font-size:11.5px; background:var(--white); padding:1px 5px; border-radius:4px}
+.fp-batch-actions{margin-left:var(--space-2); display:inline-flex; gap:var(--space-1); flex-wrap:wrap}
+.fp-batch-actions button{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  padding:2px 8px; border-radius:var(--r-tag);
+  background:var(--white); color:var(--danger); border:1px solid var(--danger);
+  cursor:pointer;
+}
+.fp-batch-actions button:hover{background:var(--danger-bg-hover)}
+.fp-row-actions{display:flex; gap:var(--space-1); flex-wrap:wrap}
+.fp-row-actions button{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  padding:3px 8px; border-radius:var(--r-tag);
+  background:var(--panel); color:var(--brand); border:1px solid var(--line);
+  cursor:pointer;
+}
+.fp-row-actions button:hover{background:var(--white); border-color:var(--brand)}
+.fp-row-actions button.on{background:var(--brand); color:var(--white); border-color:var(--brand)}
+.fp-skipped td{opacity:0.55}
+.fp-status-ok{
+  background:var(--brand); color:var(--white);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+}
+.fp-status-short{
+  background:var(--danger-bg); color:var(--danger);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+}
+.fp-status-unmatched{
+  background:var(--accent); color:var(--brand);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+}
+.fp-status-skip{
+  background:var(--panel); color:var(--text-muted);
+  font-family:var(--font-display); font-weight:700; font-size:10px;
+  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+  border:1px solid var(--line);
+}
+.fp-confirmbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:var(--space-5) var(--space-6); gap:var(--space-4); flex-wrap:wrap;
+  background:var(--brand); color:var(--white); border-radius:var(--r-md);
+  margin:var(--space-6) 0 var(--space-5); position:sticky; bottom:var(--space-3); z-index:2;
+  box-shadow:var(--sh-raised);
+}
+.fp-confirmbar-title{
+  font-family:var(--font-display); font-weight:600; font-size:16px;
+}
+.fp-confirmbar .small.muted{color:rgba(255,255,255,0.75)}
+.fp-confirmbar button:disabled{opacity:0.4; cursor:not-allowed}
+.fp-done{
+  background:var(--panel); border-left:4px solid var(--brand); border-radius:var(--r-md);
+  padding:var(--space-5) var(--space-6); margin-top:var(--space-5);
+}
+.fp-done h3{font-family:var(--font-display); font-weight:600; font-size:16px; color:var(--brand); margin:0 0 var(--space-2)}
+.fp-done .fp-done-actions{display:flex; gap:var(--space-3); flex-wrap:wrap; margin-top:var(--space-4)}
+.fp-section-h{
+  font-family:var(--font-display); font-weight:600; font-size:14px;
+  color:var(--brand); margin:var(--space-6) 0 var(--space-3);
+}
 .fp-table{width:100%; border-collapse:collapse; font-size:13px}
 .fp-table th{
   font-family:var(--font-display); font-weight:600; font-size:10.5px;
@@ -335,12 +443,7 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-table td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
 .fp-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
 .fp-scroll{max-height:640px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
-.fp-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:560px}
-.fp-section-h{
-  font-family:var(--font-display); font-weight:600; font-size:11px;
-  letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
-  margin:var(--space-5) 0 var(--space-2);
-}
+.fp-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:820px}
 .ask{display:flex; gap:var(--space-3); margin-top:var(--space-5)}
 .ask input{flex:1}
 .chips{display:flex; gap:var(--space-2); flex-wrap:wrap; margin-top:var(--space-4)}
@@ -607,25 +710,59 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 <section id="v-fp" class="view">
   <div class="card">
     <h2>FP Pro Optimization</h2>
-    <p class="lede">Upload an FP Pro optimisation PDF and the tool extracts every item and its
-    required quantity into a clean table. Everything runs in your browser — nothing is uploaded.</p>
+    <p class="lede">Upload an FP Pro PDF and your Stock file. The tool reads the PDF, matches
+    every item against your stock, checks nothing goes negative, and — after you confirm —
+    downloads an updated Stock file with the deduction applied. Everything runs in your browser.</p>
 
-    <label class="fp-drop" id="fpDrop" for="fpPdf">
-      <input type="file" id="fpPdf" accept="application/pdf,.pdf" class="visually-hidden">
-      <div class="fp-drop-icon">PDF</div>
-      <div class="fp-drop-main">
-        <div class="fp-drop-title">FP Pro optimisation PDF</div>
-        <div class="fp-drop-sub" id="fpPdfName">Click or drop the PDF file here</div>
+    <div class="fp-step-h">Step 1 — Upload the two files</div>
+    <div class="fp-drops">
+      <label class="fp-drop" id="fpDrop" for="fpPdf">
+        <input type="file" id="fpPdf" accept="application/pdf,.pdf" class="visually-hidden">
+        <div class="fp-drop-icon">PDF</div>
+        <div class="fp-drop-main">
+          <div class="fp-drop-title">FP Pro optimisation PDF</div>
+          <div class="fp-drop-sub" id="fpPdfName">Click or drop the PDF file here</div>
+        </div>
+      </label>
+      <label class="fp-drop" id="fpDropStock" for="fpStock">
+        <input type="file" id="fpStock" accept=".xlsx,.xls" class="visually-hidden">
+        <div class="fp-drop-icon">STOCK</div>
+        <div class="fp-drop-main">
+          <div class="fp-drop-title">Flyscreen stock file (.xlsx)</div>
+          <div class="fp-drop-sub" id="fpStockName">Click or drop the stock file here</div>
+        </div>
+      </label>
+    </div>
+
+    <div class="fp-step-h">Step 2 — Job details</div>
+    <div class="fp-jobrow">
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="fpJobNumber">Job number</label>
+        <input id="fpJobNumber" type="text" autocomplete="off" placeholder="Auto-filled from the PDF; you can edit it">
       </div>
-    </label>
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="fpClient">Client name</label>
+        <input id="fpClient" type="text" autocomplete="off" placeholder="e.g. AHMED KHAN">
+      </div>
+    </div>
 
     <div class="fp-actions">
-      <button class="btn-primary" id="fpExtract" disabled>Extract items</button>
+      <button class="btn-primary" id="fpExtract" disabled>Analyse and preview</button>
       <button class="ghost" id="fpReset">Reset</button>
       <span class="small muted" id="fpStatus"></span>
     </div>
 
     <div id="fpOut"></div>
+
+    <div class="fp-confirmbar" id="fpConfirmBar" hidden>
+      <div>
+        <div class="fp-confirmbar-title">Ready to allocate</div>
+        <div class="small muted" id="fpConfirmSummary"></div>
+      </div>
+      <button class="btn-accent" id="fpConfirm" disabled>Confirm allocation</button>
+    </div>
+
+    <div id="fpDone"></div>
   </div>
 </section>
 
