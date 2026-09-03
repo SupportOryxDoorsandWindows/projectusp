@@ -328,7 +328,9 @@
   }
   function money(n) {
     if (n === null || n === undefined || isNaN(n)) return "—";
-    return "€ " + fmt(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // The Stock file's own cost/value columns are formatted as AED
+    // ([$AED] #,##0.00) — matching that here rather than assuming a currency.
+    return "AED " + fmt(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   function esc(s) {
     return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
