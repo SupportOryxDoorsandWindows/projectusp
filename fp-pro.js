@@ -571,6 +571,9 @@
       <div class="fp-tally-item"><strong>${lowStock.length}</strong><span>Low stock</span></div>
     `;
 
+    const PAGE_SIZE = 25;
+    let page = 0;
+
     function draw() {
       const q = ($("#miSearch").value || "").trim().toLowerCase();
       const onlyLow = $("#miFilter").value === "low";
@@ -579,7 +582,13 @@
         if (!q) return true;
         return it.item_code.toLowerCase().includes(q) || (it.description || "").toLowerCase().includes(q);
       });
-      $("#miItemsBody").innerHTML = filtered.slice(0, 300).map((it) => {
+
+      const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+      page = Math.min(page, pageCount - 1);
+      const start = page * PAGE_SIZE;
+      const pageItems = filtered.slice(start, start + PAGE_SIZE);
+
+      $("#miItemsBody").innerHTML = pageItems.map((it) => {
         const low = it.buffer_level != null && it.current_qty <= it.buffer_level;
         return `<tr>
           <td class="code">${esc(it.item_code)}</td>
@@ -590,10 +599,19 @@
           <td>${low ? `<span class="fp-status-short">Low</span>` : it.current_qty <= 0 ? `<span class="fp-status-unmatched">Out</span>` : `<span class="fp-status-ok">OK</span>`}</td>
         </tr>`;
       }).join("") || `<tr><td colspan="6" class="small muted">No items match.</td></tr>`;
+
+      $("#miItemsPagerInfo").textContent = filtered.length
+        ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, filtered.length)} of ${filtered.length}`
+        : "No items match.";
+      $("#miItemsPageLabel").textContent = `Page ${page + 1} of ${pageCount}`;
+      $("#miItemsPrev").disabled = page === 0;
+      $("#miItemsNext").disabled = page >= pageCount - 1;
     }
     draw();
-    $("#miSearch").oninput = draw;
-    $("#miFilter").onchange = draw;
+    $("#miSearch").oninput = () => { page = 0; draw(); };
+    $("#miFilter").onchange = () => { page = 0; draw(); };
+    $("#miItemsPrev").onclick = () => { page = Math.max(0, page - 1); draw(); };
+    $("#miItemsNext").onclick = () => { page = page + 1; draw(); };
 
     $("#miTxBody").innerHTML = txs.map((tx) => `<tr>
       <td>${esc(String(tx.created_at).slice(0, 16).replace("T", " "))}</td>

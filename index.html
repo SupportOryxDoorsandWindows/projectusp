@@ -444,6 +444,12 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
 .fp-scroll{max-height:640px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
 .fp-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:820px}
+.fp-pager{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:var(--space-3); margin-top:var(--space-2); flex-wrap:wrap;
+}
+.fp-pager-controls{display:flex; align-items:center; gap:var(--space-2)}
+.fp-pager-controls button:disabled{opacity:0.4; cursor:default}
 .ask{display:flex; gap:var(--space-3); margin-top:var(--space-5)}
 .ask input{flex:1}
 .chips{display:flex; gap:var(--space-2); flex-wrap:wrap; margin-top:var(--space-4)}
@@ -789,6 +795,14 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         </tr></thead>
         <tbody id="miItemsBody"></tbody>
       </table>
+    </div>
+    <div class="fp-pager" id="miItemsPager">
+      <span class="small muted" id="miItemsPagerInfo"></span>
+      <div class="fp-pager-controls">
+        <button class="ghost" id="miItemsPrev" type="button">Prev</button>
+        <span class="small" id="miItemsPageLabel"></span>
+        <button class="ghost" id="miItemsNext" type="button">Next</button>
+      </div>
     </div>
     <div class="fp-section-h">Recent Check-outs</div>
     <div class="fp-scroll">
