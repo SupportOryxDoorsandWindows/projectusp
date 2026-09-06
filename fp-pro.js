@@ -1,65 +1,52 @@
-/* FP Pro Optimization tab.
+/* FP Pro Optimization tab + Master Inventory view.
  *
- * Reads an FP Pro optimisation PDF and the Flyscreen stock Excel file,
- * matches every item against the stock file, checks nothing goes negative,
- * and — only after the user clicks Confirm — writes an updated stock file
- * with a new job column and the quantities filled in. Everything runs in
- * the browser; the original stock file is never modified.
+ * Reads an FP Pro optimisation PDF, matches every item against the Master
+ * Inventory (Supabase `inventory_items`, read via the same public/read-only
+ * key as the rest of the app), and checks nothing goes negative. Only after
+ * the user clicks Confirm does anything get written — and that write goes
+ * through the `checkout` Edge Function (service-role key, server-side
+ * re-validation), never straight from the browser. The public key here
+ * stays exactly as read-only as it is for the rest of the site.
  *
- * The stock file's own formulas (Consumption AO, Available Stock AU,
- * Available Stock Cost AV, Inventory Value AW, Reorder AY) are left
- * intact — we only write into the first empty job column (N..AN). Excel
- * recalculates the rest when the file is opened. */
+ * There is no stock Excel file anymore. The Master Inventory is the single
+ * source of truth; Check-out is a recorded transaction against it. */
 
 (function () {
   const $ = (s) => document.querySelector(s);
 
   const PDFJS_SRC = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs";
   const PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
-  const XLSX_SRC = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-  const HISTORY_KEY = "oryx_fp_history_v1";
+  const CHECKOUT_FN_URL = window.ORYX_CONFIG.supabaseUrl + "/functions/v1/checkout";
+
+  const sb = window.supabase.createClient(window.ORYX_CONFIG.supabaseUrl, window.ORYX_CONFIG.supabaseKey);
 
   let libsPromise = null;
   function loadLibs() {
     if (libsPromise) return libsPromise;
-    libsPromise = Promise.all([
-      import(/* @vite-ignore */ PDFJS_SRC).then((m) => {
-        m.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-        window.__pdfjs = m;
-      }),
-      new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = XLSX_SRC;
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("Could not load SheetJS from CDN."));
-        document.head.appendChild(s);
-      }),
-    ]);
+    libsPromise = import(/* @vite-ignore */ PDFJS_SRC).then((m) => {
+      m.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      window.__pdfjs = m;
+    });
     return libsPromise;
   }
 
   /* --------------------------- State ------------------------- */
   const state = {
-    pdfFile: null, stockFile: null,
+    pdfFile: null,
     pdfHash: null,
     parsedJob: null,
     rows: null,
-    stockWb: null,
-    stockMeta: null,
+    itemsByCode: null, // Map<item_code, [{id, description, bar_length_mm, unit_cost, current_qty, buffer_level}]>
   };
 
-  /* --------------------------- Duplicate-PDF tracking -------- */
-
+  /* --------------------------- Duplicate-PDF fingerprint ----- */
+  // The actual duplicate check happens server-side, inside checkout_transaction()
+  // (against inventory_transactions.source_document_hash) -- this is just how
+  // we compute the value to send.
   async function pdfFingerprint(file) {
     const buf = await file.arrayBuffer();
     const digest = await crypto.subtle.digest("SHA-256", buf);
     return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
-  }
-  function readHistory() {
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "{}"); } catch { return {}; }
-  }
-  function writeHistory(obj) {
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(obj)); } catch {}
   }
 
   /* --------------------------- PDF parsing ------------------- */
@@ -181,114 +168,53 @@
     return aggregate(all);
   }
 
-  /* --------------------------- Stock file inspection --------- */
+  /* --------------------------- Master Inventory lookup -------- */
 
-  async function loadStockFile(file) {
-    await loadLibs();
-    const buf = await file.arrayBuffer();
-    const wb = window.XLSX.read(buf, { type: "array", cellStyles: true, cellFormula: true });
-    if (!wb.Sheets["STOCK"]) throw new Error('The uploaded file has no "STOCK" sheet — is it the right file?');
-    return wb;
+  async function loadInventoryItems() {
+    const { data, error } = await sb.from("inventory_items").select("*");
+    if (error) throw new Error("Could not load the Master Inventory: " + error.message);
+    const byCode = new Map();
+    for (const row of data) {
+      const arr = byCode.get(row.item_code) || [];
+      arr.push(row);
+      byCode.set(row.item_code, arr);
+    }
+    return byCode;
   }
 
-  function codeFromPartName(partName) {
-    if (!partName) return "";
-    const m = String(partName).match(/^\s*(\d+[A-Z]?)/);
-    return m ? m[1] : "";
-  }
-
-  function inspectStock(wb) {
-    const XLSX = window.XLSX;
-    const ws = wb.Sheets["STOCK"];
-    const range = XLSX.utils.decode_range(ws["!ref"]);
-    const HEADER_ROW = 1;
-    const headers = {};
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: HEADER_ROW, c })];
-      if (cell && cell.v != null) headers[c] = String(cell.v).trim();
-    }
-    let partCodeCol = null, availStockCol = null, lengthCol = null, openCostCol = null;
-    for (const [c, h] of Object.entries(headers)) {
-      const hh = h.toUpperCase();
-      if (partCodeCol === null && /CHILD PROFILE PART CODE|PART CODE/.test(hh)) partCodeCol = +c;
-      if (availStockCol === null && hh === "AVAILABLE STOCK") availStockCol = +c;
-      if (lengthCol === null && hh === "LENGTH") lengthCol = +c;
-      if (openCostCol === null && /OPENING COST PER PROFILE/.test(hh)) openCostCol = +c;
-    }
-    if (partCodeCol === null) throw new Error('Could not find the "Child Profile Part code" column in the STOCK sheet.');
-
-    // Build lookup: code -> list of stock rows (each with row index + length + avail + cost + description).
-    const codeToRows = new Map();
-    for (let r = HEADER_ROW + 1; r <= range.e.r; r++) {
-      const partCell = ws[XLSX.utils.encode_cell({ r, c: partCodeCol })];
-      const partName = partCell && partCell.v != null ? String(partCell.v) : "";
-      const code = codeFromPartName(partName);
-      if (!code) continue;
-      const lenCell = lengthCol != null ? ws[XLSX.utils.encode_cell({ r, c: lengthCol })] : null;
-      const availCell = availStockCol != null ? ws[XLSX.utils.encode_cell({ r, c: availStockCol })] : null;
-      const costCell = openCostCol != null ? ws[XLSX.utils.encode_cell({ r, c: openCostCol })] : null;
-      const arr = codeToRows.get(code) || [];
-      arr.push({
-        row: r,
-        partName,
-        length: lenCell ? lenCell.v : null,
-        available: availCell && typeof availCell.v === "number" ? availCell.v : Number(availCell?.v) || 0,
-        cost: costCell && typeof costCell.v === "number" ? costCell.v : Number(costCell?.v) || 0,
-      });
-      codeToRows.set(code, arr);
-    }
-    // Find target job column: first empty header slot in N..AN.
-    let targetCol = null;
-    for (let c = 13; c <= 39; c++) {
-      if (!headers[c] || headers[c] === "") { targetCol = c; break; }
-    }
-    return {
-      range, HEADER_ROW, headers,
-      partCodeCol, availStockCol, lengthCol, openCostCol,
-      codeToRows, targetCol, willInsert: targetCol === null,
-    };
-  }
-
-  /* --------------------------- Match PDF entries to stock ---- */
-
-  // Best-stock-row picker. For bars: prefer row whose length matches the
-  // PDF's bar length in metres. For fittings: prefer row with non-zero cost
-  // (skips dummy placeholder rows). Falls back to first row otherwise.
-  function pickStockRow(entry, candidates) {
+  // Best-variant picker. For bars: prefer the row whose bar_length_mm matches
+  // the PDF's bar length. For fittings: prefer a row with non-zero cost
+  // (skips zero-cost placeholder rows that belong to a different product
+  // family sharing the same code). Falls back to first row otherwise.
+  function pickInventoryRow(entry, candidates) {
     if (!candidates || !candidates.length) return null;
     if (entry.kind === "bar") {
-      const targetM = entry.barLenMm / 1000;
-      const exact = candidates.find((c) => typeof c.length === "number" && Math.abs(c.length - targetM) < 0.05);
+      const target = entry.barLenMm;
+      const exact = candidates.find((c) => typeof c.bar_length_mm === "number" && Math.abs(c.bar_length_mm - target) < 50);
       if (exact) return exact;
-      // If no exact match, prefer any candidate with a numeric length that's closest.
-      const numeric = candidates.filter((c) => typeof c.length === "number");
+      const numeric = candidates.filter((c) => typeof c.bar_length_mm === "number");
       if (numeric.length) {
         return numeric.reduce((best, c) =>
-          !best || Math.abs(c.length - targetM) < Math.abs(best.length - targetM) ? c : best, null);
+          !best || Math.abs(c.bar_length_mm - target) < Math.abs(best.bar_length_mm - target) ? c : best, null);
       }
-      // Fall back to non-zero-cost row, else first row.
-      const active = candidates.find((c) => c.cost && c.available !== 0) || candidates.find((c) => c.cost);
+      const active = candidates.find((c) => c.unit_cost && c.current_qty !== 0) || candidates.find((c) => c.unit_cost);
       return active || candidates[0];
     }
-    // Fitting: prefer a real row (non-zero cost or non-zero available).
-    const active = candidates.find((c) => c.cost || (c.available && c.available !== 0));
+    const active = candidates.find((c) => c.unit_cost || (c.current_qty && c.current_qty !== 0));
     return active || candidates[0];
   }
 
-  function buildRows(entries, stockMeta) {
+  function buildRows(entries, itemsByCode) {
     const rows = [];
     for (const e of entries) {
-      const candidates = stockMeta.codeToRows.get(e.code) || [];
-      const stockRow = pickStockRow(e, candidates);
+      const candidates = itemsByCode.get(e.code) || [];
+      const item = pickInventoryRow(e, candidates);
 
-      // Effective PDF quantity for stock deduction:
-      //   Fittings: qty as-is (pcs / m)
-      //   Bars: bar count
       const requiredQty = e.kind === "bar" ? e.bars : e.qty;
       const unit = e.kind === "bar" ? "bars" : e.unit;
       const pdfDetail = e.kind === "bar" ? `${e.bars} × ${e.barLenMm} mm` : "";
 
-      if (!stockRow) {
+      if (!item) {
         rows.push({
           kind: e.kind, code: e.code,
           description: e.description, pdfDetail,
@@ -297,23 +223,23 @@
           costPerUnit: 0, estValue: 0,
           status: "unmatched", baseStatus: "unmatched",
           action: "pending", decided: false,
-          stockRowIndex: null, hasVariants: false,
+          itemId: null, hasVariants: false,
         });
         continue;
       }
-      const remaining = stockRow.available - requiredQty;
+      const remaining = item.current_qty - requiredQty;
       const status = remaining < 0 ? "shortage" : "ok";
       rows.push({
         kind: e.kind, code: e.code,
-        description: stockRow.partName || e.description, pdfDetail,
+        description: item.description || e.description, pdfDetail,
         requiredQty, unit,
-        available: stockRow.available, remaining,
-        costPerUnit: stockRow.cost || 0,
-        estValue: requiredQty * (stockRow.cost || 0),
+        available: item.current_qty, remaining,
+        costPerUnit: item.unit_cost || 0,
+        estValue: requiredQty * (item.unit_cost || 0),
         status, baseStatus: status,
         action: status === "ok" ? "deduct" : "pending",
         decided: status === "ok",
-        stockRowIndex: stockRow.row,
+        itemId: item.id,
         hasVariants: candidates.length > 1,
       });
     }
@@ -370,8 +296,7 @@
     }
     if (row.baseStatus === "shortage") {
       return `<div class="fp-row-actions">
-        <button data-act="deduct" data-i="${idx}" class="${on(row.decided && row.action === "deduct")}">Allow negative</button>
-        <button data-act="skip" data-i="${idx}" class="${on(row.decided && row.action === "skip")}">Skip</button>
+        <button data-act="skip" data-i="${idx}" class="${on(row.decided && row.action === "skip")}">Skip (acknowledge)</button>
       </div>`;
     }
     if (row.baseStatus === "unmatched") {
@@ -383,12 +308,10 @@
   }
 
   function applyRowAction(idx, act) {
-    // Batch actions
-    if (act === "skip-all-shortage" || act === "allow-all-shortage" || act === "skip-all-unmatched") {
+    if (act === "skip-all-shortage" || act === "skip-all-unmatched") {
       state.rows.forEach((rr) => {
         if (rr.decided) return;
         if (act === "skip-all-shortage" && rr.baseStatus === "shortage") { rr.action = "skip"; rr.decided = true; }
-        if (act === "allow-all-shortage" && rr.baseStatus === "shortage") { rr.action = "deduct"; rr.decided = true; }
         if (act === "skip-all-unmatched" && rr.baseStatus === "unmatched") { rr.action = "skip"; rr.decided = true; }
       });
       render();
@@ -406,22 +329,12 @@
     const t = tallyTotals();
     const u = unresolvedByStatus();
 
-    const historyHit = state.pdfHash && (readHistory()[state.pdfHash]);
-    const historyWarn = historyHit
-      ? `<div class="fp-warn">
-          <h4>This PDF has already been processed</h4>
-          <p class="small">Same file was allocated on <b>${esc(historyHit.processedAt)}</b>
-          for job <code>${esc(historyHit.jobRef)}</code> (${esc(historyHit.client)}). Deducting
-          again would double-count. Reset and use a different PDF unless this is intentional.</p>
-        </div>`
-      : "";
-
     const rowsHtml = state.rows.map((r, i) => {
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const remainingClass = r.remaining != null && r.remaining < 0 ? 'style="color:var(--danger); font-weight:600"' : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
       const variantNote = r.hasVariants
-        ? `<div class="small muted">Code has multiple stock rows — the row with the best cost/length match was used.</div>`
+        ? `<div class="small muted">Code has multiple Master Inventory rows — the row with the best cost/length match was used.</div>`
         : "";
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}</td>
@@ -441,11 +354,12 @@
       <h4>${t.unresolved} row${t.unresolved === 1 ? "" : "s"} need${t.unresolved === 1 ? "s" : ""} a decision</h4>
       <ul>
         ${u.shortage ? `<li><b>${u.shortage} shortage${u.shortage === 1 ? "" : "s"}</b> — required qty exceeds available.
+          This Phase 1 build blocks shortages rather than allowing negative stock; skip to acknowledge and leave
+          this item out of the Check-out.
           <span class="fp-batch-actions">
-            <button data-act="allow-all-shortage" data-i="-1">Allow all shortages</button>
             <button data-act="skip-all-shortage" data-i="-1">Skip all shortages</button>
           </span></li>` : ""}
-        ${u.unmatched ? `<li><b>${u.unmatched} unmatched item${u.unmatched === 1 ? "" : "s"}</b> — code not in the stock file. Not deducted; click Acknowledge to confirm you've seen them.
+        ${u.unmatched ? `<li><b>${u.unmatched} unmatched item${u.unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory. Not deducted; click Acknowledge to confirm you've seen them.
           <span class="fp-batch-actions">
             <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
           </span></li>` : ""}
@@ -453,7 +367,6 @@
     </div>` : "";
 
     $("#fpOut").innerHTML = `
-      ${historyWarn}
       <div class="fp-jobcard">
         <div class="fp-jobfield"><label>Job ref</label><strong>${esc(job.ref || "—")}</strong></div>
         <div class="fp-jobfield"><label>PDF user</label><strong>${esc(job.user || "—")}</strong></div>
@@ -483,24 +396,20 @@
         </table>
       </div>
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been deducted yet.
-      The confirm button unlocks once every row shows OK, Shortage (allowed) or Skipped.</p>
+      The confirm button unlocks once every row shows OK or Skipped.</p>
     `;
 
-    // Confirm bar summary + enable
     const canConfirm =
       t.unresolved === 0 &&
       t.totalItems > 0 &&
       !!$("#fpJobNumber").value.trim() &&
-      !!$("#fpClient").value.trim() &&
-      !historyHit;
+      !!$("#fpClient").value.trim();
     $("#fpConfirmSummary").textContent =
       `${t.totalItems} items · ${money(t.totalValue)}` +
-      (t.shortages ? ` · ${t.shortages} shortage${t.shortages === 1 ? "" : "s"} allowed` : "") +
       (t.skipped ? ` · ${t.skipped} skipped` : "");
     $("#fpConfirmBar").hidden = false;
     $("#fpConfirm").disabled = !canConfirm;
 
-    // Wire row / batch action buttons
     document.querySelectorAll("#fpOut .fp-row-actions button, #fpOut .fp-batch-actions button").forEach((b) => {
       b.addEventListener("click", () => applyRowAction(+b.dataset.i, b.dataset.act));
     });
@@ -508,79 +417,48 @@
 
   /* --------------------------- Confirm & apply --------------- */
 
-  function todayISO() {
-    const d = new Date();
-    const p = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  }
-
-  function shiftColumnsRight(ws, fromCol, range) {
-    const XLSX = window.XLSX;
-    for (let c = range.e.c; c >= fromCol; c--) {
-      for (let r = range.s.r; r <= range.e.r; r++) {
-        const from = XLSX.utils.encode_cell({ r, c });
-        const to = XLSX.utils.encode_cell({ r, c: c + 1 });
-        if (ws[from]) { ws[to] = ws[from]; delete ws[from]; }
-      }
-    }
-  }
-
   async function confirmAllocation() {
-    const XLSX = window.XLSX;
     const jobRef = $("#fpJobNumber").value.trim();
     const client = $("#fpClient").value.trim();
-    const newColHeader = `${jobRef}-${client}`;
-    const wb = state.stockWb;
-    const ws = wb.Sheets["STOCK"];
-    const meta = state.stockMeta;
+    const lines = state.rows
+      .filter((r) => r.action === "deduct" && r.itemId)
+      .map((r) => ({ item_id: r.itemId, quantity: r.requiredQty, unit: r.unit }));
 
-    let targetCol = meta.targetCol;
-    let inserted = false;
-    if (targetCol == null) {
-      // Fallback: insert before Consumption (find it dynamically).
-      targetCol = 40;
-      for (const [c, h] of Object.entries(meta.headers)) {
-        if (String(h).toUpperCase() === "CONSUMPTION") { targetCol = +c; break; }
+    const res = await fetch(CHECKOUT_FN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
+        "apikey": window.ORYX_CONFIG.supabaseKey,
+      },
+      body: JSON.stringify({
+        job_number: jobRef,
+        client,
+        pdf_hash: state.pdfHash,
+        source_document_name: state.pdfFile ? state.pdfFile.name : null,
+        lines,
+      }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      if (data.error === "duplicate_document") {
+        throw new Error("This PDF has already been checked out — re-processing it would double-count the deduction.");
       }
-      shiftColumnsRight(ws, targetCol, meta.range);
-      inserted = true;
+      if (data.error === "insufficient_stock") {
+        throw new Error("Stock changed since this was analysed — re-run Analyse and preview to refresh availability.");
+      }
+      throw new Error(data.detail || data.error || "The Check-out was not applied.");
     }
-
-    // Header
-    ws[XLSX.utils.encode_cell({ r: meta.HEADER_ROW, c: targetCol })] = { t: "s", v: newColHeader };
-
-    // Quantities
-    let deducted = 0;
-    for (const r of state.rows) {
-      if (r.action !== "deduct" || r.stockRowIndex == null) continue;
-      ws[XLSX.utils.encode_cell({ r: r.stockRowIndex, c: targetCol })] = { t: "n", v: r.requiredQty };
-      deducted++;
-    }
-
-    const newRange = { s: meta.range.s, e: { r: meta.range.e.r, c: Math.max(meta.range.e.c, targetCol) } };
-    ws["!ref"] = XLSX.utils.encode_range(newRange);
-
-    // Save fingerprint so a duplicate upload gets flagged next time.
-    if (state.pdfHash) {
-      const hist = readHistory();
-      hist[state.pdfHash] = { jobRef, client, processedAt: todayISO() };
-      writeHistory(hist);
-    }
-
-    const srcName = state.stockFile.name.replace(/\.xlsx?$/i, "");
-    const outName = `${srcName} - ${todayISO()}.xlsx`;
-    XLSX.writeFile(wb, outName);
 
     $("#fpConfirmBar").hidden = true;
     $("#fpDone").innerHTML = `
       <div class="fp-done">
-        <h3>Allocation confirmed — ${deducted} stock row${deducted === 1 ? "" : "s"} updated</h3>
-        <p class="small">Downloaded as <code>${esc(outName)}</code>. When you open it in Excel,
-        Available Stock, Consumption, and Inventory Value recalculate automatically.
-        This PDF's fingerprint has been recorded so it can't be silently re-processed.</p>
-        ${inserted ? `<p class="small muted"><b>Note:</b> the file's existing job columns (N–AN) were full, so a new column was inserted. Formulas that reference specific column ranges (e.g. <code>SUM(N3:AN3)</code>) may need widening manually.</p>` : ""}
+        <h3>Check-out confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} deducted</h3>
+        <p class="small">Job <code>${esc(jobRef)}</code> for <b>${esc(client)}</b>. The Master Inventory
+        and the Inventory tab now reflect this. A permanent Check-out transaction has been recorded for each item.</p>
         <div class="fp-done-actions">
-          <button class="ghost" id="fpNew">Start another allocation</button>
+          <button class="ghost" id="fpNew">Start another Check-out</button>
         </div>
       </div>`;
     $("#fpNew").addEventListener("click", resetAll);
@@ -589,34 +467,32 @@
   /* --------------------------- Analyse pipeline -------------- */
 
   async function analyse() {
-    if (!state.pdfFile || !state.stockFile) return;
+    if (!state.pdfFile) return;
     const btn = $("#fpExtract");
     btn.disabled = true;
-    status("Reading files and matching items — this can take a few seconds…");
+    status("Reading the PDF and matching items against the Master Inventory…");
     try {
-      const [pdfText, stockWb, hash] = await Promise.all([
+      const [pdfText, itemsByCode, hash] = await Promise.all([
         extractPdfText(state.pdfFile),
-        loadStockFile(state.stockFile),
+        loadInventoryItems(),
         pdfFingerprint(state.pdfFile),
       ]);
       state.parsedJob = parseJobHeader(pdfText);
-      state.stockWb = stockWb;
-      state.stockMeta = inspectStock(stockWb);
+      state.itemsByCode = itemsByCode;
       state.pdfHash = hash;
 
-      // Pre-fill Job number if the user hasn't typed one.
       const jbox = $("#fpJobNumber");
       if (!jbox.value.trim() && state.parsedJob.ref) jbox.value = state.parsedJob.ref;
 
       const entries = parsePdf(pdfText);
-      state.rows = buildRows(entries, state.stockMeta);
+      state.rows = buildRows(entries, state.itemsByCode);
       render();
 
       const t = tallyTotals();
       status(`Analysis ready — ${t.totalItems + t.unresolved} items in the PDF, ${t.unresolved} need decisions.`);
     } catch (err) {
       console.error(err);
-      status("Could not analyse the files: " + err.message, "err");
+      status("Could not analyse the PDF: " + err.message, "err");
     } finally {
       btn.disabled = false;
     }
@@ -625,13 +501,11 @@
   /* --------------------------- Reset / status ---------------- */
 
   function resetAll() {
-    state.pdfFile = state.stockFile = null;
-    state.pdfHash = state.parsedJob = state.rows = state.stockWb = state.stockMeta = null;
-    $("#fpPdf").value = ""; $("#fpStock").value = "";
+    state.pdfFile = null;
+    state.pdfHash = state.parsedJob = state.rows = state.itemsByCode = null;
+    $("#fpPdf").value = "";
     $("#fpPdfName").textContent = "Click or drop the PDF file here";
-    $("#fpStockName").textContent = "Click or drop the stock file here";
     $("#fpDrop").classList.remove("ready");
-    $("#fpDropStock").classList.remove("ready");
     $("#fpJobNumber").value = ""; $("#fpClient").value = "";
     $("#fpOut").innerHTML = "";
     $("#fpDone").innerHTML = "";
@@ -646,7 +520,7 @@
     el.style.color = kind === "err" ? "var(--danger)" : "";
   }
 
-  /* --------------------------- Wire-up ----------------------- */
+  /* --------------------------- Wire-up ------------------------ */
 
   function wireDrop(dropEl, inputEl, kind) {
     dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("dragover"); });
@@ -663,16 +537,77 @@
       const f = inputEl.files && inputEl.files[0];
       if (!f) return;
       if (kind === "pdf") { state.pdfFile = f; $("#fpPdfName").textContent = f.name; }
-      else if (kind === "stock") { state.stockFile = f; $("#fpStockName").textContent = f.name; }
       dropEl.classList.add("ready");
-      $("#fpExtract").disabled = !(state.pdfFile && state.stockFile);
+      $("#fpExtract").disabled = !state.pdfFile;
     });
+  }
+
+  /* --------------------------- Master Inventory view ---------- */
+
+  async function loadMasterInventoryView() {
+    $("#miItemsBody").innerHTML = `<tr><td colspan="6" class="small muted">Loading…</td></tr>`;
+    $("#miTxBody").innerHTML = `<tr><td colspan="6" class="small muted">Loading…</td></tr>`;
+    try {
+      const [itemsRes, txRes] = await Promise.all([
+        sb.from("inventory_items").select("*").order("item_code"),
+        sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(50),
+      ]);
+      if (itemsRes.error) throw itemsRes.error;
+      if (txRes.error) throw txRes.error;
+      renderMasterInventoryView(itemsRes.data, txRes.data);
+    } catch (err) {
+      console.error(err);
+      $("#miItemsBody").innerHTML = `<tr><td colspan="6" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miTxBody").innerHTML = "";
+    }
+  }
+
+  function renderMasterInventoryView(items, txs) {
+    const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
+    const lowStock = items.filter((it) => it.buffer_level != null && it.current_qty <= it.buffer_level);
+    $("#miTally").innerHTML = `
+      <div class="fp-tally-item"><strong>${items.length}</strong><span>Items</span></div>
+      <div class="fp-tally-item"><strong>${money(totalValue)}</strong><span>Total value (Freedom)</span></div>
+      <div class="fp-tally-item"><strong>${lowStock.length}</strong><span>Low stock</span></div>
+    `;
+
+    function draw() {
+      const q = ($("#miSearch").value || "").trim().toLowerCase();
+      const onlyLow = $("#miFilter").value === "low";
+      const filtered = items.filter((it) => {
+        if (onlyLow && !(it.buffer_level != null && it.current_qty <= it.buffer_level)) return false;
+        if (!q) return true;
+        return it.item_code.toLowerCase().includes(q) || (it.description || "").toLowerCase().includes(q);
+      });
+      $("#miItemsBody").innerHTML = filtered.slice(0, 300).map((it) => {
+        const low = it.buffer_level != null && it.current_qty <= it.buffer_level;
+        return `<tr>
+          <td class="code">${esc(it.item_code)}</td>
+          <td>${esc(it.description)}${it.bar_length_mm ? `<div class="small muted">${esc(it.bar_length_mm)} mm</div>` : ""}</td>
+          <td class="num">${fmt(it.current_qty)}</td>
+          <td class="num">${money(it.unit_cost)}</td>
+          <td class="num">${money(it.current_value)}</td>
+          <td>${low ? `<span class="fp-status-short">Low</span>` : it.current_qty <= 0 ? `<span class="fp-status-unmatched">Out</span>` : `<span class="fp-status-ok">OK</span>`}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="6" class="small muted">No items match.</td></tr>`;
+    }
+    draw();
+    $("#miSearch").oninput = draw;
+    $("#miFilter").onchange = draw;
+
+    $("#miTxBody").innerHTML = txs.map((tx) => `<tr>
+      <td>${esc(String(tx.created_at).slice(0, 16).replace("T", " "))}</td>
+      <td>${esc(tx.job_number)}</td>
+      <td>${esc(tx.client)}</td>
+      <td class="code">${esc(tx.item_code)}</td>
+      <td class="num">${fmt(tx.quantity)} ${esc(tx.unit)}</td>
+      <td class="num">${money(tx.value)}</td>
+    </tr>`).join("") || `<tr><td colspan="6" class="small muted">No Check-outs recorded yet.</td></tr>`;
   }
 
   function init() {
     if (!$("#fpExtract")) { setTimeout(init, 50); return; }
     wireDrop($("#fpDrop"), $("#fpPdf"), "pdf");
-    wireDrop($("#fpDropStock"), $("#fpStock"), "stock");
     $("#fpExtract").addEventListener("click", analyse);
     $("#fpReset").addEventListener("click", resetAll);
     $("#fpConfirm").addEventListener("click", async () => {
@@ -684,6 +619,9 @@
     ["fpJobNumber", "fpClient"].forEach((id) => {
       $("#" + id).addEventListener("input", () => { if (state.rows) render(); });
     });
+
+    const miNavBtn = document.querySelector('nav button[data-v="master-inventory"]');
+    if (miNavBtn) miNavBtn.addEventListener("click", loadMasterInventoryView);
   }
 
   init();
