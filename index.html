@@ -427,7 +427,7 @@ tbody tr:hover{background:var(--line-soft)}
   font-family:var(--font-display); font-weight:600; font-size:14px;
   color:var(--brand); margin:var(--space-6) 0 var(--space-3);
 }
-.fp-table{width:100%; border-collapse:collapse; font-size:13px}
+.fp-table{width:100%; border-collapse:separate; border-spacing:0; font-size:13px}
 .fp-table th{
   font-family:var(--font-display); font-weight:600; font-size:10.5px;
   letter-spacing:0.06em; text-transform:uppercase; color:var(--text-muted);
@@ -443,7 +443,7 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-table td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
 .fp-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
 .fp-scroll{max-height:640px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
-.fp-scroll table{border-radius:var(--r-md); overflow:hidden; min-width:820px}
+.fp-scroll table{min-width:820px}
 .fp-pager{
   display:flex; align-items:center; justify-content:space-between;
   gap:var(--space-3); margin-top:var(--space-2); flex-wrap:wrap;
