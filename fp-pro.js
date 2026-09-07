@@ -649,10 +649,11 @@
         <td></td>
         <td colspan="5">
           <table class="fp-table fp-tx-detail-table">
-            <thead><tr><th>Code</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+            <thead><tr><th>Code</th><th>Description</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
             <tbody>
               ${g.lines.map((tx) => `<tr>
                 <td class="code">${esc(tx.item_code)}</td>
+                <td>${esc(tx.description)}</td>
                 <td class="num">${fmt(tx.quantity)} ${esc(tx.unit)}</td>
                 <td class="num">${money(tx.value)}</td>
               </tr>`).join("")}
