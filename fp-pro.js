@@ -16,6 +16,7 @@
 
   const PDFJS_SRC = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs";
   const PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
+  const XLSX_SRC = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
   const CHECKOUT_FN_URL = window.ORYX_CONFIG.supabaseUrl + "/functions/v1/checkout";
 
   const sb = window.supabase.createClient(window.ORYX_CONFIG.supabaseUrl, window.ORYX_CONFIG.supabaseKey);
@@ -28,6 +29,21 @@
       window.__pdfjs = m;
     });
     return libsPromise;
+  }
+
+  // Only the Export button needs SheetJS -- loaded on demand so the PDF
+  // matching path (the common case) never pays for it.
+  let xlsxLibPromise = null;
+  function loadXlsxLib() {
+    if (xlsxLibPromise) return xlsxLibPromise;
+    xlsxLibPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = XLSX_SRC;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error("Could not load the Excel library from CDN."));
+      document.head.appendChild(s);
+    });
+    return xlsxLibPromise;
   }
 
   /* --------------------------- State ------------------------- */
@@ -674,6 +690,76 @@
     });
   }
 
+  /* --------------------------- Check-out report export --------- */
+
+  function todayISO() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  async function fetchAllTransactions() {
+    const PAGE = 1000;
+    const all = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await sb
+        .from("inventory_transactions")
+        .select("*")
+        .order("created_at", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      all.push(...data);
+      if (data.length < PAGE) break;
+    }
+    return all;
+  }
+
+  async function exportCheckoutReport() {
+    const btn = $("#miExportBtn");
+    const setStatus = (text, kind) => {
+      const el = $("#miExportStatus");
+      el.textContent = text || "";
+      el.style.color = kind === "err" ? "var(--danger)" : "";
+    };
+    btn.disabled = true;
+    setStatus("Fetching every Check-out transaction…");
+    try {
+      const [txs] = await Promise.all([fetchAllTransactions(), loadXlsxLib()]);
+      if (!txs.length) {
+        setStatus("No Check-out transactions recorded yet — nothing to export.");
+        return;
+      }
+      const rows = txs.map((tx) => ({
+        Date: String(tx.created_at).slice(0, 16).replace("T", " "),
+        "Job Number": tx.job_number,
+        Client: tx.client,
+        "Item Code": tx.item_code,
+        Description: tx.description,
+        Quantity: tx.quantity,
+        Unit: tx.unit,
+        "Unit Cost (AED)": tx.unit_cost_used,
+        "Value (AED)": tx.value,
+        Classification: tx.classification,
+        "Source Document": tx.source_document_name,
+      }));
+      const ws = window.XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [
+        { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 40 },
+        { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 24 },
+      ];
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, ws, "Check-outs");
+      const outName = `Oryx Check-out Report - ${todayISO()}.xlsx`;
+      window.XLSX.writeFile(wb, outName);
+      setStatus(`Exported ${txs.length} transaction${txs.length === 1 ? "" : "s"} as ${outName}.`);
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not export: " + err.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function init() {
     if (!$("#fpExtract")) { setTimeout(init, 50); return; }
     wireDrop($("#fpDrop"), $("#fpPdf"), "pdf");
@@ -691,6 +777,8 @@
 
     const miNavBtn = document.querySelector('nav button[data-v="master-inventory"]');
     if (miNavBtn) miNavBtn.addEventListener("click", loadMasterInventoryView);
+    const exportBtn = $("#miExportBtn");
+    if (exportBtn) exportBtn.addEventListener("click", exportCheckoutReport);
   }
 
   init();

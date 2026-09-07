@@ -427,6 +427,11 @@ tbody tr:hover{background:var(--line-soft)}
   font-family:var(--font-display); font-weight:600; font-size:14px;
   color:var(--brand); margin:var(--space-6) 0 var(--space-3);
 }
+.fp-section-h-row{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:var(--space-3); flex-wrap:wrap;
+}
+.fp-section-h-row span{margin:0}
 .fp-table{width:100%; border-collapse:separate; border-spacing:0; font-size:13px}
 .fp-table th{
   font-family:var(--font-display); font-weight:600; font-size:10.5px;
@@ -814,7 +819,11 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <button class="ghost" id="miItemsNext" type="button">Next</button>
       </div>
     </div>
-    <div class="fp-section-h">Recent Check-outs</div>
+    <div class="fp-section-h fp-section-h-row">
+      <span>Recent Check-outs</span>
+      <button class="ghost" id="miExportBtn" type="button">Export Check-out report (.xlsx)</button>
+    </div>
+    <span class="small muted" id="miExportStatus"></span>
     <div class="fp-scroll">
       <table class="fp-table" id="miTxTable">
         <thead><tr>
