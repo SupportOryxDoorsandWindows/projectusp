@@ -16,7 +16,12 @@
 
   const PDFJS_SRC = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs";
   const PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
-  const XLSX_SRC = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+  // xlsx-js-style, not plain SheetJS: verified (by writing a file and
+  // inspecting its raw xl/styles.xml) that plain "xlsx" community builds
+  // silently drop cell fill/font styling on write -- this fork is API
+  // compatible but actually writes it, which the Oryx-blue report header
+  // below depends on.
+  const XLSX_SRC = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
   const CHECKOUT_FN_URL = window.ORYX_CONFIG.supabaseUrl + "/functions/v1/checkout";
 
   const sb = window.supabase.createClient(window.ORYX_CONFIG.supabaseUrl, window.ORYX_CONFIG.supabaseKey);
@@ -734,31 +739,56 @@
 
   const REPORT_COLS = 6; // Code, Description, Qty, Unit, Unit Cost, Value
 
-  // NB: the SheetJS Community Edition build loaded here cannot write cell
-  // colours or bold fonts (fills/fonts survive round-tripping only in the
-  // paid Pro version -- confirmed by testing, not assumed). What we *can*
-  // do without that: merge the Job/Client/Date/Total into one header cell
-  // per Check-out instead of repeating it on every line, and apply a real
-  // currency number format to the cost/value columns.
+  // Oryx brand palette (per the account brief): blue is the primary colour,
+  // used sparingly -- one banner, not a colour on every row.
+  const ORYX_BLUE = "022A3A";
+  const ORYX_SILVER = "A9A9A9";
+  const STYLE_TITLE = {
+    fill: { fgColor: { rgb: ORYX_BLUE } },
+    font: { bold: true, sz: 14, color: { rgb: "FFFFFF" } },
+    alignment: { horizontal: "center", vertical: "center" },
+  };
+  const STYLE_LABEL = { font: { bold: true } };
+  const STYLE_HEADER = {
+    fill: { fgColor: { rgb: ORYX_SILVER } },
+    font: { bold: true, color: { rgb: "FFFFFF" } },
+  };
+
   function buildReportSheet(groups) {
     const aoa = [];
     const merges = [];
+    const styledCells = []; // [row, col, style]
     const currencyCells = []; // [row, col] pairs to format as AED after the fact
 
     aoa.push(["Oryx Doors & Windows — Check-out Report"]);
     merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: REPORT_COLS - 1 } });
-    aoa.push([`Generated ${todayISO()}`]);
-    merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: REPORT_COLS - 1 } });
+    styledCells.push([0, 0, STYLE_TITLE]);
     aoa.push([]);
 
     // Newest Check-out first, matching the Recent Check-outs view.
     for (const g of [...groups].reverse()) {
       const dateStr = String(g.created_at).slice(0, 16).replace("T", " ");
-      const headerRow = aoa.length;
-      aoa.push([`Job ${g.job_number}   ·   Client: ${g.client}   ·   ${dateStr}   ·   ${g.lines.length} item${g.lines.length === 1 ? "" : "s"}   ·   Total AED ${g.totalValue.toFixed(2)}`]);
-      merges.push({ s: { r: headerRow, c: 0 }, e: { r: headerRow, c: REPORT_COLS - 1 } });
 
+      const clientRow = aoa.length;
+      aoa.push([`Client: ${g.client}`]);
+      styledCells.push([clientRow, 0, STYLE_LABEL]);
+
+      const jobRow = aoa.length;
+      aoa.push([`Job ${g.job_number}`]);
+      styledCells.push([jobRow, 0, STYLE_LABEL]);
+
+      const summaryRow = aoa.length;
+      aoa.push([
+        `Generated ${todayISO()}`, "", "", "",
+        `${g.lines.length} item${g.lines.length === 1 ? "" : "s"}`,
+        `Total AED ${g.totalValue.toFixed(2)}`,
+      ]);
+      styledCells.push([summaryRow, 4, { font: { italic: true } }], [summaryRow, 5, { font: { bold: true } }]);
+
+      const headerRow = aoa.length;
       aoa.push(["Code", "Description", "Qty", "Unit", "Unit Cost", "Value"]);
+      for (let c = 0; c < REPORT_COLS; c++) styledCells.push([headerRow, c, STYLE_HEADER]);
+
       for (const tx of g.lines) {
         const r = aoa.length;
         aoa.push([tx.item_code, tx.description, tx.quantity, tx.unit, tx.unit_cost_used, tx.value]);
@@ -769,10 +799,16 @@
 
     const ws = window.XLSX.utils.aoa_to_sheet(aoa);
     ws["!merges"] = merges;
-    ws["!cols"] = [{ wch: 12 }, { wch: 42 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 14 }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 42 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 18 }];
+    ws["!rows"] = [{ hpt: 22 }];
     for (const [r, c] of currencyCells) {
       const addr = window.XLSX.utils.encode_cell({ r, c });
       if (ws[addr]) ws[addr].z = '"AED" #,##0.00';
+    }
+    for (const [r, c, style] of styledCells) {
+      const addr = window.XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) ws[addr] = { t: "s", v: "" };
+      ws[addr].s = style;
     }
     return ws;
   }
