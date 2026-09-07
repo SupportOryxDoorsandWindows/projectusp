@@ -444,12 +444,22 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
 .fp-scroll{max-height:640px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
 .fp-scroll table{min-width:820px}
+#miTxTable{min-width:0}
 .fp-pager{
   display:flex; align-items:center; justify-content:space-between;
   gap:var(--space-3); margin-top:var(--space-2); flex-wrap:wrap;
 }
 .fp-pager-controls{display:flex; align-items:center; gap:var(--space-2)}
 .fp-pager-controls button:disabled{opacity:0.4; cursor:default}
+.fp-tx-toggle{
+  background:none; border:none; cursor:pointer; padding:0; font-size:11px;
+  color:var(--text-muted); line-height:1; width:16px;
+}
+.fp-tx-toggle:hover{color:var(--brand)}
+.fp-tx-detail td{background:var(--panel); padding:var(--space-2) var(--space-3) var(--space-3)}
+.fp-scroll table.fp-tx-detail-table{font-size:12px; min-width:0}
+.fp-tx-detail-table th{position:static; background:none; padding:var(--space-1) var(--space-2)}
+.fp-tx-detail-table td{padding:var(--space-1) var(--space-2); border-bottom:none}
 .ask{display:flex; gap:var(--space-3); margin-top:var(--space-5)}
 .ask input{flex:1}
 .chips{display:flex; gap:var(--space-2); flex-wrap:wrap; margin-top:var(--space-4)}
@@ -808,8 +818,8 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
     <div class="fp-scroll">
       <table class="fp-table" id="miTxTable">
         <thead><tr>
-          <th>Date</th><th>Job</th><th>Client</th><th>Code</th>
-          <th class="num">Qty</th><th class="num">Value</th>
+          <th></th><th>Date</th><th>Job</th><th>Client</th>
+          <th class="num">Items</th><th class="num">Total value</th>
         </tr></thead>
         <tbody id="miTxBody"></tbody>
       </table>

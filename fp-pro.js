@@ -550,7 +550,11 @@
     try {
       const [itemsRes, txRes] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
-        sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(50),
+        // Fetched at line-item grain, then grouped back into one Check-out
+        // per (job, client, timestamp) below -- Postgres's now() returns the
+        // same value for every row inserted inside one checkout_transaction()
+        // call, so that triple is a reliable grouping key.
+        sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(500),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
@@ -613,14 +617,60 @@
     $("#miItemsPrev").onclick = () => { page = Math.max(0, page - 1); draw(); };
     $("#miItemsNext").onclick = () => { page = page + 1; draw(); };
 
-    $("#miTxBody").innerHTML = txs.map((tx) => `<tr>
-      <td>${esc(String(tx.created_at).slice(0, 16).replace("T", " "))}</td>
-      <td>${esc(tx.job_number)}</td>
-      <td>${esc(tx.client)}</td>
-      <td class="code">${esc(tx.item_code)}</td>
-      <td class="num">${fmt(tx.quantity)} ${esc(tx.unit)}</td>
-      <td class="num">${money(tx.value)}</td>
-    </tr>`).join("") || `<tr><td colspan="6" class="small muted">No Check-outs recorded yet.</td></tr>`;
+    renderCheckoutHistory(txs);
+  }
+
+  // One row per Check-out (job + client + timestamp), not per line item —
+  // expandable to see the individual items that were deducted.
+  function renderCheckoutHistory(txs) {
+    const groups = new Map();
+    for (const tx of txs) {
+      const key = `${tx.job_number}|${tx.client}|${tx.created_at}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = { key, created_at: tx.created_at, job_number: tx.job_number, client: tx.client, lines: [], totalValue: 0 };
+        groups.set(key, g);
+      }
+      g.lines.push(tx);
+      g.totalValue += tx.value || 0;
+    }
+    const groupList = [...groups.values()].slice(0, 20);
+
+    $("#miTxBody").innerHTML = groupList.map((g) => `
+      <tr class="fp-tx-group" data-key="${esc(g.key)}">
+        <td><button class="fp-tx-toggle" data-key="${esc(g.key)}" aria-label="Show items">▸</button></td>
+        <td>${esc(String(g.created_at).slice(0, 16).replace("T", " "))}</td>
+        <td class="code">${esc(g.job_number)}</td>
+        <td>${esc(g.client)}</td>
+        <td class="num">${g.lines.length}</td>
+        <td class="num">${money(g.totalValue)}</td>
+      </tr>
+      <tr class="fp-tx-detail" data-detail-for="${esc(g.key)}" hidden>
+        <td></td>
+        <td colspan="5">
+          <table class="fp-table fp-tx-detail-table">
+            <thead><tr><th>Code</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+            <tbody>
+              ${g.lines.map((tx) => `<tr>
+                <td class="code">${esc(tx.item_code)}</td>
+                <td class="num">${fmt(tx.quantity)} ${esc(tx.unit)}</td>
+                <td class="num">${money(tx.value)}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </td>
+      </tr>
+    `).join("") || `<tr><td colspan="6" class="small muted">No Check-outs recorded yet.</td></tr>`;
+
+    document.querySelectorAll(".fp-tx-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.key;
+        const detail = document.querySelector(`.fp-tx-detail[data-detail-for="${CSS.escape(key)}"]`);
+        const open = !detail.hidden;
+        detail.hidden = open;
+        btn.textContent = open ? "▸" : "▾";
+      });
+    });
   }
 
   function init() {
