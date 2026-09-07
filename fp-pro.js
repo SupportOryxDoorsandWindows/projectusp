@@ -714,6 +714,69 @@
     return all;
   }
 
+  // Groups line-item transactions back into one Check-out per (job, client,
+  // timestamp) -- same key as the Recent Check-outs view, since Postgres's
+  // now() returns one timestamp per checkout_transaction() call.
+  function groupTransactions(txs) {
+    const map = new Map();
+    for (const tx of txs) {
+      const key = `${tx.job_number}|${tx.client}|${tx.created_at}`;
+      let g = map.get(key);
+      if (!g) {
+        g = { created_at: tx.created_at, job_number: tx.job_number, client: tx.client, lines: [], totalValue: 0 };
+        map.set(key, g);
+      }
+      g.lines.push(tx);
+      g.totalValue += tx.value || 0;
+    }
+    return [...map.values()];
+  }
+
+  const REPORT_COLS = 6; // Code, Description, Qty, Unit, Unit Cost, Value
+
+  // NB: the SheetJS Community Edition build loaded here cannot write cell
+  // colours or bold fonts (fills/fonts survive round-tripping only in the
+  // paid Pro version -- confirmed by testing, not assumed). What we *can*
+  // do without that: merge the Job/Client/Date/Total into one header cell
+  // per Check-out instead of repeating it on every line, and apply a real
+  // currency number format to the cost/value columns.
+  function buildReportSheet(groups) {
+    const aoa = [];
+    const merges = [];
+    const currencyCells = []; // [row, col] pairs to format as AED after the fact
+
+    aoa.push(["Oryx Doors & Windows — Check-out Report"]);
+    merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: REPORT_COLS - 1 } });
+    aoa.push([`Generated ${todayISO()}`]);
+    merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: REPORT_COLS - 1 } });
+    aoa.push([]);
+
+    // Newest Check-out first, matching the Recent Check-outs view.
+    for (const g of [...groups].reverse()) {
+      const dateStr = String(g.created_at).slice(0, 16).replace("T", " ");
+      const headerRow = aoa.length;
+      aoa.push([`Job ${g.job_number}   ·   Client: ${g.client}   ·   ${dateStr}   ·   ${g.lines.length} item${g.lines.length === 1 ? "" : "s"}   ·   Total AED ${g.totalValue.toFixed(2)}`]);
+      merges.push({ s: { r: headerRow, c: 0 }, e: { r: headerRow, c: REPORT_COLS - 1 } });
+
+      aoa.push(["Code", "Description", "Qty", "Unit", "Unit Cost", "Value"]);
+      for (const tx of g.lines) {
+        const r = aoa.length;
+        aoa.push([tx.item_code, tx.description, tx.quantity, tx.unit, tx.unit_cost_used, tx.value]);
+        currencyCells.push([r, 4], [r, 5]);
+      }
+      aoa.push([]);
+    }
+
+    const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    ws["!merges"] = merges;
+    ws["!cols"] = [{ wch: 12 }, { wch: 42 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 14 }];
+    for (const [r, c] of currencyCells) {
+      const addr = window.XLSX.utils.encode_cell({ r, c });
+      if (ws[addr]) ws[addr].z = '"AED" #,##0.00';
+    }
+    return ws;
+  }
+
   async function exportCheckoutReport() {
     const btn = $("#miExportBtn");
     const setStatus = (text, kind) => {
@@ -729,29 +792,13 @@
         setStatus("No Check-out transactions recorded yet — nothing to export.");
         return;
       }
-      const rows = txs.map((tx) => ({
-        Date: String(tx.created_at).slice(0, 16).replace("T", " "),
-        "Job Number": tx.job_number,
-        Client: tx.client,
-        "Item Code": tx.item_code,
-        Description: tx.description,
-        Quantity: tx.quantity,
-        Unit: tx.unit,
-        "Unit Cost (AED)": tx.unit_cost_used,
-        "Value (AED)": tx.value,
-        Classification: tx.classification,
-        "Source Document": tx.source_document_name,
-      }));
-      const ws = window.XLSX.utils.json_to_sheet(rows);
-      ws["!cols"] = [
-        { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 40 },
-        { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 24 },
-      ];
+      const groups = groupTransactions(txs);
+      const ws = buildReportSheet(groups);
       const wb = window.XLSX.utils.book_new();
       window.XLSX.utils.book_append_sheet(wb, ws, "Check-outs");
       const outName = `Oryx Check-out Report - ${todayISO()}.xlsx`;
       window.XLSX.writeFile(wb, outName);
-      setStatus(`Exported ${txs.length} transaction${txs.length === 1 ? "" : "s"} as ${outName}.`);
+      setStatus(`Exported ${groups.length} Check-out${groups.length === 1 ? "" : "s"} (${txs.length} items) as ${outName}.`);
     } catch (err) {
       console.error(err);
       setStatus("Could not export: " + err.message, "err");
