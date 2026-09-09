@@ -384,6 +384,13 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-row-actions button:hover{background:var(--white); border-color:var(--brand)}
 .fp-row-actions button.on{background:var(--brand); color:var(--white); border-color:var(--brand)}
 .fp-skipped td{opacity:0.55}
+.fp-editing td{background:var(--accent)}
+.fp-inline-input{
+  width:100%; font:inherit; padding:3px 6px; border:1px solid var(--brand); border-radius:var(--r-tag);
+  background:var(--white); color:var(--black);
+}
+.fp-inline-input-num{width:70px; text-align:right}
+.fp-inline-input-unit{width:56px; margin-left:var(--space-1)}
 .fp-status-ok{
   background:var(--brand); color:var(--white);
   font-family:var(--font-display); font-weight:700; font-size:10px;
@@ -637,7 +644,8 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <button data-v="check">Opening checker</button>
         <button data-v="systems">Systems</button>
         <button data-v="matrix">Comparison</button>
-        <button data-v="fp">FP Pro Optimization</button>
+        <button data-v="fp">Check-out (FP Pro)</button>
+        <button data-v="checkin">Check-in</button>
         <button data-v="master-inventory">Master Inventory</button>
       </nav>
     </div>
@@ -781,12 +789,77 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
   </div>
 </section>
 
+<!-- =========================== CHECK-IN =========================== -->
+<section id="v-checkin" class="view">
+  <div class="card">
+    <h2>Check-in</h2>
+    <p class="lede">Upload a supplier Commercial Invoice or delivery note. The tool reads it,
+    matches every line against the Master Inventory, and — after you confirm — adds the
+    stock and logs a Check-in transaction. Items that can't be matched are never guessed;
+    they're flagged for you to review.</p>
+
+    <div class="fp-step-h">Step 1 — Upload the document</div>
+    <div class="fp-drops">
+      <label class="fp-drop" id="ciDrop" for="ciPdf">
+        <input type="file" id="ciPdf" accept="application/pdf,.pdf" class="visually-hidden">
+        <div class="fp-drop-icon">PDF</div>
+        <div class="fp-drop-main">
+          <div class="fp-drop-title">Commercial Invoice / delivery note</div>
+          <div class="fp-drop-sub" id="ciPdfName">Click or drop the PDF file here</div>
+        </div>
+      </label>
+    </div>
+
+    <div class="fp-step-h">Step 2 — Document details</div>
+    <div class="fp-jobrow">
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="ciSupplier">Supplier</label>
+        <input id="ciSupplier" type="text" autocomplete="off" placeholder="Auto-filled where possible; you can edit it">
+      </div>
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="ciInvoiceNumber">Invoice / delivery note number</label>
+        <input id="ciInvoiceNumber" type="text" autocomplete="off" placeholder="e.g. SI-1000821">
+      </div>
+    </div>
+    <div class="fp-jobrow">
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="ciPoNumber">PO / reference number</label>
+        <input id="ciPoNumber" type="text" autocomplete="off" placeholder="e.g. PO-26-1490">
+      </div>
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="ciDocDate">Invoice / delivery date</label>
+        <input id="ciDocDate" type="date">
+      </div>
+    </div>
+
+    <div class="fp-actions">
+      <button class="btn-primary" id="ciExtract" disabled>Analyse and preview</button>
+      <button class="ghost" id="ciReset">Reset</button>
+      <span class="small muted" id="ciStatus"></span>
+    </div>
+
+    <div id="ciOut"></div>
+
+    <div class="fp-confirmbar" id="ciConfirmBar" hidden>
+      <div>
+        <div class="fp-confirmbar-title">Ready to check in</div>
+        <div class="small muted" id="ciConfirmSummary"></div>
+      </div>
+      <button class="btn-accent" id="ciConfirm" disabled>Confirm Check-in</button>
+    </div>
+
+    <div id="ciDone"></div>
+  </div>
+</section>
+
 <!-- =========================== MASTER INVENTORY =========================== -->
 <section id="v-master-inventory" class="view">
   <div class="card">
     <h2>Master Inventory</h2>
     <p class="lede">Freedom classification only, for now — Fusion and Renson aren't in the
-    system yet. Values update automatically after every Check-out.</p>
+    system yet. Values update automatically after every Check-out and Check-in. Item count
+    only ever changes via the Master Inventory itself — Check-out and Check-in adjust stock
+    on existing items, they never add new ones.</p>
     <div class="fp-tally" id="miTally"></div>
     <div class="fp-jobrow" style="margin-top:var(--space-3)">
       <div class="fp-jobrow-field" style="flex:1">
@@ -820,14 +893,14 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
       </div>
     </div>
     <div class="fp-section-h fp-section-h-row">
-      <span>Recent Check-outs</span>
-      <button class="ghost" id="miExportBtn" type="button">Export Check-out report (.xlsx)</button>
+      <span>Transaction History</span>
+      <button class="ghost" id="miExportBtn" type="button">Export transactions (.xlsx)</button>
     </div>
     <span class="small muted" id="miExportStatus"></span>
     <div class="fp-scroll">
       <table class="fp-table" id="miTxTable">
         <thead><tr>
-          <th></th><th>Date</th><th>Job</th><th>Client</th>
+          <th></th><th>Date</th><th>Type</th><th>Reference</th><th>Client / Supplier</th>
           <th class="num">Items</th><th class="num">Total value</th>
         </tr></thead>
         <tbody id="miTxBody"></tbody>

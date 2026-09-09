@@ -237,34 +237,71 @@
 
       if (!item) {
         rows.push({
-          kind: e.kind, code: e.code,
+          kind: e.kind, code: e.code, barLenMm: e.barLenMm,
           description: e.description, pdfDetail,
           requiredQty, unit,
           available: null, remaining: null,
           costPerUnit: 0, estValue: 0,
           status: "unmatched", baseStatus: "unmatched",
           action: "pending", decided: false,
-          itemId: null, hasVariants: false,
+          itemId: null, hasVariants: false, editing: false,
         });
         continue;
       }
+      // Shortages are allowed through (Phase 2: negative stock is expected,
+      // corrected by a later Check-in) -- both "ok" and "shortage" rows
+      // deduct by default. Only "unmatched" needs a decision, since we never
+      // guess which Master Inventory item an unrecognised code means.
       const remaining = item.current_qty - requiredQty;
       const status = remaining < 0 ? "shortage" : "ok";
       rows.push({
-        kind: e.kind, code: e.code,
+        kind: e.kind, code: e.code, barLenMm: e.barLenMm,
         description: item.description || e.description, pdfDetail,
         requiredQty, unit,
         available: item.current_qty, remaining,
         costPerUnit: item.unit_cost || 0,
         estValue: requiredQty * (item.unit_cost || 0),
         status, baseStatus: status,
-        action: status === "ok" ? "deduct" : "pending",
-        decided: status === "ok",
+        action: "deduct",
+        decided: true,
         itemId: item.id,
-        hasVariants: candidates.length > 1,
+        hasVariants: candidates.length > 1, editing: false,
       });
     }
     return rows;
+  }
+
+  // Re-derives a row's match/availability/status after the user edits its
+  // Code, Description, Quantity or Unit in the Allocation Preview. Mirrors
+  // the single-entry logic in buildRows() above.
+  function recomputeAfterEdit(row, newCode, newDescription, newQty, newUnit) {
+    row.code = newCode;
+    row.description = newDescription;
+    row.requiredQty = newQty;
+    row.unit = newUnit;
+
+    const candidates = state.itemsByCode.get(newCode) || [];
+    const item = pickInventoryRow({ kind: row.kind, barLenMm: row.barLenMm }, candidates);
+
+    if (!item) {
+      row.available = null; row.remaining = null;
+      row.costPerUnit = 0; row.estValue = 0;
+      row.status = "unmatched"; row.baseStatus = "unmatched";
+      row.action = "pending"; row.decided = false;
+      row.itemId = null; row.hasVariants = false;
+      return;
+    }
+    row.description = item.description || newDescription;
+    row.available = item.current_qty;
+    row.remaining = item.current_qty - newQty;
+    row.costPerUnit = item.unit_cost || 0;
+    row.estValue = newQty * (item.unit_cost || 0);
+    row.status = row.remaining < 0 ? "shortage" : "ok";
+    row.baseStatus = row.status;
+    row.action = "deduct";
+    row.decided = true;
+    row.itemId = item.id;
+    row.hasVariants = candidates.length > 1;
   }
 
   /* --------------------------- Render ------------------------ */
@@ -291,8 +328,9 @@
   }
 
   function unresolvedByStatus() {
+    // Shortages no longer require a decision -- they deduct by default and
+    // go negative. Only unmatched codes (never guessed) need acknowledgement.
     return {
-      shortage: state.rows.filter((r) => !r.decided && r.baseStatus === "shortage").length,
       unmatched: state.rows.filter((r) => !r.decided && r.baseStatus === "unmatched").length,
     };
   }
@@ -309,31 +347,28 @@
 
   function renderRowActionButtons(idx, row) {
     const on = (yes) => yes ? "on" : "";
-    if (row.baseStatus === "ok") {
+    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
+    if (row.baseStatus === "ok" || row.baseStatus === "shortage") {
       return `<div class="fp-row-actions">
         <button data-act="skip" data-i="${idx}" class="${on(row.action === "skip")}">Skip</button>
         ${row.action === "skip" ? `<button data-act="deduct" data-i="${idx}">Undo</button>` : ""}
-      </div>`;
-    }
-    if (row.baseStatus === "shortage") {
-      return `<div class="fp-row-actions">
-        <button data-act="skip" data-i="${idx}" class="${on(row.decided && row.action === "skip")}">Skip (acknowledge)</button>
+        ${editBtn}
       </div>`;
     }
     if (row.baseStatus === "unmatched") {
       return `<div class="fp-row-actions">
         <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Skip (acknowledge)</button>
+        ${editBtn}
       </div>`;
     }
-    return "";
+    return `<div class="fp-row-actions">${editBtn}</div>`;
   }
 
   function applyRowAction(idx, act) {
-    if (act === "skip-all-shortage" || act === "skip-all-unmatched") {
+    if (act === "skip-all-unmatched") {
       state.rows.forEach((rr) => {
         if (rr.decided) return;
-        if (act === "skip-all-shortage" && rr.baseStatus === "shortage") { rr.action = "skip"; rr.decided = true; }
-        if (act === "skip-all-unmatched" && rr.baseStatus === "unmatched") { rr.action = "skip"; rr.decided = true; }
+        if (rr.baseStatus === "unmatched") { rr.action = "skip"; rr.decided = true; }
       });
       render();
       return;
@@ -342,6 +377,22 @@
     if (!r) return;
     if (act === "skip") { r.action = "skip"; r.decided = true; }
     else if (act === "deduct") { r.action = "deduct"; r.decided = true; }
+    else if (act === "edit") { r.editing = true; }
+    else if (act === "cancel-edit") { r.editing = false; }
+    else if (act === "save-edit") {
+      const codeEl = document.getElementById(`fpEditCode${idx}`);
+      const descEl = document.getElementById(`fpEditDesc${idx}`);
+      const qtyEl = document.getElementById(`fpEditQty${idx}`);
+      const unitEl = document.getElementById(`fpEditUnit${idx}`);
+      const newCode = codeEl.value.trim();
+      const newQty = parseFloat(qtyEl.value);
+      if (!newCode || !isFinite(newQty) || newQty <= 0) {
+        status("Edit needs a code and a quantity greater than zero.", "err");
+        return;
+      }
+      recomputeAfterEdit(r, newCode, descEl.value.trim(), newQty, unitEl.value.trim() || r.unit);
+      r.editing = false;
+    }
     render();
   }
 
@@ -351,6 +402,24 @@
     const u = unresolvedByStatus();
 
     const rowsHtml = state.rows.map((r, i) => {
+      if (r.editing) {
+        return `<tr class="fp-editing">
+          <td><input class="fp-inline-input" id="fpEditCode${i}" type="text" value="${esc(r.code)}"></td>
+          <td><input class="fp-inline-input" id="fpEditDesc${i}" type="text" value="${esc(r.description)}"></td>
+          <td class="num">
+            <input class="fp-inline-input fp-inline-input-num" id="fpEditQty${i}" type="number" step="any" min="0" value="${r.requiredQty}">
+            <input class="fp-inline-input fp-inline-input-unit" id="fpEditUnit${i}" type="text" value="${esc(r.unit)}">
+          </td>
+          <td class="num">${r.available != null ? fmt(r.available) : "—"}</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="small muted">Editing…</td>
+          <td><div class="fp-row-actions">
+            <button data-act="save-edit" data-i="${i}" class="on">Save</button>
+            <button data-act="cancel-edit" data-i="${i}">Cancel</button>
+          </div></td>
+        </tr>`;
+      }
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const remainingClass = r.remaining != null && r.remaining < 0 ? 'style="color:var(--danger); font-weight:600"' : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
@@ -374,18 +443,15 @@
     const warnBox = t.unresolved > 0 ? `<div class="fp-warn">
       <h4>${t.unresolved} row${t.unresolved === 1 ? "" : "s"} need${t.unresolved === 1 ? "s" : ""} a decision</h4>
       <ul>
-        ${u.shortage ? `<li><b>${u.shortage} shortage${u.shortage === 1 ? "" : "s"}</b> — required qty exceeds available.
-          This Phase 1 build blocks shortages rather than allowing negative stock; skip to acknowledge and leave
-          this item out of the Check-out.
-          <span class="fp-batch-actions">
-            <button data-act="skip-all-shortage" data-i="-1">Skip all shortages</button>
-          </span></li>` : ""}
-        ${u.unmatched ? `<li><b>${u.unmatched} unmatched item${u.unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory. Not deducted; click Acknowledge to confirm you've seen them.
+        ${u.unmatched ? `<li><b>${u.unmatched} unmatched item${u.unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory. Not deducted; click Edit to correct the code, or Acknowledge to confirm you've seen it.
           <span class="fp-batch-actions">
             <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
           </span></li>` : ""}
       </ul>
     </div>` : "";
+    const shortageNote = t.shortages > 0 ? `<p class="small muted" style="color:var(--danger)">
+      ${t.shortages} item${t.shortages === 1 ? "" : "s"} will go negative — allowed, and shown in red below.
+      A future Check-in will correct it.</p>` : "";
 
     $("#fpOut").innerHTML = `
       <div class="fp-jobcard">
@@ -402,6 +468,7 @@
         <div class="fp-tally-item"><strong>${t.unresolved}</strong><span>Unresolved</span></div>
       </div>
       ${warnBox}
+      ${shortageNote}
       <div class="fp-section-h">Allocation preview</div>
       <div class="fp-scroll">
         <table class="fp-table">
@@ -417,12 +484,13 @@
         </table>
       </div>
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been deducted yet.
-      The confirm button unlocks once every row shows OK or Skipped.</p>
+      The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
     `;
 
     const canConfirm =
       t.unresolved === 0 &&
       t.totalItems > 0 &&
+      !state.rows.some((r) => r.editing) &&
       !!$("#fpJobNumber").value.trim() &&
       !!$("#fpClient").value.trim();
     $("#fpConfirmSummary").textContent =
@@ -563,11 +631,420 @@
     });
   }
 
+  /* --------------------------- Check-in ------------------------ */
+  // Mirrors the Check-out workflow above (upload -> analyse -> preview ->
+  // confirm), but adds stock instead of subtracting it, and reads a supplier
+  // Commercial Invoice / delivery note instead of an FP Pro PDF. Matching
+  // against the Master Inventory reuses loadInventoryItems()/pickInventoryRow
+  // from the Check-out code above -- both workflows look up the same table
+  // the same way.
+
+  const CHECKIN_FN_URL = window.ORYX_CONFIG.supabaseUrl + "/functions/v1/checkin";
+
+  const ciState = {
+    pdfFile: null,
+    pdfHash: null,
+    header: null, // {supplier, invoiceNumber, poNumber, isoDate}
+    rows: null,
+    itemsByCode: null,
+  };
+
+  // Matches the numbered line-item rows of a Commercial Invoice table, e.g.
+  // "6 230034 Each 200 0.58 0.00 116.00 392530" -> Ln, Part Number, Units,
+  // Qty, Price, GST, Total, HS Code. Verified against the supplied sample
+  // (Freedom Screens commercial invoice format).
+  const CI_LINE_RE = /^(\d+)\s+([A-Za-z0-9-]+)\s+(\S+)\s+(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+(\d{5,8})$/;
+
+  function parseCommercialInvoiceLines(text) {
+    const out = [];
+    for (const raw of text.split("\n")) {
+      const m = raw.trim().match(CI_LINE_RE);
+      if (!m) continue;
+      out.push({
+        code: m[2],
+        unit: m[3],
+        qty: parseInt(m[4], 10),
+        unitCost: parseFloat(m[5].replace(/,/g, "")),
+        total: parseFloat(m[7].replace(/,/g, "")),
+      });
+    }
+    // Same code+unit can appear twice on one invoice -- sum rather than
+    // overwrite, same defensive aggregation as the Check-out PDF parser.
+    const byKey = new Map();
+    for (const l of out) {
+      const key = `${l.code}|${l.unit}`;
+      const cur = byKey.get(key);
+      if (cur) { cur.qty += l.qty; cur.total += l.total; }
+      else byKey.set(key, { ...l });
+    }
+    return [...byKey.values()];
+  }
+
+  // Best-effort only: description text sits in a separate block of the PDF's
+  // text layer, disconnected from its numeric row. Used purely as a display
+  // hint (mainly for unmatched rows) -- matched rows always show the Master
+  // Inventory's own description instead, so a wrong guess here never affects
+  // what gets checked in.
+  //
+  // Critically, this only starts collecting *after* the last numbered
+  // line-item row: header/address text above the table (e.g. "13 Blue Rock
+  // Drive", the "Ln Part Number Units..." column header) is free text that
+  // doesn't match any skip pattern, and starting collection too early was
+  // found (via the supplied sample invoice) to silently shift every
+  // description out of alignment with its line -- exactly the kind of wrong
+  // guess this feature must not produce.
+  const CI_SKIP_LINE_RE = /^(sub ?total|total|invoice|goods made|product of|components for|reference|bill to|att:|tel:|abn:|page \d|commercial invoice|freedom|luscombe|australia|dubai|unit \d|al quoz|oryx door systems|description|\d{1,2}\/\d{1,2}\/\d{4}$|[\d,]+\.\d{2}$|-$)/i;
+  function parseCommercialInvoiceDescriptions(text, count) {
+    const lines = text.split("\n");
+    let lastLineItemIdx = -1;
+    lines.forEach((raw, i) => { if (CI_LINE_RE.test(raw.trim())) lastLineItemIdx = i; });
+    if (lastLineItemIdx === -1) return [];
+
+    const out = [];
+    for (const raw of lines.slice(lastLineItemIdx + 1)) {
+      if (out.length >= count) break;
+      const l = raw.trim();
+      if (!l || l.length < 3 || l.length > 70) continue;
+      if (CI_SKIP_LINE_RE.test(l)) continue;
+      out.push(l);
+    }
+    return out;
+  }
+
+  function parseCheckinHeader(text) {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const supplier = lines.find((l) => /pty ltd|llc|inc\.?$|company|screens|trading|industries/i.test(l)) || "";
+    const invoiceNumber = (text.match(/\b(?:SI|SO|INV|DN)-\d+\b/i) || [])[0] || "";
+    const poNumber = (text.match(/\bPO-[\w-]+\b/i) || [])[0] || "";
+    const dm = text.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
+    const isoDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
+    return { supplier, invoiceNumber, poNumber, isoDate };
+  }
+
+  function buildCheckinRows(lines, descriptions, itemsByCode) {
+    const rows = [];
+    lines.forEach((l, i) => {
+      const candidates = itemsByCode.get(l.code) || [];
+      const item = pickInventoryRow({ kind: "checkin" }, candidates);
+      const pdfDescription = descriptions.length === lines.length ? descriptions[i] : "";
+      if (!item) {
+        rows.push({
+          code: l.code, description: pdfDescription, unit: l.unit, qty: l.qty,
+          invoiceUnitCost: l.unitCost,
+          current: null, newQty: null,
+          status: "unmatched", action: "pending", decided: false,
+          itemId: null, editing: false,
+        });
+        return;
+      }
+      rows.push({
+        code: l.code, description: item.description || pdfDescription, unit: l.unit, qty: l.qty,
+        invoiceUnitCost: l.unitCost,
+        current: item.current_qty, newQty: item.current_qty + l.qty,
+        status: "ok", action: "add", decided: true,
+        itemId: item.id, editing: false,
+      });
+    });
+    return rows;
+  }
+
+  function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit) {
+    row.code = newCode; row.description = newDescription; row.qty = newQty; row.unit = newUnit;
+    const candidates = ciState.itemsByCode.get(newCode) || [];
+    const item = pickInventoryRow({ kind: "checkin" }, candidates);
+    if (!item) {
+      row.current = null; row.newQty = null;
+      row.status = "unmatched"; row.action = "pending"; row.decided = false;
+      row.itemId = null;
+      return;
+    }
+    row.description = item.description || newDescription;
+    row.current = item.current_qty;
+    row.newQty = item.current_qty + newQty;
+    row.status = "ok"; row.action = "add"; row.decided = true;
+    row.itemId = item.id;
+  }
+
+  function ciTally() {
+    const active = ciState.rows.filter((r) => r.action === "add");
+    return {
+      totalItems: active.length,
+      totalValue: active.reduce((s, r) => s + r.qty * (r.invoiceUnitCost || 0), 0),
+      unresolved: ciState.rows.filter((r) => !r.decided).length,
+      skipped: ciState.rows.filter((r) => r.decided && r.action === "skip").length,
+    };
+  }
+
+  function ciRenderRowActionButtons(idx, row) {
+    const on = (yes) => yes ? "on" : "";
+    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
+    if (row.status === "ok") {
+      return `<div class="fp-row-actions">
+        <button data-act="skip" data-i="${idx}" class="${on(row.action === "skip")}">Skip</button>
+        ${row.action === "skip" ? `<button data-act="add" data-i="${idx}">Undo</button>` : ""}
+        ${editBtn}
+      </div>`;
+    }
+    return `<div class="fp-row-actions">
+      <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
+      ${editBtn}
+    </div>`;
+  }
+
+  function applyCiRowAction(idx, act) {
+    if (act === "skip-all-unmatched") {
+      ciState.rows.forEach((rr) => {
+        if (rr.decided) return;
+        if (rr.status === "unmatched") { rr.action = "skip"; rr.decided = true; }
+      });
+      ciRender();
+      return;
+    }
+    const r = ciState.rows[idx];
+    if (!r) return;
+    if (act === "skip") { r.action = "skip"; r.decided = true; }
+    else if (act === "add") { r.action = "add"; r.decided = true; }
+    else if (act === "edit") { r.editing = true; }
+    else if (act === "cancel-edit") { r.editing = false; }
+    else if (act === "save-edit") {
+      const codeEl = document.getElementById(`ciEditCode${idx}`);
+      const descEl = document.getElementById(`ciEditDesc${idx}`);
+      const qtyEl = document.getElementById(`ciEditQty${idx}`);
+      const unitEl = document.getElementById(`ciEditUnit${idx}`);
+      const newCode = codeEl.value.trim();
+      const newQty = parseFloat(qtyEl.value);
+      if (!newCode || !isFinite(newQty) || newQty <= 0) {
+        ciStatus("Edit needs a code and a quantity greater than zero.", "err");
+        return;
+      }
+      recomputeCiRowAfterEdit(r, newCode, descEl.value.trim(), newQty, unitEl.value.trim() || r.unit);
+      r.editing = false;
+    }
+    ciRender();
+  }
+
+  function ciRender() {
+    const t = ciTally();
+    const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
+
+    const rowsHtml = ciState.rows.map((r, i) => {
+      if (r.editing) {
+        return `<tr class="fp-editing">
+          <td><input class="fp-inline-input" id="ciEditCode${i}" type="text" value="${esc(r.code)}"></td>
+          <td><input class="fp-inline-input" id="ciEditDesc${i}" type="text" value="${esc(r.description)}"></td>
+          <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
+          <td class="num">
+            <input class="fp-inline-input fp-inline-input-num" id="ciEditQty${i}" type="number" step="any" min="0" value="${r.qty}">
+            <input class="fp-inline-input fp-inline-input-unit" id="ciEditUnit${i}" type="text" value="${esc(r.unit)}">
+          </td>
+          <td class="num">—</td>
+          <td class="num">${money(r.invoiceUnitCost)}</td>
+          <td class="small muted">Editing…</td>
+          <td><div class="fp-row-actions">
+            <button data-act="save-edit" data-i="${i}" class="on">Save</button>
+            <button data-act="cancel-edit" data-i="${i}">Cancel</button>
+          </div></td>
+        </tr>`;
+      }
+      const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
+      const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
+      return `<tr class="${rowClass}">
+        <td class="code">${esc(r.code)}</td>
+        <td>${esc(r.description)}</td>
+        <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
+        <td class="num" style="color:var(--brand); font-weight:600">+${fmt(r.qty)} ${esc(r.unit)}</td>
+        <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
+        <td class="num">${money(r.invoiceUnitCost)}</td>
+        <td>${statusChip(displayStatus)}</td>
+        <td>${ciRenderRowActionButtons(i, r)}</td>
+      </tr>`;
+    }).join("");
+
+    const warnBox = unmatched > 0 ? `<div class="fp-warn">
+      <h4>${unmatched} item${unmatched === 1 ? "" : "s"} need${unmatched === 1 ? "s" : ""} a decision</h4>
+      <ul>
+        <li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
+          Not checked in; click Edit to correct the code, or Acknowledge to confirm you've seen it.
+          <span class="fp-batch-actions">
+            <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
+          </span></li>
+      </ul>
+    </div>` : "";
+
+    $("#ciOut").innerHTML = `
+      <div class="fp-tally">
+        <div class="fp-tally-item"><strong>${t.totalItems}</strong><span>Items to check in</span></div>
+        <div class="fp-tally-item"><strong>${money(t.totalValue)}</strong><span>Invoice value</span></div>
+        <div class="fp-tally-item"><strong>${t.skipped}</strong><span>Skipped</span></div>
+        <div class="fp-tally-item"><strong>${t.unresolved}</strong><span>Unresolved</span></div>
+      </div>
+      ${warnBox}
+      <div class="fp-section-h">Check-in preview</div>
+      <div class="fp-scroll">
+        <table class="fp-table">
+          <thead><tr>
+            <th>Code</th><th>Description</th>
+            <th class="num">Current stock</th>
+            <th class="num">Check-in qty</th>
+            <th class="num">New stock</th>
+            <th class="num">Unit cost</th>
+            <th>Status</th><th>Action</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      <p class="small muted" style="margin-top:var(--space-3)">Nothing has been added yet.
+      The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
+    `;
+
+    const canConfirm =
+      t.unresolved === 0 &&
+      t.totalItems > 0 &&
+      !ciState.rows.some((r) => r.editing) &&
+      !!$("#ciSupplier").value.trim() &&
+      !!$("#ciInvoiceNumber").value.trim();
+    $("#ciConfirmSummary").textContent =
+      `${t.totalItems} items · ${money(t.totalValue)}` + (t.skipped ? ` · ${t.skipped} skipped` : "");
+    $("#ciConfirmBar").hidden = false;
+    $("#ciConfirm").disabled = !canConfirm;
+
+    document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button").forEach((b) => {
+      b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
+    });
+  }
+
+  async function ciConfirm() {
+    const supplier = $("#ciSupplier").value.trim();
+    const invoiceNumber = $("#ciInvoiceNumber").value.trim();
+    const poNumber = $("#ciPoNumber").value.trim();
+    const docDate = $("#ciDocDate").value || null;
+    const lines = ciState.rows
+      .filter((r) => r.action === "add" && r.itemId)
+      .map((r) => ({ item_id: r.itemId, quantity: r.qty, unit: r.unit, unit_cost: r.invoiceUnitCost || null }));
+
+    const res = await fetch(CHECKIN_FN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
+        "apikey": window.ORYX_CONFIG.supabaseKey,
+      },
+      body: JSON.stringify({
+        supplier, invoice_number: invoiceNumber, po_number: poNumber, document_date: docDate,
+        pdf_hash: ciState.pdfHash,
+        source_document_name: ciState.pdfFile ? ciState.pdfFile.name : null,
+        lines,
+      }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      if (data.error === "duplicate_document") {
+        throw new Error("This document has already been checked in — re-processing it would double-count the stock.");
+      }
+      throw new Error(data.detail || data.error || "The Check-in was not applied.");
+    }
+
+    $("#ciConfirmBar").hidden = true;
+    $("#ciDone").innerHTML = `
+      <div class="fp-done">
+        <h3>Check-in confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} added</h3>
+        <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
+        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.</p>
+        <div class="fp-done-actions">
+          <button class="ghost" id="ciNew">Start another Check-in</button>
+        </div>
+      </div>`;
+    $("#ciNew").addEventListener("click", ciResetAll);
+  }
+
+  async function ciAnalyse() {
+    if (!ciState.pdfFile) return;
+    const btn = $("#ciExtract");
+    btn.disabled = true;
+    ciStatus("Reading the document and matching items against the Master Inventory…");
+    try {
+      const [pdfText, itemsByCode, hash] = await Promise.all([
+        extractPdfText(ciState.pdfFile),
+        loadInventoryItems(),
+        pdfFingerprint(ciState.pdfFile),
+      ]);
+      ciState.itemsByCode = itemsByCode;
+      ciState.pdfHash = hash;
+      ciState.header = parseCheckinHeader(pdfText);
+
+      const sEl = $("#ciSupplier"), iEl = $("#ciInvoiceNumber"), pEl = $("#ciPoNumber"), dEl = $("#ciDocDate");
+      if (!sEl.value.trim() && ciState.header.supplier) sEl.value = ciState.header.supplier;
+      if (!iEl.value.trim() && ciState.header.invoiceNumber) iEl.value = ciState.header.invoiceNumber;
+      if (!pEl.value.trim() && ciState.header.poNumber) pEl.value = ciState.header.poNumber;
+      if (!dEl.value && ciState.header.isoDate) dEl.value = ciState.header.isoDate;
+
+      const lines = parseCommercialInvoiceLines(pdfText);
+      if (!lines.length) {
+        ciStatus("Could not find any line-item rows in this document — it may use a layout this reader doesn't recognise yet.", "err");
+        return;
+      }
+      const descriptions = parseCommercialInvoiceDescriptions(pdfText, lines.length);
+      ciState.rows = buildCheckinRows(lines, descriptions, itemsByCode);
+      ciRender();
+
+      const t = ciTally();
+      ciStatus(`Analysis ready — ${lines.length} line${lines.length === 1 ? "" : "s"} found, ${t.unresolved} need decisions.`);
+    } catch (err) {
+      console.error(err);
+      ciStatus("Could not analyse the document: " + err.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function ciResetAll() {
+    ciState.pdfFile = null;
+    ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
+    $("#ciPdf").value = "";
+    $("#ciPdfName").textContent = "Click or drop the PDF file here";
+    $("#ciDrop").classList.remove("ready");
+    $("#ciSupplier").value = ""; $("#ciInvoiceNumber").value = "";
+    $("#ciPoNumber").value = ""; $("#ciDocDate").value = "";
+    $("#ciOut").innerHTML = "";
+    $("#ciDone").innerHTML = "";
+    $("#ciConfirmBar").hidden = true;
+    $("#ciExtract").disabled = true;
+    ciStatus("");
+  }
+
+  function ciStatus(text, kind) {
+    const el = $("#ciStatus");
+    el.textContent = text || "";
+    el.style.color = kind === "err" ? "var(--danger)" : "";
+  }
+
+  function wireCiDrop(dropEl, inputEl) {
+    dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("dragover"); });
+    dropEl.addEventListener("dragleave", () => dropEl.classList.remove("dragover"));
+    dropEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropEl.classList.remove("dragover");
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        inputEl.files = e.dataTransfer.files;
+        inputEl.dispatchEvent(new Event("change"));
+      }
+    });
+    inputEl.addEventListener("change", () => {
+      const f = inputEl.files && inputEl.files[0];
+      if (!f) return;
+      ciState.pdfFile = f;
+      $("#ciPdfName").textContent = f.name;
+      dropEl.classList.add("ready");
+      $("#ciExtract").disabled = false;
+    });
+  }
+
   /* --------------------------- Master Inventory view ---------- */
 
   async function loadMasterInventoryView() {
     $("#miItemsBody").innerHTML = `<tr><td colspan="6" class="small muted">Loading…</td></tr>`;
-    $("#miTxBody").innerHTML = `<tr><td colspan="6" class="small muted">Loading…</td></tr>`;
+    $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
       const [itemsRes, txRes] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
@@ -638,18 +1115,25 @@
     $("#miItemsPrev").onclick = () => { page = Math.max(0, page - 1); draw(); };
     $("#miItemsNext").onclick = () => { page = page + 1; draw(); };
 
-    renderCheckoutHistory(txs);
+    renderTransactionHistory(txs);
   }
 
-  // One row per Check-out (job + client + timestamp), not per line item —
-  // expandable to see the individual items that were deducted.
-  function renderCheckoutHistory(txs) {
+  // One row per transaction event (Check-out job or Check-in document), not
+  // per line item — expandable to see the individual items that moved.
+  // Check-out groups by (job, client, timestamp); Check-in groups by
+  // (invoice/PO, supplier, timestamp) -- both rely on the same fact: every
+  // line inserted by one checkout_transaction()/checkin_transaction() call
+  // shares one Postgres now() value.
+  function renderTransactionHistory(txs) {
     const groups = new Map();
     for (const tx of txs) {
-      const key = `${tx.job_number}|${tx.client}|${tx.created_at}`;
+      const isCheckin = tx.type === "check_in";
+      const reference = isCheckin ? (tx.invoice_number || tx.po_number || "") : tx.job_number;
+      const party = isCheckin ? tx.supplier : tx.client;
+      const key = `${tx.type}|${reference}|${party}|${tx.created_at}`;
       let g = groups.get(key);
       if (!g) {
-        g = { key, created_at: tx.created_at, job_number: tx.job_number, client: tx.client, lines: [], totalValue: 0 };
+        g = { key, type: tx.type, created_at: tx.created_at, reference, party, lines: [], totalValue: 0 };
         groups.set(key, g);
       }
       g.lines.push(tx);
@@ -661,14 +1145,15 @@
       <tr class="fp-tx-group" data-key="${esc(g.key)}">
         <td><button class="fp-tx-toggle" data-key="${esc(g.key)}" aria-label="Show items">▸</button></td>
         <td>${esc(String(g.created_at).slice(0, 16).replace("T", " "))}</td>
-        <td class="code">${esc(g.job_number)}</td>
-        <td>${esc(g.client)}</td>
+        <td>${g.type === "check_in" ? `<span class="fp-status-ok">Check-in</span>` : `<span class="fp-status-unmatched">Check-out</span>`}</td>
+        <td class="code">${esc(g.reference || "—")}</td>
+        <td>${esc(g.party || "—")}</td>
         <td class="num">${g.lines.length}</td>
         <td class="num">${money(g.totalValue)}</td>
       </tr>
       <tr class="fp-tx-detail" data-detail-for="${esc(g.key)}" hidden>
         <td></td>
-        <td colspan="5">
+        <td colspan="6">
           <table class="fp-table fp-tx-detail-table">
             <thead><tr><th>Code</th><th>Description</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
             <tbody>
@@ -682,7 +1167,7 @@
           </table>
         </td>
       </tr>
-    `).join("") || `<tr><td colspan="6" class="small muted">No Check-outs recorded yet.</td></tr>`;
+    `).join("") || `<tr><td colspan="7" class="small muted">No transactions recorded yet.</td></tr>`;
 
     document.querySelectorAll(".fp-tx-toggle").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -719,16 +1204,20 @@
     return all;
   }
 
-  // Groups line-item transactions back into one Check-out per (job, client,
-  // timestamp) -- same key as the Recent Check-outs view, since Postgres's
-  // now() returns one timestamp per checkout_transaction() call.
+  // Groups line-item transactions back into one Check-out/Check-in event
+  // per (reference, party, timestamp) -- same key as the Transaction History
+  // view, since Postgres's now() returns one timestamp per
+  // checkout_transaction()/checkin_transaction() call.
   function groupTransactions(txs) {
     const map = new Map();
     for (const tx of txs) {
-      const key = `${tx.job_number}|${tx.client}|${tx.created_at}`;
+      const isCheckin = tx.type === "check_in";
+      const reference = isCheckin ? (tx.invoice_number || tx.po_number || "") : tx.job_number;
+      const party = isCheckin ? tx.supplier : tx.client;
+      const key = `${tx.type}|${reference}|${party}|${tx.created_at}`;
       let g = map.get(key);
       if (!g) {
-        g = { created_at: tx.created_at, job_number: tx.job_number, client: tx.client, lines: [], totalValue: 0 };
+        g = { created_at: tx.created_at, type: tx.type, reference, party, lines: [], totalValue: 0 };
         map.set(key, g);
       }
       g.lines.push(tx);
@@ -760,22 +1249,23 @@
     const styledCells = []; // [row, col, style]
     const currencyCells = []; // [row, col] pairs to format as AED after the fact
 
-    aoa.push(["Oryx Doors & Windows — Check-out Report"]);
+    aoa.push(["Oryx Doors & Windows — Inventory Transaction Report"]);
     merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: REPORT_COLS - 1 } });
     styledCells.push([0, 0, STYLE_TITLE]);
     aoa.push([]);
 
-    // Newest Check-out first, matching the Recent Check-outs view.
+    // Newest transaction first, matching the Transaction History view.
     for (const g of [...groups].reverse()) {
       const dateStr = String(g.created_at).slice(0, 16).replace("T", " ");
+      const isCheckin = g.type === "check_in";
 
-      const clientRow = aoa.length;
-      aoa.push([`Client: ${g.client}`]);
-      styledCells.push([clientRow, 0, STYLE_LABEL]);
+      const partyRow = aoa.length;
+      aoa.push([`${isCheckin ? "Supplier" : "Client"}: ${g.party || "—"}`]);
+      styledCells.push([partyRow, 0, STYLE_LABEL]);
 
-      const jobRow = aoa.length;
-      aoa.push([`Job ${g.job_number}`]);
-      styledCells.push([jobRow, 0, STYLE_LABEL]);
+      const refRow = aoa.length;
+      aoa.push([`${isCheckin ? "Check-in" : "Job"} ${g.reference || "—"}`]);
+      styledCells.push([refRow, 0, STYLE_LABEL]);
 
       const summaryRow = aoa.length;
       aoa.push([
@@ -821,20 +1311,20 @@
       el.style.color = kind === "err" ? "var(--danger)" : "";
     };
     btn.disabled = true;
-    setStatus("Fetching every Check-out transaction…");
+    setStatus("Fetching every Check-out and Check-in transaction…");
     try {
       const [txs] = await Promise.all([fetchAllTransactions(), loadXlsxLib()]);
       if (!txs.length) {
-        setStatus("No Check-out transactions recorded yet — nothing to export.");
+        setStatus("No transactions recorded yet — nothing to export.");
         return;
       }
       const groups = groupTransactions(txs);
       const ws = buildReportSheet(groups);
       const wb = window.XLSX.utils.book_new();
-      window.XLSX.utils.book_append_sheet(wb, ws, "Check-outs");
-      const outName = `Oryx Check-out Report - ${todayISO()}.xlsx`;
+      window.XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+      const outName = `Oryx Transaction Report - ${todayISO()}.xlsx`;
       window.XLSX.writeFile(wb, outName);
-      setStatus(`Exported ${groups.length} Check-out${groups.length === 1 ? "" : "s"} (${txs.length} items) as ${outName}.`);
+      setStatus(`Exported ${groups.length} transaction${groups.length === 1 ? "" : "s"} (${txs.length} items) as ${outName}.`);
     } catch (err) {
       console.error(err);
       setStatus("Could not export: " + err.message, "err");
@@ -862,6 +1352,19 @@
     if (miNavBtn) miNavBtn.addEventListener("click", loadMasterInventoryView);
     const exportBtn = $("#miExportBtn");
     if (exportBtn) exportBtn.addEventListener("click", exportCheckoutReport);
+
+    wireCiDrop($("#ciDrop"), $("#ciPdf"));
+    $("#ciExtract").addEventListener("click", ciAnalyse);
+    $("#ciReset").addEventListener("click", ciResetAll);
+    $("#ciConfirm").addEventListener("click", async () => {
+      const btn = $("#ciConfirm");
+      btn.disabled = true;
+      try { await ciConfirm(); }
+      catch (err) { console.error(err); ciStatus("Could not confirm: " + err.message, "err"); btn.disabled = false; }
+    });
+    ["ciSupplier", "ciInvoiceNumber", "ciPoNumber", "ciDocDate"].forEach((id) => {
+      $("#" + id).addEventListener("input", () => { if (ciState.rows) ciRender(); });
+    });
   }
 
   init();
