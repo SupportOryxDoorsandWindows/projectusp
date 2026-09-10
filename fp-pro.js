@@ -380,17 +380,23 @@
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
     else if (act === "save-edit") {
-      const codeEl = document.getElementById(`fpEditCode${idx}`);
-      const descEl = document.getElementById(`fpEditDesc${idx}`);
+      // The code can only ever be a value the dropdown picker committed
+      // (fpEditCodeValue) -- never free-typed text -- so a save can never
+      // resolve to anything but an existing Master Inventory record.
+      const codeValueEl = document.getElementById(`fpEditCodeValue${idx}`);
       const qtyEl = document.getElementById(`fpEditQty${idx}`);
       const unitEl = document.getElementById(`fpEditUnit${idx}`);
-      const newCode = codeEl.value.trim();
+      const newCode = codeValueEl ? codeValueEl.value.trim() : "";
       const newQty = parseFloat(qtyEl.value);
-      if (!newCode || !isFinite(newQty) || newQty <= 0) {
-        status("Edit needs a code and a quantity greater than zero.", "err");
+      if (!newCode) {
+        status("Select an item from the Master Inventory list before saving.", "err");
         return;
       }
-      recomputeAfterEdit(r, newCode, descEl.value.trim(), newQty, unitEl.value.trim() || r.unit);
+      if (!isFinite(newQty) || newQty <= 0) {
+        status("Enter a quantity greater than zero.", "err");
+        return;
+      }
+      recomputeAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
       r.editing = false;
     }
     render();
@@ -403,9 +409,15 @@
 
     const rowsHtml = state.rows.map((r, i) => {
       if (r.editing) {
+        const codeLabel = r.itemId ? `${esc(r.code)} — ${esc(r.description)}` : esc(r.code);
         return `<tr class="fp-editing">
-          <td><input class="fp-inline-input" id="fpEditCode${i}" type="text" value="${esc(r.code)}"></td>
-          <td><input class="fp-inline-input" id="fpEditDesc${i}" type="text" value="${esc(r.description)}"></td>
+          <td class="fp-code-picker">
+            <input class="fp-inline-input" id="fpEditCodeSearch${i}" type="text" value="${codeLabel}"
+              placeholder="Type to search Master Inventory" autocomplete="off">
+            <input type="hidden" id="fpEditCodeValue${i}" value="${r.itemId ? esc(r.code) : ""}">
+            <div class="fp-dropdown-results" id="fpEditCodeResults${i}" hidden></div>
+          </td>
+          <td><input class="fp-inline-input" id="fpEditDesc${i}" type="text" value="${esc(r.description)}" readonly></td>
           <td class="num">
             <input class="fp-inline-input fp-inline-input-num" id="fpEditQty${i}" type="number" step="any" min="0" value="${r.requiredQty}">
             <input class="fp-inline-input fp-inline-input-unit" id="fpEditUnit${i}" type="text" value="${esc(r.unit)}">
@@ -502,6 +514,7 @@
     document.querySelectorAll("#fpOut .fp-row-actions button, #fpOut .fp-batch-actions button").forEach((b) => {
       b.addEventListener("click", () => applyRowAction(+b.dataset.i, b.dataset.act));
     });
+    state.rows.forEach((r, i) => { if (r.editing) wireCodePicker("fpEdit", state.itemsByCode, i); });
   }
 
   /* --------------------------- Confirm & apply --------------- */
@@ -930,25 +943,31 @@
   // changes via a click on a real Master Inventory entry -- there is no way
   // to save free-typed text, so a Check-in edit can never point at (or
   // implicitly create) anything that isn't an existing item.
-  function wireCiCodePicker(i) {
-    const searchEl = document.getElementById(`ciEditCodeSearch${i}`);
-    const valueEl = document.getElementById(`ciEditCodeValue${i}`);
-    const resultsEl = document.getElementById(`ciEditCodeResults${i}`);
-    const descEl = document.getElementById(`ciEditDesc${i}`);
+  // Shared by both Check-out's Allocation Preview and Check-in's Preview:
+  // a search box plus a click-to-select results list, backed by whichever
+  // itemsByCode map the caller passes in. The committed code only ever
+  // changes via a click on a real Master Inventory entry -- there's no way
+  // to save free-typed text -- so an edit can never point at (or implicitly
+  // create) anything that isn't an existing item.
+  function wireCodePicker(prefix, itemsByCode, i) {
+    const searchEl = document.getElementById(`${prefix}CodeSearch${i}`);
+    const valueEl = document.getElementById(`${prefix}CodeValue${i}`);
+    const resultsEl = document.getElementById(`${prefix}CodeResults${i}`);
+    const descEl = document.getElementById(`${prefix}Desc${i}`);
     if (!searchEl) return;
 
-    const allCodes = [...ciState.itemsByCode.keys()].sort();
+    const allCodes = [...itemsByCode.keys()].sort();
     function renderResults(query) {
       const q = query.trim().toLowerCase();
       const matches = allCodes.filter((code) => {
         if (!q) return true;
         if (code.toLowerCase().includes(q)) return true;
-        const cand = ciState.itemsByCode.get(code)[0];
+        const cand = itemsByCode.get(code)[0];
         return (cand.description || "").toLowerCase().includes(q);
       }).slice(0, 30);
       resultsEl.innerHTML = matches.length
         ? matches.map((code) => {
-            const cand = ciState.itemsByCode.get(code)[0];
+            const cand = itemsByCode.get(code)[0];
             return `<div class="fp-dropdown-option" data-code="${esc(code)}"><span class="code">${esc(code)}</span> — ${esc(cand.description || "")}</div>`;
           }).join("")
         : `<div class="fp-dropdown-empty">No matching Master Inventory item.</div>`;
@@ -963,7 +982,7 @@
       const opt = e.target.closest(".fp-dropdown-option");
       if (!opt) return;
       const code = opt.dataset.code;
-      const cand = ciState.itemsByCode.get(code)[0];
+      const cand = itemsByCode.get(code)[0];
       valueEl.value = code;
       searchEl.value = `${code} — ${cand.description || ""}`;
       descEl.value = cand.description || "";
@@ -1093,7 +1112,7 @@
     document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button").forEach((b) => {
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
-    ciState.rows.forEach((r, i) => { if (r.editing) wireCiCodePicker(i); });
+    ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
     const rateInput = document.getElementById("ciRateInput");
     if (rateInput) {
       rateInput.addEventListener("change", () => {
