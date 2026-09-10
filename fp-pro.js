@@ -647,7 +647,45 @@
     header: null, // {supplier, invoiceNumber, poNumber, isoDate}
     rows: null,
     itemsByCode: null,
+    currency: "AED",
+    exchangeRate: 1, // to AED; null when a non-AED rate hasn't been entered yet
+    ratesByCurrency: null,
   };
+
+  // Currencies this reader looks for on a supplier document. Detection just
+  // counts which of these codes appears most often in the text -- good
+  // enough for a one-currency invoice, and the user can see (and would
+  // notice) if it picked the wrong one since it's shown plainly in the
+  // preview before anything is confirmed.
+  const SUPPORTED_CURRENCIES = ["AED", "AUD", "USD", "EUR", "GBP", "SAR", "QAR", "KWD", "OMR", "BHD"];
+  function detectDocumentCurrency(text) {
+    const re = new RegExp(`\\b(${SUPPORTED_CURRENCIES.join("|")})\\b`, "g");
+    const counts = {};
+    let m;
+    while ((m = re.exec(text)) !== null) counts[m[1]] = (counts[m[1]] || 0) + 1;
+    let best = "AED", bestCount = 0;
+    for (const [cur, n] of Object.entries(counts)) {
+      if (n > bestCount) { best = cur; bestCount = n; }
+    }
+    return best;
+  }
+
+  // Configurable, not invented: AED itself is the only rate ever assumed
+  // (1 AED = 1 AED). Every other currency's rate comes from what a user
+  // actually entered on a previous Check-in (checkin_transaction() upserts
+  // it), or is left unset until someone enters it here.
+  async function loadExchangeRates() {
+    const { data, error } = await sb.from("exchange_rates").select("*");
+    if (error) throw new Error("Could not load exchange rates: " + error.message);
+    const map = new Map();
+    for (const row of data) map.set(row.currency, Number(row.rate_to_aed));
+    return map;
+  }
+
+  function genericMoney(n, code) {
+    if (n === null || n === undefined || isNaN(n)) return "—";
+    return `${code} ` + fmt(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
 
   // Matches the numbered line-item rows of a Commercial Invoice table, e.g.
   // "6 230034 Each 200 0.58 0.00 116.00 392530" -> Ln, Part Number, Units,
@@ -765,11 +803,18 @@
     row.itemId = item.id;
   }
 
+  function ciRate() {
+    return ciState.currency === "AED" ? 1 : (ciState.exchangeRate || null);
+  }
+
   function ciTally() {
     const active = ciState.rows.filter((r) => r.action === "add");
+    const rate = ciRate();
+    const totalValueOriginal = active.reduce((s, r) => s + r.qty * (r.invoiceUnitCost || 0), 0);
     return {
       totalItems: active.length,
-      totalValue: active.reduce((s, r) => s + r.qty * (r.invoiceUnitCost || 0), 0),
+      totalValueOriginal,
+      totalValueAed: rate ? totalValueOriginal * rate : null,
       unresolved: ciState.rows.filter((r) => !r.decided).length,
       skipped: ciState.rows.filter((r) => r.decided && r.action === "skip").length,
     };
@@ -807,38 +852,99 @@
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
     else if (act === "save-edit") {
-      const codeEl = document.getElementById(`ciEditCode${idx}`);
-      const descEl = document.getElementById(`ciEditDesc${idx}`);
+      // The code can only ever be a value the dropdown picker committed
+      // (ciEditCodeValue) -- never free-typed text -- so a save can never
+      // resolve to anything but an existing Master Inventory record.
+      const codeValueEl = document.getElementById(`ciEditCodeValue${idx}`);
       const qtyEl = document.getElementById(`ciEditQty${idx}`);
       const unitEl = document.getElementById(`ciEditUnit${idx}`);
-      const newCode = codeEl.value.trim();
+      const newCode = codeValueEl ? codeValueEl.value.trim() : "";
       const newQty = parseFloat(qtyEl.value);
-      if (!newCode || !isFinite(newQty) || newQty <= 0) {
-        ciStatus("Edit needs a code and a quantity greater than zero.", "err");
+      if (!newCode) {
+        ciStatus("Select an item from the Master Inventory list before saving.", "err");
         return;
       }
-      recomputeCiRowAfterEdit(r, newCode, descEl.value.trim(), newQty, unitEl.value.trim() || r.unit);
+      if (!isFinite(newQty) || newQty <= 0) {
+        ciStatus("Enter a quantity greater than zero.", "err");
+        return;
+      }
+      recomputeCiRowAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
       r.editing = false;
     }
     ciRender();
   }
 
+  // Renders the Master Inventory code picker for an editing row: a search
+  // box plus a click-to-select results list. The committed code only ever
+  // changes via a click on a real Master Inventory entry -- there is no way
+  // to save free-typed text, so a Check-in edit can never point at (or
+  // implicitly create) anything that isn't an existing item.
+  function wireCiCodePicker(i) {
+    const searchEl = document.getElementById(`ciEditCodeSearch${i}`);
+    const valueEl = document.getElementById(`ciEditCodeValue${i}`);
+    const resultsEl = document.getElementById(`ciEditCodeResults${i}`);
+    const descEl = document.getElementById(`ciEditDesc${i}`);
+    if (!searchEl) return;
+
+    const allCodes = [...ciState.itemsByCode.keys()].sort();
+    function renderResults(query) {
+      const q = query.trim().toLowerCase();
+      const matches = allCodes.filter((code) => {
+        if (!q) return true;
+        if (code.toLowerCase().includes(q)) return true;
+        const cand = ciState.itemsByCode.get(code)[0];
+        return (cand.description || "").toLowerCase().includes(q);
+      }).slice(0, 30);
+      resultsEl.innerHTML = matches.length
+        ? matches.map((code) => {
+            const cand = ciState.itemsByCode.get(code)[0];
+            return `<div class="fp-dropdown-option" data-code="${esc(code)}"><span class="code">${esc(code)}</span> — ${esc(cand.description || "")}</div>`;
+          }).join("")
+        : `<div class="fp-dropdown-empty">No matching Master Inventory item.</div>`;
+      resultsEl.hidden = false;
+    }
+
+    searchEl.addEventListener("focus", () => renderResults(searchEl.value));
+    searchEl.addEventListener("input", () => { valueEl.value = ""; renderResults(searchEl.value); });
+    searchEl.addEventListener("blur", () => { setTimeout(() => { resultsEl.hidden = true; }, 150); });
+    // mousedown (not click) so it fires before the search box's blur closes the list.
+    resultsEl.addEventListener("mousedown", (e) => {
+      const opt = e.target.closest(".fp-dropdown-option");
+      if (!opt) return;
+      const code = opt.dataset.code;
+      const cand = ciState.itemsByCode.get(code)[0];
+      valueEl.value = code;
+      searchEl.value = `${code} — ${cand.description || ""}`;
+      descEl.value = cand.description || "";
+      resultsEl.hidden = true;
+    });
+  }
+
   function ciRender() {
     const t = ciTally();
+    const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
+    const cur = ciState.currency;
 
     const rowsHtml = ciState.rows.map((r, i) => {
       if (r.editing) {
+        const codeLabel = r.itemId ? `${esc(r.code)} — ${esc(r.description)}` : "";
         return `<tr class="fp-editing">
-          <td><input class="fp-inline-input" id="ciEditCode${i}" type="text" value="${esc(r.code)}"></td>
-          <td><input class="fp-inline-input" id="ciEditDesc${i}" type="text" value="${esc(r.description)}"></td>
+          <td class="fp-code-picker">
+            <input class="fp-inline-input" id="ciEditCodeSearch${i}" type="text" value="${codeLabel}"
+              placeholder="Type to search Master Inventory" autocomplete="off">
+            <input type="hidden" id="ciEditCodeValue${i}" value="${r.itemId ? esc(r.code) : ""}">
+            <div class="fp-dropdown-results" id="ciEditCodeResults${i}" hidden></div>
+          </td>
+          <td><input class="fp-inline-input" id="ciEditDesc${i}" type="text" value="${esc(r.description)}" readonly></td>
           <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
           <td class="num">
             <input class="fp-inline-input fp-inline-input-num" id="ciEditQty${i}" type="number" step="any" min="0" value="${r.qty}">
             <input class="fp-inline-input fp-inline-input-unit" id="ciEditUnit${i}" type="text" value="${esc(r.unit)}">
           </td>
           <td class="num">—</td>
-          <td class="num">${money(r.invoiceUnitCost)}</td>
+          <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+          <td class="num">—</td>
           <td class="small muted">Editing…</td>
           <td><div class="fp-row-actions">
             <button data-act="save-edit" data-i="${i}" class="on">Save</button>
@@ -848,13 +954,15 @@
       }
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
+      const aedValue = rate ? r.qty * (r.invoiceUnitCost || 0) * rate : null;
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}</td>
         <td>${esc(r.description)}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">+${fmt(r.qty)} ${esc(r.unit)}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
-        <td class="num">${money(r.invoiceUnitCost)}</td>
+        <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+        <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${statusChip(displayStatus)}</td>
         <td>${ciRenderRowActionButtons(i, r)}</td>
       </tr>`;
@@ -864,17 +972,34 @@
       <h4>${unmatched} item${unmatched === 1 ? "" : "s"} need${unmatched === 1 ? "s" : ""} a decision</h4>
       <ul>
         <li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
-          Not checked in; click Edit to correct the code, or Acknowledge to confirm you've seen it.
+          Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
+          to confirm you've seen it. A new Master Inventory item is never created from here.
           <span class="fp-batch-actions">
             <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
           </span></li>
       </ul>
     </div>` : "";
 
+    const currencyCard = cur === "AED"
+      ? `<div class="fp-currency-card"><div class="fp-currency-note">Document is already in AED — no conversion needed.</div></div>`
+      : `<div class="fp-currency-card">
+          <div><label class="field-label">Document currency</label><strong>${esc(cur)}</strong></div>
+          <div>
+            <label class="field-label" for="ciRateInput">Exchange rate (1 ${esc(cur)} = ? AED)</label>
+            <input id="ciRateInput" type="number" step="any" min="0" value="${rate != null ? rate : ""}" placeholder="e.g. 2.45">
+          </div>
+          <div><label class="field-label">Invoice total (${esc(cur)})</label><strong>${genericMoney(t.totalValueOriginal, cur)}</strong></div>
+          <div><label class="field-label">AED inventory value</label><strong>${t.totalValueAed != null ? money(t.totalValueAed) : "—"}</strong></div>
+          <div class="fp-currency-note">${ciState.ratesByCurrency && ciState.ratesByCurrency.has(cur)
+            ? `Prefilled from the last ${esc(cur)} rate entered — check it's still current before confirming.`
+            : `No exchange rate on file for ${esc(cur)} yet — enter the current rate to continue.`}</div>
+        </div>`;
+
     $("#ciOut").innerHTML = `
+      ${currencyCard}
       <div class="fp-tally">
         <div class="fp-tally-item"><strong>${t.totalItems}</strong><span>Items to check in</span></div>
-        <div class="fp-tally-item"><strong>${money(t.totalValue)}</strong><span>Invoice value</span></div>
+        <div class="fp-tally-item"><strong>${t.totalValueAed != null ? money(t.totalValueAed) : "—"}</strong><span>AED inventory value</span></div>
         <div class="fp-tally-item"><strong>${t.skipped}</strong><span>Skipped</span></div>
         <div class="fp-tally-item"><strong>${t.unresolved}</strong><span>Unresolved</span></div>
       </div>
@@ -887,30 +1012,41 @@
             <th class="num">Current stock</th>
             <th class="num">Check-in qty</th>
             <th class="num">New stock</th>
-            <th class="num">Unit cost</th>
+            <th class="num">Unit cost (${esc(cur)})</th>
+            <th class="num">Value (AED)</th>
             <th>Status</th><th>Action</th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been added yet.
-      The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
+      The confirm button unlocks once every unmatched row has been edited or acknowledged${cur !== "AED" ? " and the exchange rate is entered" : ""}.</p>
     `;
 
     const canConfirm =
       t.unresolved === 0 &&
       t.totalItems > 0 &&
       !ciState.rows.some((r) => r.editing) &&
+      !!rate &&
       !!$("#ciSupplier").value.trim() &&
       !!$("#ciInvoiceNumber").value.trim();
     $("#ciConfirmSummary").textContent =
-      `${t.totalItems} items · ${money(t.totalValue)}` + (t.skipped ? ` · ${t.skipped} skipped` : "");
+      `${t.totalItems} items · ${t.totalValueAed != null ? money(t.totalValueAed) : "—"}` + (t.skipped ? ` · ${t.skipped} skipped` : "");
     $("#ciConfirmBar").hidden = false;
     $("#ciConfirm").disabled = !canConfirm;
 
     document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button").forEach((b) => {
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
+    ciState.rows.forEach((r, i) => { if (r.editing) wireCiCodePicker(i); });
+    const rateInput = document.getElementById("ciRateInput");
+    if (rateInput) {
+      rateInput.addEventListener("change", () => {
+        const v = parseFloat(rateInput.value);
+        ciState.exchangeRate = isFinite(v) && v > 0 ? v : null;
+        ciRender();
+      });
+    }
   }
 
   async function ciConfirm() {
@@ -918,9 +1054,17 @@
     const invoiceNumber = $("#ciInvoiceNumber").value.trim();
     const poNumber = $("#ciPoNumber").value.trim();
     const docDate = $("#ciDocDate").value || null;
+    const rate = ciRate();
+    if (ciState.currency !== "AED" && !(rate > 0)) {
+      throw new Error("Enter the exchange rate before confirming.");
+    }
     const lines = ciState.rows
       .filter((r) => r.action === "add" && r.itemId)
-      .map((r) => ({ item_id: r.itemId, quantity: r.qty, unit: r.unit, unit_cost: r.invoiceUnitCost || null }));
+      .map((r) => ({
+        item_id: r.itemId, quantity: r.qty, unit: r.unit,
+        unit_cost: (r.invoiceUnitCost || 0) * rate,
+        original_unit_cost: r.invoiceUnitCost || null,
+      }));
 
     const res = await fetch(CHECKIN_FN_URL, {
       method: "POST",
@@ -933,6 +1077,7 @@
         supplier, invoice_number: invoiceNumber, po_number: poNumber, document_date: docDate,
         pdf_hash: ciState.pdfHash,
         source_document_name: ciState.pdfFile ? ciState.pdfFile.name : null,
+        currency: ciState.currency, exchange_rate: rate,
         lines,
       }),
     });
@@ -946,11 +1091,14 @@
     }
 
     $("#ciConfirmBar").hidden = true;
+    const currencyNote = ciState.currency !== "AED"
+      ? ` Converted from ${esc(ciState.currency)} at a rate of 1 ${esc(ciState.currency)} = ${rate} AED.`
+      : "";
     $("#ciDone").innerHTML = `
       <div class="fp-done">
         <h3>Check-in confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} added</h3>
         <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
-        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.</p>
+        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}</p>
         <div class="fp-done-actions">
           <button class="ghost" id="ciNew">Start another Check-in</button>
         </div>
@@ -964,14 +1112,18 @@
     btn.disabled = true;
     ciStatus("Reading the document and matching items against the Master Inventory…");
     try {
-      const [pdfText, itemsByCode, hash] = await Promise.all([
+      const [pdfText, itemsByCode, hash, ratesByCurrency] = await Promise.all([
         extractPdfText(ciState.pdfFile),
         loadInventoryItems(),
         pdfFingerprint(ciState.pdfFile),
+        loadExchangeRates(),
       ]);
       ciState.itemsByCode = itemsByCode;
       ciState.pdfHash = hash;
       ciState.header = parseCheckinHeader(pdfText);
+      ciState.ratesByCurrency = ratesByCurrency;
+      ciState.currency = detectDocumentCurrency(pdfText);
+      ciState.exchangeRate = ciState.currency === "AED" ? 1 : (ratesByCurrency.get(ciState.currency) || null);
 
       const sEl = $("#ciSupplier"), iEl = $("#ciInvoiceNumber"), pEl = $("#ciPoNumber"), dEl = $("#ciDocDate");
       if (!sEl.value.trim() && ciState.header.supplier) sEl.value = ciState.header.supplier;
@@ -989,7 +1141,7 @@
       ciRender();
 
       const t = ciTally();
-      ciStatus(`Analysis ready — ${lines.length} line${lines.length === 1 ? "" : "s"} found, ${t.unresolved} need decisions.`);
+      ciStatus(`Analysis ready — ${lines.length} line${lines.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.`);
     } catch (err) {
       console.error(err);
       ciStatus("Could not analyse the document: " + err.message, "err");
@@ -1001,6 +1153,7 @@
   function ciResetAll() {
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
+    ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     $("#ciPdf").value = "";
     $("#ciPdfName").textContent = "Click or drop the PDF file here";
     $("#ciDrop").classList.remove("ready");
