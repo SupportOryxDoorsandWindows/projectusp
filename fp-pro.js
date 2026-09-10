@@ -648,7 +648,9 @@
     rows: null,
     itemsByCode: null,
     currency: "AED",
-    exchangeRate: 1, // to AED; null when a non-AED rate hasn't been entered yet
+    exchangeRate: 1, // to AED; null when no rate is available yet (API + cache both empty)
+    rateDate: null, // the date the fetched rate is "as of" (API's own date, not the invoice date)
+    rateSource: "n/a", // 'api-dated' | 'api-latest' | 'api-latest-fallback' | 'cache-fallback' | 'manual' | 'unavailable' | 'n/a'
     ratesByCurrency: null,
   };
 
@@ -670,17 +672,66 @@
     return best;
   }
 
-  // Configurable, not invented: AED itself is the only rate ever assumed
-  // (1 AED = 1 AED). Every other currency's rate comes from what a user
-  // actually entered on a previous Check-in (checkin_transaction() upserts
-  // it), or is left unset until someone enters it here.
+  // exchange_rates is a resilience cache, not the source of truth: it's
+  // updated automatically after every successful Check-in (see
+  // checkin_transaction()) with whatever rate was actually used -- API or
+  // manual -- so if the live API is briefly unreachable there's a last-known
+  // value to offer instead of leaving the user with nothing. It is never
+  // the first place we look.
   async function loadExchangeRates() {
     const { data, error } = await sb.from("exchange_rates").select("*");
     if (error) throw new Error("Could not load exchange rates: " + error.message);
     const map = new Map();
-    for (const row of data) map.set(row.currency, Number(row.rate_to_aed));
+    for (const row of data) map.set(row.currency, { rate: Number(row.rate_to_aed), asOf: row.updated_at });
     return map;
   }
+
+  // https://github.com/fawazahmed0/exchange-api -- free, no API key. Each
+  // release is tagged by date, so requesting a specific date's version
+  // gives that date's historical rate; "latest" gives today's. No rate is
+  // ever hard-coded here -- if both the dated and latest requests fail (or
+  // the currency isn't in the response), this returns null and the caller
+  // must flag the transaction rather than invent a number.
+  async function fetchRateFromApi(currencyCode, version) {
+    const cur = currencyCode.toLowerCase();
+    const url = `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${version}/v1/currencies/${cur}.json`;
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      return null; // network failure -- not the same as "currency doesn't exist", but treated the same: don't guess
+    }
+    if (!res.ok) return null;
+    let data;
+    try { data = await res.json(); } catch { return null; }
+    const rate = data && data[cur] && typeof data[cur].aed === "number" ? data[cur].aed : null;
+    if (rate == null) return null;
+    return { rate, rateDate: data.date || null };
+  }
+
+  // Tries the invoice's own document date first (per spec: use the
+  // date-specific rate for historical invoices, not today's), falls back to
+  // "latest" only if that specific date isn't published, and reports which
+  // path was actually taken so the preview can say so plainly.
+  async function fetchCheckinExchangeRate(currencyCode, isoDocDate) {
+    if (isoDocDate) {
+      const dated = await fetchRateFromApi(currencyCode, isoDocDate);
+      if (dated) return { ...dated, source: "api-dated" };
+    }
+    const latest = await fetchRateFromApi(currencyCode, "latest");
+    if (latest) return { ...latest, source: isoDocDate ? "api-latest-fallback" : "api-latest" };
+    return null;
+  }
+
+  const RATE_SOURCE_LABEL = {
+    "api-dated": "currency-api",
+    "api-latest": "currency-api (latest)",
+    "api-latest-fallback": "currency-api (latest — historical rate for the invoice date wasn't available)",
+    "cache-fallback": "last rate on file — the currency API was unavailable",
+    "manual": "entered manually",
+    "unavailable": "unavailable",
+    "n/a": "n/a",
+  };
 
   function genericMoney(n, code) {
     if (n === null || n === undefined || isNaN(n)) return "—";
@@ -980,19 +1031,23 @@
       </ul>
     </div>` : "";
 
+    const rateDateNote = ciState.rateDate ? ` (rate date ${esc(ciState.rateDate)})` : "";
+    const sourceLabel = RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource;
     const currencyCard = cur === "AED"
       ? `<div class="fp-currency-card"><div class="fp-currency-note">Document is already in AED — no conversion needed.</div></div>`
       : `<div class="fp-currency-card">
-          <div><label class="field-label">Document currency</label><strong>${esc(cur)}</strong></div>
+          <div><label class="field-label">Original currency</label><strong>${esc(cur)}</strong></div>
+          <div><label class="field-label">Original amount</label><strong>${genericMoney(t.totalValueOriginal, cur)}</strong></div>
           <div>
             <label class="field-label" for="ciRateInput">Exchange rate (1 ${esc(cur)} = ? AED)</label>
             <input id="ciRateInput" type="number" step="any" min="0" value="${rate != null ? rate : ""}" placeholder="e.g. 2.45">
           </div>
-          <div><label class="field-label">Invoice total (${esc(cur)})</label><strong>${genericMoney(t.totalValueOriginal, cur)}</strong></div>
-          <div><label class="field-label">AED inventory value</label><strong>${t.totalValueAed != null ? money(t.totalValueAed) : "—"}</strong></div>
-          <div class="fp-currency-note">${ciState.ratesByCurrency && ciState.ratesByCurrency.has(cur)
-            ? `Prefilled from the last ${esc(cur)} rate entered — check it's still current before confirming.`
-            : `No exchange rate on file for ${esc(cur)} yet — enter the current rate to continue.`}</div>
+          <div><label class="field-label">AED amount</label><strong>${t.totalValueAed != null ? money(t.totalValueAed) : "—"}</strong></div>
+          <div class="fp-currency-note">${
+            ciState.rateSource === "unavailable"
+              ? `Could not retrieve an exchange rate for ${esc(cur)} from the currency API, and none is on file — flagged for review. Enter the current rate to continue.`
+              : `Rate source: ${esc(sourceLabel)}${rateDateNote}. ${ciState.rateSource === "cache-fallback" || ciState.rateSource === "api-latest-fallback" ? "Check it's still current before confirming." : ""}`
+          }</div>
         </div>`;
 
     $("#ciOut").innerHTML = `
@@ -1044,6 +1099,8 @@
       rateInput.addEventListener("change", () => {
         const v = parseFloat(rateInput.value);
         ciState.exchangeRate = isFinite(v) && v > 0 ? v : null;
+        ciState.rateSource = "manual";
+        ciState.rateDate = null;
         ciRender();
       });
     }
@@ -1078,6 +1135,7 @@
         pdf_hash: ciState.pdfHash,
         source_document_name: ciState.pdfFile ? ciState.pdfFile.name : null,
         currency: ciState.currency, exchange_rate: rate,
+        rate_date: ciState.rateDate, rate_source: ciState.rateSource,
         lines,
       }),
     });
@@ -1092,7 +1150,7 @@
 
     $("#ciConfirmBar").hidden = true;
     const currencyNote = ciState.currency !== "AED"
-      ? ` Converted from ${esc(ciState.currency)} at a rate of 1 ${esc(ciState.currency)} = ${rate} AED.`
+      ? ` Converted from ${esc(ciState.currency)} at a rate of 1 ${esc(ciState.currency)} = ${rate} AED (${esc(RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource)}${ciState.rateDate ? `, rate date ${esc(ciState.rateDate)}` : ""}).`
       : "";
     $("#ciDone").innerHTML = `
       <div class="fp-done">
@@ -1123,13 +1181,33 @@
       ciState.header = parseCheckinHeader(pdfText);
       ciState.ratesByCurrency = ratesByCurrency;
       ciState.currency = detectDocumentCurrency(pdfText);
-      ciState.exchangeRate = ciState.currency === "AED" ? 1 : (ratesByCurrency.get(ciState.currency) || null);
 
       const sEl = $("#ciSupplier"), iEl = $("#ciInvoiceNumber"), pEl = $("#ciPoNumber"), dEl = $("#ciDocDate");
       if (!sEl.value.trim() && ciState.header.supplier) sEl.value = ciState.header.supplier;
       if (!iEl.value.trim() && ciState.header.invoiceNumber) iEl.value = ciState.header.invoiceNumber;
       if (!pEl.value.trim() && ciState.header.poNumber) pEl.value = ciState.header.poNumber;
       if (!dEl.value && ciState.header.isoDate) dEl.value = ciState.header.isoDate;
+
+      if (ciState.currency === "AED") {
+        ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+      } else {
+        ciStatus(`Reading the document and fetching the ${ciState.currency}→AED exchange rate…`);
+        const fetched = await fetchCheckinExchangeRate(ciState.currency, dEl.value || null);
+        if (fetched) {
+          ciState.exchangeRate = fetched.rate;
+          ciState.rateDate = fetched.rateDate;
+          ciState.rateSource = fetched.source;
+        } else {
+          const cached = ratesByCurrency.get(ciState.currency);
+          if (cached) {
+            ciState.exchangeRate = cached.rate;
+            ciState.rateDate = cached.asOf ? String(cached.asOf).slice(0, 10) : null;
+            ciState.rateSource = "cache-fallback";
+          } else {
+            ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "unavailable";
+          }
+        }
+      }
 
       const lines = parseCommercialInvoiceLines(pdfText);
       if (!lines.length) {
@@ -1141,7 +1219,10 @@
       ciRender();
 
       const t = ciTally();
-      ciStatus(`Analysis ready — ${lines.length} line${lines.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.`);
+      const rateNote = ciState.currency !== "AED"
+        ? (ciState.exchangeRate ? ` Exchange rate sourced from ${RATE_SOURCE_LABEL[ciState.rateSource]}.` : " Exchange rate unavailable — flagged for review.")
+        : "";
+      ciStatus(`Analysis ready — ${lines.length} line${lines.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}`);
     } catch (err) {
       console.error(err);
       ciStatus("Could not analyse the document: " + err.message, "err");
@@ -1154,6 +1235,7 @@
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
     ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
+    ciState.rateDate = null; ciState.rateSource = "n/a";
     $("#ciPdf").value = "";
     $("#ciPdfName").textContent = "Click or drop the PDF file here";
     $("#ciDrop").classList.remove("ready");
