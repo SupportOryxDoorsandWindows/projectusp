@@ -816,11 +816,169 @@
   function parseCheckinHeader(text) {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     const supplier = lines.find((l) => /pty ltd|llc|inc\.?$|company|screens|trading|industries/i.test(l)) || "";
-    const invoiceNumber = (text.match(/\b(?:SI|SO|INV|DN)-\d+\b/i) || [])[0] || "";
+    // SQ- covers Quotes/Order Approvals (Quote Number), alongside the
+    // existing Commercial Invoice / delivery note prefixes.
+    const invoiceNumber = (text.match(/\b(?:SI|SO|SQ|INV|DN)-\d+\b/i) || [])[0] || "";
     const poNumber = (text.match(/\bPO-[\w-]+\b/i) || [])[0] || "";
     const dm = text.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
     const isoDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
     return { supplier, invoiceNumber, poNumber, isoDate };
+  }
+
+  // --- Additional Check-in document layouts (Quotes, Order Approvals) ----
+  //
+  // Suppliers don't all use the Commercial Invoice's column order. The three
+  // extra layouts below were reverse-engineered from real supplier PDFs and
+  // share a structural quirk: their table is rendered in *reverse* column
+  // order in the PDF's text layer (Total ... Code Ln instead of Ln ... Code
+  // Total), even though the table reads left-to-right when the PDF is
+  // viewed. Each format below is defined by a regex anchored at both ends of
+  // the line -- the leading numeric/price fields and the trailing "<code>
+  // <line number>" pair -- with the description captured in between. This
+  // never invents a value: every field is read verbatim from the document;
+  // an unrecognised layout simply produces zero matches for these formats,
+  // same as it always has for the Commercial Invoice reader.
+  //
+  // "Ln" is deliberately kept small (1-3 digits) and "Code" is required to
+  // look like a product code (3-15 letters/digits/hyphens, no spaces) --
+  // narrow enough that ordinary prose elsewhere in the document (terms and
+  // conditions, signature blocks, page numbers) doesn't accidentally match.
+  const QUOTE_CODE_RE = "[A-Za-z0-9-]{3,15}";
+  const QUOTE_LN_RE = "\\d{1,3}";
+
+  const CHECKIN_FORMATS = [
+    {
+      // Existing Commercial Invoice reader -- untouched. Always tried
+      // first, so this format's behaviour can never regress.
+      id: "commercial-invoice",
+      label: "Commercial Invoice",
+      lineRe: CI_LINE_RE,
+      extract: (m) => ({ ln: parseInt(m[1], 10), code: m[2], unit: m[3], qty: parseInt(m[4], 10), unitCost: parseFloat(m[5].replace(/,/g, "")) }),
+    },
+    {
+      // "Total | Discounted Price | Discount % | Price | Qty | Description | Code | Ln"
+      // e.g. "306.50 6.13 0% 6.13 50 ZLS1 End Cap 60 A WHT 3300 1"
+      id: "quote-discount",
+      label: "Quote (with Discount %)",
+      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})\\s+(.+?)\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+      // A wrapped description pushes the code/line number onto a later
+      // physical line -- this matches just the numeric prefix, so the row
+      // can still be recovered by stitching it to the terminal code/line
+      // that follows (see stitchWrappedRows below), instead of being lost.
+      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})$`),
+      orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseInt(m[3], 10) }),
+    },
+    {
+      // "Total | Tax % | Price | Qty | Description | Code | Ln"
+      // e.g. "116.00 0% 0.58 200 SMB1 Slide Lock WHT 230034 1"
+      id: "quote-tax",
+      label: "Quote (with Tax %)",
+      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})\\s+(.+?)\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})$`),
+      orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseInt(m[3], 10) }),
+    },
+    {
+      // "Units | Qty | Description | Code | Ln" -- no pricing at all (e.g. a
+      // signed Order Approval). unitCost is left undefined; the preview
+      // shows "—" for cost/value on these rows rather than a fabricated 0.
+      id: "order-approval",
+      label: "Order Approval (no pricing)",
+      lineRe: new RegExp(`^(\\S+)\\s+(\\d{1,6})\\s+(.+?)\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      extract: (m) => ({ unit: m[1], qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+    },
+  ];
+
+  // Recovers rows whose description wrapped across multiple physical lines,
+  // splitting "<numbers> <description> <code> <ln>" into a numbers-only line
+  // followed by one or more description lines and a final "<code> <ln>"
+  // line. Only stitches when a clean terminal line is found within a few
+  // lines -- if it can't confidently find where the row ends, it leaves
+  // that row unextracted rather than guessing.
+  function stitchWrappedRows(rawLines, format) {
+    if (!format.orphanRe) return { rows: [], usedIdx: new Set() };
+    const termRe = new RegExp(`^(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`);
+    const rows = [];
+    const usedIdx = new Set();
+    for (let i = 0; i < rawLines.length; i++) {
+      const raw = rawLines[i].trim();
+      const om = raw.match(format.orphanRe);
+      if (!om) continue;
+      const descParts = [];
+      let term = null;
+      for (let j = i + 1; j < Math.min(i + 6, rawLines.length); j++) {
+        const l2 = rawLines[j].trim();
+        const tm = l2.match(termRe);
+        if (tm) { term = { code: tm[1], ln: parseInt(tm[2], 10), endIdx: j }; break; }
+        if (l2) descParts.push(l2);
+      }
+      if (!term) continue;
+      usedIdx.add(i);
+      for (let k = i + 1; k <= term.endIdx; k++) usedIdx.add(k);
+      rows.push({ ...format.orphanExtract(om), description: descParts.join(" ").trim(), code: term.code, ln: term.ln });
+    }
+    return { rows, usedIdx };
+  }
+
+  // Tries every known Check-in document layout and uses whichever produces
+  // the most matched rows -- this is the "recognise the document's actual
+  // structure" step. Zero rows across every format means the document isn't
+  // one this reader recognises; the caller must not fabricate anything from
+  // that and must show a clear message instead.
+  function parseCheckinDocument(text) {
+    const rawLines = text.split("\n");
+    let best = { formatId: null, formatLabel: null, entries: [] };
+    for (const format of CHECKIN_FORMATS) {
+      const entries = [];
+      const usedIdx = new Set();
+      rawLines.forEach((raw, i) => {
+        const m = raw.trim().match(format.lineRe);
+        if (!m) return;
+        entries.push(format.extract(m));
+        usedIdx.add(i);
+      });
+      const { rows: wrapped } = stitchWrappedRows(rawLines, format);
+      entries.push(...wrapped);
+      if (entries.length > best.entries.length) best = { formatId: format.id, formatLabel: format.label, entries };
+    }
+    if (!best.entries.length) return best;
+
+    // The same genuine item can appear twice on one document -- sum rather
+    // than overwrite. Description is included in the key deliberately: a
+    // short/truncated code (see the Quote-with-Discount% sample) can be
+    // shared by many genuinely different products, and merging purely by
+    // code would silently blend their quantities into one fabricated total
+    // under whichever description happened to be seen first -- exactly the
+    // kind of wrong guess this reader must not produce. Requiring the
+    // description to match too means only truly identical lines merge.
+    const byKey = new Map();
+    for (const e of best.entries) {
+      const key = `${e.code}|${e.unit || ""}|${e.description || ""}`;
+      const cur = byKey.get(key);
+      if (cur) { cur.qty += e.qty; if (Number.isInteger(e.ln)) cur.lns.push(e.ln); }
+      else byKey.set(key, { ...e, lns: Number.isInteger(e.ln) ? [e.ln] : [] });
+    }
+    best.entries = [...byKey.values()];
+
+    // No silent gaps: if this format's rows carry a line number and the
+    // sequence has a hole (e.g. Ln 1-19, 21-34 but no 20), that specific
+    // line failed to parse -- usually because its own layout broke the
+    // pattern in some unexpected way (a value wrapped mid-token, an extra
+    // blank line). Rather than the row just quietly not existing, say so.
+    // (Merged duplicate lines keep every one of their original Ln numbers
+    // in `lns`, so a legitimate merge is never mistaken for a parse gap.)
+    const lns = best.entries.flatMap((e) => e.lns);
+    if (lns.length) {
+      const seen = new Set(lns);
+      const maxLn = Math.max(...lns);
+      const missing = [];
+      for (let n = 1; n <= maxLn; n++) if (!seen.has(n)) missing.push(n);
+      best.missingLnNumbers = missing;
+    } else {
+      best.missingLnNumbers = [];
+    }
+    return best;
   }
 
   function buildCheckinRows(lines, descriptions, itemsByCode) {
@@ -828,23 +986,31 @@
     lines.forEach((l, i) => {
       const candidates = itemsByCode.get(l.code) || [];
       const item = pickInventoryRow({ kind: "checkin" }, candidates);
-      const pdfDescription = descriptions.length === lines.length ? descriptions[i] : "";
+      // Description comes straight from the row parser when that format
+      // captures it inline (every non-Commercial-Invoice format); only the
+      // Commercial Invoice reader relies on the separate description block.
+      const pdfDescription = l.description || (descriptions.length === lines.length ? descriptions[i] : "");
+      // A very short code (<=4 chars) that still didn't match anything is
+      // worth calling out explicitly -- real Master Inventory codes are
+      // 5-6 digits, so this is a strong hint the source document truncated
+      // its own Code column rather than this reader mis-parsing it.
+      const truncatedHint = !item && l.code && l.code.length <= 4;
       if (!item) {
         rows.push({
-          code: l.code, description: pdfDescription, unit: l.unit, qty: l.qty,
+          code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
           current: null, newQty: null,
           status: "unmatched", action: "pending", decided: false,
-          itemId: null, editing: false,
+          itemId: null, editing: false, truncatedHint,
         });
         return;
       }
       rows.push({
-        code: l.code, description: item.description || pdfDescription, unit: l.unit, qty: l.qty,
+        code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
         invoiceUnitCost: l.unitCost,
         current: item.current_qty, newQty: item.current_qty + l.qty,
         status: "ok", action: "add", decided: true,
-        itemId: item.id, editing: false,
+        itemId: item.id, editing: false, truncatedHint: false,
       });
     });
     return rows;
@@ -1024,10 +1190,13 @@
       }
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
-      const aedValue = rate ? r.qty * (r.invoiceUnitCost || 0) * rate : null;
+      const aedValue = rate && r.invoiceUnitCost != null ? r.qty * r.invoiceUnitCost * rate : null;
+      const truncatedNote = r.truncatedHint && r.status === "unmatched"
+        ? `<div class="small muted" style="color:var(--danger)">Code looks unusually short — the source document may have truncated it. Don't guess the rest; pick the right item from the list if you can confirm it, or leave unmatched.</div>`
+        : "";
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}</td>
-        <td>${esc(r.description)}</td>
+        <td>${esc(r.description)}${truncatedNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">+${fmt(r.qty)} ${esc(r.unit)}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
@@ -1138,8 +1307,11 @@
       .filter((r) => r.action === "add" && r.itemId)
       .map((r) => ({
         item_id: r.itemId, quantity: r.qty, unit: r.unit,
-        unit_cost: (r.invoiceUnitCost || 0) * rate,
-        original_unit_cost: r.invoiceUnitCost || null,
+        // No document price (e.g. an Order Approval) -- send null, not a
+        // fabricated 0, so checkin_transaction() falls back to the Master
+        // Inventory's own unit_cost instead of recording a false free cost.
+        unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
+        original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
       }));
 
     const res = await fetch(CHECKIN_FN_URL, {
@@ -1207,6 +1379,17 @@
       if (!pEl.value.trim() && ciState.header.poNumber) pEl.value = ciState.header.poNumber;
       if (!dEl.value && ciState.header.isoDate) dEl.value = ciState.header.isoDate;
 
+      // Tries every known layout (Commercial Invoice, Quote variants, Order
+      // Approval) and reads whichever one actually matches -- see
+      // parseCheckinDocument() above. Checked before touching the currency
+      // API: an unrecognised document should fail fast with a clear message,
+      // not spend a network round-trip first.
+      const doc = parseCheckinDocument(pdfText);
+      if (!doc.entries.length) {
+        ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
+        return;
+      }
+
       if (ciState.currency === "AED") {
         ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
       } else {
@@ -1228,20 +1411,23 @@
         }
       }
 
-      const lines = parseCommercialInvoiceLines(pdfText);
-      if (!lines.length) {
-        ciStatus("Could not find any line-item rows in this document — it may use a layout this reader doesn't recognise yet.", "err");
-        return;
-      }
-      const descriptions = parseCommercialInvoiceDescriptions(pdfText, lines.length);
-      ciState.rows = buildCheckinRows(lines, descriptions, itemsByCode);
+      // Commercial Invoice descriptions live in a separate block of the PDF
+      // (see parseCommercialInvoiceDescriptions above); every other format
+      // captures its description inline, directly on each entry already.
+      const descriptions = doc.formatId === "commercial-invoice"
+        ? parseCommercialInvoiceDescriptions(pdfText, doc.entries.length)
+        : [];
+      ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode);
       ciRender();
 
       const t = ciTally();
       const rateNote = ciState.currency !== "AED"
         ? (ciState.exchangeRate ? ` Exchange rate sourced from ${RATE_SOURCE_LABEL[ciState.rateSource]}.` : " Exchange rate unavailable — flagged for review.")
         : "";
-      ciStatus(`Analysis ready — ${lines.length} line${lines.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}`);
+      const gapNote = doc.missingLnNumbers && doc.missingLnNumbers.length
+        ? ` Could not reliably read line${doc.missingLnNumbers.length === 1 ? "" : "s"} ${doc.missingLnNumbers.join(", ")} from the document — check it manually; nothing was guessed for ${doc.missingLnNumbers.length === 1 ? "it" : "them"}.`
+        : "";
+      ciStatus(`Analysis ready — read as ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}`);
     } catch (err) {
       console.error(err);
       ciStatus("Could not analyse the document: " + err.message, "err");
