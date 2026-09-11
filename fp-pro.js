@@ -234,6 +234,28 @@
     return m ? parseFloat(m[1]) : null;
   }
 
+  // Detects a stated pack size in free text: either an "<n> per <container>"
+  // count ("108 per sheet") or an "<n>m" roll/length token ("200m"). Returns
+  // { type, qtyPerPackage, unit } or null if neither pattern is present --
+  // an ordinary "Each"/"pcs" line matches nothing and is entirely
+  // unaffected by any of the packaging logic below. This never guesses
+  // WHICH interpretation is correct for the invoice's own quantity number
+  // (that's still decided by the caller); it only extracts what the text
+  // literally states.
+  function parsePackaging(text) {
+    const t = String(text || "");
+    const perM = t.match(/(\d+(?:\.\d+)?)\s*(?:pcs?|pieces?)?\s*per\s*(sheet|box|pack|carton|roll)/i);
+    if (perM) {
+      const noun = perM[2].toLowerCase();
+      return { type: noun.charAt(0).toUpperCase() + noun.slice(1), qtyPerPackage: parseFloat(perM[1]), unit: "pcs" };
+    }
+    const lenM = t.match(/(\d+(?:\.\d+)?)\s*m\b/i);
+    if (lenM) {
+      return { type: /roll|coil|reel/i.test(t) ? "Roll" : "Length", qtyPerPackage: parseFloat(lenM[1]), unit: "m" };
+    }
+    return null;
+  }
+
   // Best-variant picker. For bars: prefer the row whose bar_length_mm matches
   // the PDF's bar length. For fittings: prefer a row with non-zero cost
   // (skips zero-cost placeholder rows that belong to a different product
@@ -376,6 +398,7 @@
     // with its own label so the two situations are never mistaken for the
     // same thing when read from the Status column alone.
     if (displayStatus === "exact-diff") return `<span class="fp-status-review">${dot}Exact match — review</span>`;
+    if (displayStatus === "pack-review") return `<span class="fp-status-review">${dot}Pack size — review</span>`;
     if (displayStatus === "unmatched" && row.truncatedHint) {
       return `<span class="fp-status-review">${dot}Review</span>`;
     }
@@ -1134,12 +1157,43 @@
         });
         return;
       }
+      // Bundled/packaged item check. The invoice's own quantity number
+      // (e.g. "4") is a *package* count, not automatically the final
+      // inventory quantity -- but Master Inventory's own unit_of_measure
+      // is "pcs" (counting packages/rolls, not the contents) for every
+      // item checked so far, so today's simple "add the invoice qty
+      // as-is" is actually still correct. This only reclassifies the row
+      // when the invoice's packaging claim and Master Inventory's own
+      // description *disagree on what kind of package this even is*
+      // (e.g. the invoice's Unit says "200m" but the item's own
+      // description says "108 per sheet") -- that's a real inconsistency
+      // in the source data, not something to silently pick a side on.
+      // Package facts are recorded either way, purely for audit, and
+      // never change the quantity/cost actually written.
+      const invoicePkg = parsePackaging(`${l.unit || ""} ${pdfDescription || ""}`);
+      const masterPkg = parsePackaging(item.description);
+      if (invoicePkg && masterPkg && masterPkg.type !== invoicePkg.type) {
+        rows.push({
+          code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
+          invoiceUnitCost: l.unitCost,
+          current: item.current_qty, newQty: null,
+          status: "pack-review", action: "pending", decided: false,
+          itemId: null, editing: false, truncatedHint: false,
+          packMismatch: {
+            itemId: item.id, itemDescription: item.description, itemCurrentQty: item.current_qty,
+            itemUnit: item.unit_of_measure || "",
+            invoicePkg: { ...invoicePkg, sourceQty: l.qty }, masterPkg,
+          },
+        });
+        return;
+      }
       rows.push({
         code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
         invoiceUnitCost: l.unitCost,
         current: item.current_qty, newQty: item.current_qty + l.qty,
         status: "ok", action: "add", decided: true,
         itemId: item.id, editing: false, truncatedHint: false,
+        packageInfo: invoicePkg ? { type: invoicePkg.type, qtyPerPackage: invoicePkg.qtyPerPackage, unit: invoicePkg.unit } : null,
       });
     });
     return rows;
@@ -1231,6 +1285,16 @@
         <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       </div>`;
     }
+    if (row.status === "pack-review") {
+      // The actual "confirm quantity" control lives inline in the
+      // Description cell (it needs an input, not just a button) --
+      // these are just the fallbacks: manually pick a different item, or
+      // skip the line entirely without checking it in.
+      return `<div class="fp-row-actions">
+        ${editBtn}
+        <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
+      </div>`;
+    }
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
@@ -1264,6 +1328,43 @@
       r.newQty = item.current_qty + r.qty;
       r.status = "ok"; r.action = "add"; r.decided = true;
       r.usedDespiteDifference = { code: item.code, masterPackSize: item.packSize, invoicePackSize: item.invoicePackSize };
+    }
+    else if (act === "confirm-pack") {
+      // Human-confirmed quantity for a bundled item whose packaging claim
+      // didn't match Master Inventory's own description closely enough to
+      // resolve on its own. Whatever number is in the input becomes the
+      // quantity checked in -- default is the safe, unconverted package
+      // count, but the user can type the expanded total instead if they
+      // know that's correct. Package facts are still recorded for audit.
+      const qtyEl = document.getElementById(`ciPackQty${idx}`);
+      const newQty = qtyEl ? parseFloat(qtyEl.value) : NaN;
+      if (!isFinite(newQty) || newQty <= 0) {
+        ciStatus("Enter a quantity greater than zero before confirming.", "err");
+        return;
+      }
+      const m = r.packMismatch;
+      if (!m) return;
+      r.qty = newQty;
+      r.itemId = m.itemId;
+      r.description = m.itemDescription || r.description;
+      r.current = m.itemCurrentQty;
+      r.newQty = m.itemCurrentQty + newQty;
+      r.status = "ok"; r.action = "add"; r.decided = true;
+      // Only keep the "N Rolls × Xm" phrasing if the confirmed number is
+      // still literally the package count the invoice stated -- once the
+      // user types a different number (e.g. the expanded total), that
+      // phrasing would misdescribe what the number actually means, so it
+      // falls back to a plain quantity instead.
+      const acceptedDefault = newQty === m.invoicePkg.sourceQty;
+      r.packageInfo = acceptedDefault
+        ? { type: m.invoicePkg.type, qtyPerPackage: m.invoicePkg.qtyPerPackage, unit: m.invoicePkg.unit }
+        : null;
+      // The invoice's original Unit text ("200m") described the package,
+      // not this now-different confirmed quantity -- keep showing it only
+      // when it's still accurate (the accepted-default case); otherwise
+      // fall back to Master Inventory's own unit so the row doesn't imply
+      // "3240 of 200m each".
+      if (!acceptedDefault) r.unit = m.itemUnit;
     }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
@@ -1506,11 +1607,41 @@
       const usedDiffNote = r.usedDespiteDifference ? `<div class="small muted" style="margin-top:2px">
           Used despite a pack-size difference (invoice: ${esc(r.usedDespiteDifference.invoicePackSize || "—")}, Master Inventory: ${esc(r.usedDespiteDifference.masterPackSize || "—")}) — confirmed by the user.
         </div>` : "";
+      // The invoice's own packaging claim doesn't match the kind of
+      // packaging Master Inventory's description states for this item
+      // (e.g. invoice says "200m", item's own record says "108 per
+      // sheet") -- shown side by side with an editable quantity so the
+      // human decides, rather than the system silently picking a side.
+      const packReviewNote = r.status === "pack-review" ? `<div class="fp-exactdiff">
+          <div class="fp-exactdiff-h">Pack size / unit requires review</div>
+          <div><span class="lbl">Invoice states:</span> ${fmt(r.qty)} × ${esc(r.packMismatch.invoicePkg.qtyPerPackage)}${esc(r.packMismatch.invoicePkg.unit)} (${esc(r.packMismatch.invoicePkg.type)})</div>
+          <div><span class="lbl">Master Inventory description states:</span> ${esc(r.packMismatch.masterPkg.qtyPerPackage)} per ${esc(r.packMismatch.masterPkg.type)}</div>
+          <div class="fp-exactdiff-warn">⚠ These don't describe the same kind of packaging — no conversion has been applied. Confirm the correct quantity to check in.</div>
+          <div style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+            <label style="font-weight:600; font-size:12px">Quantity to check in:</label>
+            <input type="number" step="any" min="0" id="ciPackQty${i}" value="${r.qty}" class="fp-inline-input fp-inline-input-num" style="width:90px">
+            <button type="button" data-act="confirm-pack" data-i="${i}" class="fp-code-review-flag" style="font-size:12.5px">Confirm quantity →</button>
+          </div>
+        </div>` : "";
+      // A bundled item shows its packaging plainly ("4 Rolls × 200m")
+      // instead of the misleading "+4 200m" that read as if 200m were the
+      // quantity itself -- true both once resolved (packageInfo) and while
+      // still pending review (packMismatch), so the confusing format never
+      // appears at any stage.
+      // r.packMismatch is deliberately never deleted once resolved (kept
+      // for reference), so this must check current status, not just
+      // whether packMismatch exists -- otherwise a resolved row that
+      // cleared packageInfo (see "confirm-pack" above) would fall back to
+      // the stale pre-resolution packaging phrase.
+      const pkgForDisplay = r.packageInfo || (r.status === "pack-review" ? r.packMismatch.invoicePkg : null);
+      const qtyDisplay = pkgForDisplay
+        ? `${fmt(r.qty)} ${esc(pkgForDisplay.type)}${r.qty === 1 ? "" : "s"} × ${esc(pkgForDisplay.qtyPerPackage)}${esc(pkgForDisplay.unit)}`
+        : `+${fmt(r.qty)} ${esc(r.unit)}`;
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}${reviewFlag}</td>
-        <td>${esc(r.description)}${exactDiffNote}${usedDiffNote}</td>
+        <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
-        <td class="num" style="color:var(--brand); font-weight:600">+${fmt(r.qty)} ${esc(r.unit)}</td>
+        <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
         <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
@@ -1520,8 +1651,10 @@
     }).join("");
 
     const exactDiffCount = ciState.rows.filter((r) => !r.decided && r.status === "exact-diff").length;
-    const warnBox = (unmatched > 0 || exactDiffCount > 0) ? `<div class="fp-warn">
-      <h4>${unmatched + exactDiffCount} item${unmatched + exactDiffCount === 1 ? "" : "s"} need${unmatched + exactDiffCount === 1 ? "s" : ""} a decision</h4>
+    const packReviewCount = ciState.rows.filter((r) => !r.decided && r.status === "pack-review").length;
+    const needDecisionTotal = unmatched + exactDiffCount + packReviewCount;
+    const warnBox = needDecisionTotal > 0 ? `<div class="fp-warn">
+      <h4>${needDecisionTotal} item${needDecisionTotal === 1 ? "" : "s"} need${needDecisionTotal === 1 ? "s" : ""} a decision</h4>
       <ul>
         ${unmatched > 0 ? `<li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
           Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
@@ -1533,6 +1666,9 @@
           the item code already exists in the Master Inventory, but the invoice's unit doesn't match what's on file.
           Review the comparison shown under each of these rows, then click Use Existing Item once you've confirmed it,
           or Edit to pick a different item instead.</li>` : ""}
+        ${packReviewCount > 0 ? `<li><b>${packReviewCount} item${packReviewCount === 1 ? "" : "s"} with a pack-size mismatch</b> —
+          the invoice's packaging doesn't match how Master Inventory describes this item. Review the comparison shown
+          under each of these rows, then confirm the correct quantity to check in.</li>` : ""}
       </ul>
     </div>` : "";
 
@@ -1675,6 +1811,15 @@
           // Inventory's own unit_cost instead of recording a false free cost.
           unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
           original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
+          // Packaging facts, purely for audit -- quantity/unit_cost above
+          // already reflect Master Inventory's own unit basis; these just
+          // preserve what the supplier document actually said (e.g. "4
+          // rolls of 200m at AED 331.65/roll") so it's never lost.
+          package_type: r.packageInfo ? r.packageInfo.type : null,
+          package_qty: r.packageInfo ? r.qty : null,
+          qty_per_package: r.packageInfo ? r.packageInfo.qtyPerPackage : null,
+          package_unit: r.packageInfo ? r.packageInfo.unit : null,
+          package_cost: r.packageInfo && r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
         };
       });
 
