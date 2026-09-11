@@ -685,6 +685,8 @@
     rateDate: null, // the date the fetched rate is "as of" (API's own date, not the invoice date)
     rateSource: "n/a", // 'api-dated' | 'api-latest' | 'api-latest-fallback' | 'cache-fallback' | 'manual' | 'unavailable' | 'n/a'
     ratesByCurrency: null,
+    missingLnNumbers: [], // line numbers detected in the raw text but not readable into a row
+    missingLnAcknowledged: false,
   };
 
   // Currencies this reader looks for on a supplier document. Detection just
@@ -775,7 +777,15 @@
   // "6 230034 Each 200 0.58 0.00 116.00 392530" -> Ln, Part Number, Units,
   // Qty, Price, GST, Total, HS Code. Verified against the supplied sample
   // (Freedom Screens commercial invoice format).
-  const CI_LINE_RE = /^(\d+)\s+([A-Za-z0-9-]+)\s+(\S+)\s+(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+(\d{5,8})$/;
+  // Unit is normally present ("Each", "Sheet", "200m"...) but some suppliers
+  // leave it genuinely blank on certain rows (e.g. a miscellaneous item with
+  // no standard unit) -- the source document itself has one fewer token on
+  // that row, not a text-extraction glitch. Making the Unit group optional,
+  // distinguished from Qty by requiring a letter (Qty is always pure
+  // digits), means a blank-Unit row still matches instead of the whole line
+  // silently failing to parse. Real invoices with this exact gap (blank
+  // Units column on an otherwise normal row) surfaced this.
+  const CI_LINE_RE = /^(\d+)\s+([A-Za-z0-9-]+)\s+(?:(\S*[A-Za-z]\S*)\s+)?(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+(\d{5,8})$/;
 
   function parseCommercialInvoiceLines(text) {
     const out = [];
@@ -868,12 +878,13 @@
 
   const CHECKIN_FORMATS = [
     {
-      // Existing Commercial Invoice reader -- untouched. Always tried
-      // first, so this format's behaviour can never regress.
+      // Existing Commercial Invoice reader. Always tried first, so a
+      // well-formed row's behaviour never regresses. m[3] (Unit) can be
+      // undefined when the source row has a genuinely blank Units field.
       id: "commercial-invoice",
       label: "Commercial Invoice",
       lineRe: CI_LINE_RE,
-      extract: (m) => ({ ln: parseInt(m[1], 10), code: m[2], unit: m[3], qty: parseInt(m[4], 10), unitCost: parseFloat(m[5].replace(/,/g, "")) }),
+      extract: (m) => ({ ln: parseInt(m[1], 10), code: m[2], unit: m[3] || "", qty: parseInt(m[4], 10), unitCost: parseFloat(m[5].replace(/,/g, "")) }),
     },
     {
       // "Total | Discounted Price | Discount % | Price | Qty | Description | Code | Ln"
@@ -941,6 +952,32 @@
     return { rows, usedIdx };
   }
 
+  // The existing gap check below only finds a HOLE below the highest parsed
+  // line number -- it has no way to notice a row missing from the very end
+  // of the document, because there's no later successfully-parsed row to
+  // reveal the gap. That's exactly how a real invoice's last line (a blank
+  // Units field breaking the fixed 8-token Commercial Invoice pattern) went
+  // missing without any warning. This probes the raw text directly for
+  // "the next sequential line number" wherever this format's own line
+  // number normally sits (leading token for Commercial Invoice, trailing
+  // token for the reverse-order Quote/Order Approval formats) -- if it's
+  // there, a row structurally exists that this format's strict pattern
+  // couldn't read, and it must be surfaced rather than silently dropped.
+  // Bounded so a corrupt document can't spin this forever.
+  function probeTrailingMissingLines(rawLines, format, maxLn) {
+    const lnAtStart = format.id === "commercial-invoice";
+    const missing = [];
+    let n = maxLn + 1;
+    while (missing.length < 50) {
+      const re = lnAtStart ? new RegExp(`^${n}\\b`) : new RegExp(`\\b${n}$`);
+      const found = rawLines.some((raw) => re.test(raw.trim()));
+      if (!found) break;
+      missing.push(n);
+      n++;
+    }
+    return missing;
+  }
+
   // Tries every known Check-in document layout and uses whichever produces
   // the most matched rows -- this is the "recognise the document's actual
   // structure" step. Zero rows across every format means the document isn't
@@ -994,6 +1031,11 @@
       const maxLn = Math.max(...lns);
       const missing = [];
       for (let n = 1; n <= maxLn; n++) if (!seen.has(n)) missing.push(n);
+      // A hole below maxLn is caught above, but nothing above can ever
+      // reveal a row missing from the very end of the document -- probe
+      // the raw text directly for it (see probeTrailingMissingLines).
+      const winningFormat = CHECKIN_FORMATS.find((f) => f.id === best.formatId);
+      if (winningFormat) missing.push(...probeTrailingMissingLines(rawLines, winningFormat, maxLn));
       best.missingLnNumbers = missing;
     } else {
       best.missingLnNumbers = [];
@@ -1384,6 +1426,22 @@
       </ul>
     </div>` : "";
 
+    // A totally-unreadable line never becomes a row at all, so it can't
+    // trip the "every row decided" gate above -- this is the reconciliation
+    // check surfaced as an explicit, must-acknowledge banner instead, so a
+    // dropped invoice line can never silently make it through Confirm.
+    const missingLnBox = ciState.missingLnNumbers.length ? `<div class="fp-warn">
+      <h4>${ciState.missingLnNumbers.length} line${ciState.missingLnNumbers.length === 1 ? "" : "s"} could not be read from the document</h4>
+      <p class="small" style="margin:0 0 var(--space-2)">Line${ciState.missingLnNumbers.length === 1 ? "" : "s"}
+        <b>${ciState.missingLnNumbers.join(", ")}</b> ${ciState.missingLnNumbers.length === 1 ? "exists" : "exist"} in the
+        document but couldn't be reliably parsed into a row — nothing was guessed. Check the original document for
+        ${ciState.missingLnNumbers.length === 1 ? "this line" : "these lines"} and add it manually if needed before confirming.</p>
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px">
+        <input type="checkbox" id="ciMissingLnAck" ${ciState.missingLnAcknowledged ? "checked" : ""}>
+        I've checked the original document for the line${ciState.missingLnNumbers.length === 1 ? "" : "s"} above.
+      </label>
+    </div>` : "";
+
     const rateDateNote = ciState.rateDate ? ` (rate date ${esc(ciState.rateDate)})` : "";
     const sourceLabel = RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource;
     const currencyCard = cur === "AED"
@@ -1412,6 +1470,7 @@
         <div class="fp-tally-item"><strong>${t.unresolved}</strong><span>Unresolved</span></div>
       </div>
       ${warnBox}
+      ${missingLnBox}
       <div class="fp-section-h">Check-in preview</div>
       <div class="fp-scroll">
         <table class="fp-table">
@@ -1435,6 +1494,7 @@
       t.unresolved === 0 &&
       t.totalItems > 0 &&
       !ciState.rows.some((r) => r.editing || r.creatingNew) &&
+      (!ciState.missingLnNumbers.length || ciState.missingLnAcknowledged) &&
       !!rate &&
       !!$("#ciSupplier").value.trim() &&
       !!$("#ciInvoiceNumber").value.trim();
@@ -1454,6 +1514,13 @@
         ciState.exchangeRate = isFinite(v) && v > 0 ? v : null;
         ciState.rateSource = "manual";
         ciState.rateDate = null;
+        ciRender();
+      });
+    }
+    const missingLnAckEl = document.getElementById("ciMissingLnAck");
+    if (missingLnAckEl) {
+      missingLnAckEl.addEventListener("change", () => {
+        ciState.missingLnAcknowledged = missingLnAckEl.checked;
         ciRender();
       });
     }
@@ -1582,6 +1649,8 @@
         ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
         return;
       }
+      ciState.missingLnNumbers = doc.missingLnNumbers || [];
+      ciState.missingLnAcknowledged = false;
 
       if (ciState.currency === "AED") {
         ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
@@ -1617,8 +1686,12 @@
       const rateNote = ciState.currency !== "AED"
         ? (ciState.exchangeRate ? ` Exchange rate sourced from ${RATE_SOURCE_LABEL[ciState.rateSource]}.` : " Exchange rate unavailable — flagged for review.")
         : "";
+      // A reconciliation count, not just a note -- "N detected, M created"
+      // makes a silent shortfall visible even at a glance, before anyone
+      // reads the line-number detail after it.
+      const totalDetected = doc.entries.length + (doc.missingLnNumbers ? doc.missingLnNumbers.length : 0);
       const gapNote = doc.missingLnNumbers && doc.missingLnNumbers.length
-        ? ` Could not reliably read line${doc.missingLnNumbers.length === 1 ? "" : "s"} ${doc.missingLnNumbers.join(", ")} from the document — check it manually; nothing was guessed for ${doc.missingLnNumbers.length === 1 ? "it" : "them"}.`
+        ? ` Invoice lines detected: ${totalDetected}. Check-in rows created: ${doc.entries.length}. Line${doc.missingLnNumbers.length === 1 ? "" : "s"} ${doc.missingLnNumbers.join(", ")} could not be reliably read — review ${doc.missingLnNumbers.length === 1 ? "it" : "them"} manually before confirming; nothing was guessed.`
         : "";
       ciStatus(`Analysis ready — read as ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}`);
     } catch (err) {
@@ -1634,6 +1707,7 @@
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
     ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     ciState.rateDate = null; ciState.rateSource = "n/a";
+    ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
     $("#ciPdf").value = "";
     $("#ciPdfName").textContent = "Click or drop the PDF file here";
     $("#ciDrop").classList.remove("ready");
