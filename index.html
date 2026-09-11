@@ -42,6 +42,13 @@
   --alert:#c15656;
   --neutral-hover:#e9eef0;
 
+  /* "Will create a new Master Inventory record" -- distinct from --accent
+     (review/attention) and --brand, so a brand-new item is never mistaken
+     for an ordinary matched or flagged row. */
+  --new:#2f6f5e;
+  --new-bg:#e9f3f0;
+  --new-deep:#1f4d40;
+
   /* Type */
   --font-display:'Archivo',sans-serif;
   --font-body:'Inter',sans-serif;
@@ -410,7 +417,7 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-currency-card .field-label{display:block; margin-bottom:2px}
 .fp-currency-card input{width:120px}
 .fp-currency-card .fp-currency-note{font-size:12px; color:var(--text-muted); flex-basis:100%}
-.fp-status-ok, .fp-status-short, .fp-status-unmatched, .fp-status-skip, .fp-status-review{
+.fp-status-ok, .fp-status-short, .fp-status-unmatched, .fp-status-skip, .fp-status-review, .fp-status-new{
   display:inline-flex; align-items:center; gap:4px; white-space:nowrap;
   font-family:var(--font-display); font-weight:700; font-size:10px;
   padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
@@ -420,7 +427,9 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-status-unmatched{background:var(--accent); color:var(--brand)}
 .fp-status-skip{background:var(--panel); color:var(--text-muted); border:1px solid var(--line)}
 .fp-status-review{background:var(--accent); color:var(--accent-deep)}
+.fp-status-new{background:var(--new-bg); color:var(--new-deep); border:1px solid var(--new)}
 .fp-status-review .fp-dot{background:var(--accent-deep)}
+.fp-status-new .fp-dot{background:var(--new)}
 .fp-status-ok .fp-dot{background:var(--white)}
 .fp-status-unmatched .fp-dot{background:var(--brand)}
 .fp-dot{
@@ -433,6 +442,47 @@ tbody tr:hover{background:var(--line-soft)}
   color:var(--accent-deep); cursor:pointer; text-decoration:underline dotted;
 }
 .fp-code-review-flag:hover{color:var(--danger)}
+
+/* Check-in "+ New item" panel -- opens in place of an unmatched row */
+.fp-newitem-panel{
+  border:1.5px solid var(--new); border-radius:var(--r-md); background:var(--new-bg);
+  padding:var(--space-5) var(--space-6); position:relative; margin:var(--space-2) 0;
+}
+.fp-newitem-tag{
+  display:inline-block; background:var(--new); color:var(--white);
+  font-family:var(--font-display); font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase;
+  padding:3px 10px; border-radius:var(--r-pill); margin-bottom:var(--space-3);
+}
+.fp-newitem-panel h4{font-family:var(--font-display); font-size:14px; font-weight:800; margin:0 0 4px; color:var(--new-deep)}
+.fp-newitem-warn{
+  background:var(--white); border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:var(--space-3) var(--space-4); margin:var(--space-3) 0; font-size:12.5px;
+}
+.fp-newitem-warn ul{margin:var(--space-2) 0; padding-left:18px}
+.fp-newitem-warn .code{font-family:var(--font-mono); font-weight:600}
+.fp-newitem-ack{display:flex; align-items:center; gap:6px; font-weight:600; margin-top:var(--space-2)}
+.fp-newitem-grid{
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:var(--space-4);
+  margin-top:var(--space-4);
+}
+.fp-newitem-grid .field{min-width:0}
+.fp-newitem-grid .field.full{grid-column:1/-1}
+.fp-newitem-grid .field label{
+  display:block; font-family:var(--font-display); font-size:10px; font-weight:700; letter-spacing:0.04em;
+  text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;
+}
+.fp-newitem-grid .field label .opt{text-transform:none; font-weight:400; color:var(--text-muted-light)}
+.fp-newitem-grid .field input, .fp-newitem-grid .field select{
+  width:100%; min-width:0; box-sizing:border-box; font-family:var(--font-body); font-size:13px;
+  background:var(--white); border:1px solid var(--line); border-radius:var(--r-xs);
+  padding:7px 9px;
+}
+.fp-newitem-grid .field input[readonly]{background:var(--panel); color:var(--text-muted)}
+.fp-newitem-grid .field .hint{display:block; font-size:11px; color:var(--text-muted-light); margin-top:3px}
+.fp-newitem-actions{
+  display:flex; align-items:center; justify-content:space-between; gap:var(--space-4); flex-wrap:wrap;
+  margin-top:var(--space-4); padding-top:var(--space-3); border-top:1px dashed var(--line);
+}
 .fp-confirmbar{
   display:flex; align-items:center; justify-content:space-between;
   padding:var(--space-5) var(--space-6); gap:var(--space-4); flex-wrap:wrap;

@@ -339,6 +339,7 @@
     const dot = `<span class="fp-dot"></span>`;
     if (displayStatus === "skipped") return statusChip("skipped");
     if (displayStatus === "ok") return `<span class="fp-status-ok">${dot}Matched</span>`;
+    if (displayStatus === "new") return `<span class="fp-status-new">${dot}New item</span>`;
     if (displayStatus === "unmatched" && row.truncatedHint) {
       return `<span class="fp-status-review">${dot}Review</span>`;
     }
@@ -1057,7 +1058,9 @@
   }
 
   function ciTally() {
-    const active = ciState.rows.filter((r) => r.action === "add");
+    // A confirmed new-item row ("create-new") checks in and adds value just
+    // like a matched row -- it counts alongside "add" in every total below.
+    const active = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new");
     const rate = ciRate();
     const totalValueOriginal = active.reduce((s, r) => s + r.qty * (r.invoiceUnitCost || 0), 0);
     return {
@@ -1067,6 +1070,29 @@
       unresolved: ciState.rows.filter((r) => !r.decided).length,
       skipped: ciState.rows.filter((r) => r.decided && r.action === "skip").length,
     };
+  }
+
+  // Finds existing Master Inventory items that might already be this "new"
+  // item under a different code -- purely advisory (a soft warning the user
+  // must acknowledge before creating a duplicate), never auto-selected and
+  // never blocking on its own. Reuses the same substring-on-description idea
+  // as the search dropdown (wireCodePicker), plus a shared-code-prefix check
+  // for cases like a truncated code that still didn't resolve via Edit.
+  function findSimilarMasterInventoryItems(row, itemsByCode) {
+    const codePrefix = (row.code || "").slice(0, 4).toLowerCase();
+    const words = (row.description || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+    const out = [];
+    for (const [code, candidates] of itemsByCode) {
+      const item = candidates[0];
+      const desc = (item.description || "").toLowerCase();
+      const codeMatch = codePrefix.length >= 4 && code.toLowerCase().startsWith(codePrefix);
+      const wordMatch = words.some((w) => desc.includes(w));
+      if (codeMatch || wordMatch) {
+        out.push({ code, description: item.description || "" });
+        if (out.length >= 5) break;
+      }
+    }
+    return out;
   }
 
   function ciRenderRowActionButtons(idx, row) {
@@ -1079,9 +1105,16 @@
         ${editBtn}
       </div>`;
     }
+    if (row.status === "new") {
+      return `<div class="fp-row-actions">
+        <button data-act="undo-new" data-i="${idx}">Undo</button>
+        ${editBtn}
+      </div>`;
+    }
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
+      <button data-act="new-item" data-i="${idx}">+ New item</button>
     </div>`;
   }
 
@@ -1119,6 +1152,58 @@
       }
       recomputeCiRowAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
       r.editing = false;
+    }
+    else if (act === "new-item") { r.creatingNew = true; }
+    else if (act === "cancel-new") { r.creatingNew = false; }
+    else if (act === "undo-new") {
+      // Back to an ordinary unmatched row -- nothing was ever written for
+      // it (Confirm Check-in is still the only thing that writes), so this
+      // is just clearing the decision, same as any other row reset.
+      r.status = "unmatched"; r.action = "pending"; r.decided = false;
+      r.current = null; r.newQty = null; r.newItemData = null;
+    }
+    else if (act === "save-new") {
+      const descEl = document.getElementById(`ciNewDesc${idx}`);
+      const catEl = document.getElementById(`ciNewCategory${idx}`);
+      const unitEl = document.getElementById(`ciNewUnit${idx}`);
+      const costEl = document.getElementById(`ciNewCost${idx}`);
+      const bufferEl = document.getElementById(`ciNewBuffer${idx}`);
+      const approverEl = document.getElementById(`ciNewApprover${idx}`);
+      const ackEl = document.getElementById(`ciNewAck${idx}`);
+
+      const description = descEl.value.trim();
+      const category = catEl.value;
+      const unit = unitEl.value.trim();
+      const cost = parseFloat(costEl.value);
+      const buffer = bufferEl.value.trim() ? parseFloat(bufferEl.value) : null;
+      const approver = approverEl.value.trim();
+
+      if (!description) { ciStatus("Enter a description before adding this item.", "err"); return; }
+      if (!unit) { ciStatus("Enter a unit of measure before adding this item.", "err"); return; }
+      if (!isFinite(cost) || cost <= 0) {
+        ciStatus("Enter a unit cost greater than zero -- it's never guessed for a new item.", "err");
+        return;
+      }
+      if (buffer != null && (!isFinite(buffer) || buffer < 0)) {
+        ciStatus("Buffer level must be a positive number, or left blank.", "err");
+        return;
+      }
+      if (!approver) { ciStatus("Enter the name of the person approving this new item.", "err"); return; }
+      if (ackEl && !ackEl.checked) {
+        ciStatus("Confirm none of the possible matches above are this item before adding it.", "err");
+        return;
+      }
+
+      r.description = description;
+      r.unit = unit;
+      r.invoiceUnitCost = cost;
+      r.current = null;
+      r.newQty = r.qty;
+      r.status = "new";
+      r.action = "create-new";
+      r.decided = true;
+      r.creatingNew = false;
+      r.newItemData = { code: r.code, description, category: category || null, unit, bufferLevel: buffer, approvedBy: approver };
     }
     ciRender();
   }
@@ -1182,6 +1267,51 @@
     const cur = ciState.currency;
 
     const rowsHtml = ciState.rows.map((r, i) => {
+      if (r.creatingNew) {
+        const suggestions = findSimilarMasterInventoryItems(r, ciState.itemsByCode);
+        const warn = suggestions.length ? `
+          <div class="fp-newitem-warn">
+            <strong>Possible existing matches — check before creating a new item:</strong>
+            <ul>${suggestions.map((s) => `<li><span class="code">${esc(s.code)}</span> — ${esc(s.description)}</li>`).join("")}</ul>
+            <label class="fp-newitem-ack"><input type="checkbox" id="ciNewAck${i}"> None of these match — this is genuinely a new item.</label>
+          </div>` : "";
+        return `<tr class="fp-editing">
+          <td colspan="9">
+            <div class="fp-newitem-panel">
+              <div class="fp-newitem-tag">Will create a new Master Inventory record</div>
+              <h4>${esc(r.code)} — ${esc(r.description)}</h4>
+              <p class="small muted">This code was searched against the Master Inventory and no match was found.
+                Fill in the fields below to add it as a new item. Nothing is written until <b>Confirm Check-in</b>.</p>
+              ${warn}
+              <div class="fp-newitem-grid">
+                <div class="field"><label>Item code</label><input value="${esc(r.code)}" readonly>
+                  <span class="hint">As read from the document — not editable here.</span></div>
+                <div class="field"><label>Description</label><input id="ciNewDesc${i}" value="${esc(r.description)}"></div>
+                <div class="field"><label>Category</label>
+                  <select id="ciNewCategory${i}"><option value="">Select…</option><option>Accessory</option><option>Profile</option><option>Hardware</option></select>
+                </div>
+                <div class="field"><label>Unit of measure</label><input id="ciNewUnit${i}" value="${esc(r.unit || "pcs")}"></div>
+                <div class="field"><label>Opening quantity</label><input value="${fmt(r.qty)}" readonly>
+                  <span class="hint">= the Check-in quantity for this line.</span></div>
+                <div class="field"><label>Unit cost (${esc(cur)})</label>
+                  <input id="ciNewCost${i}" type="number" step="any" min="0" value="${r.invoiceUnitCost != null ? r.invoiceUnitCost : ""}" placeholder="e.g. 4.80">
+                  <span class="hint">Required — never guessed for a new item.</span></div>
+                <div class="field full"><label>Buffer / low-stock level <span class="opt">(optional)</span></label>
+                  <input id="ciNewBuffer${i}" type="number" step="any" min="0" placeholder="e.g. 10 — leave blank to set later"></div>
+                <div class="field full"><label>Approved by</label>
+                  <input id="ciNewApprover${i}" placeholder="Full name of the person confirming this is a new item"></div>
+              </div>
+              <div class="fp-newitem-actions">
+                <span class="small muted">A named approver must confirm this is genuinely new before it's added.</span>
+                <div class="fp-row-actions">
+                  <button data-act="cancel-new" data-i="${i}">Cancel</button>
+                  <button data-act="save-new" data-i="${i}" class="on">Add to Master Inventory + Check in</button>
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      }
       if (r.editing) {
         // For an already-matched row, prefill with its own code so re-opening
         // Edit shows where it stands. For an unmatched/short-code row, prefill
@@ -1304,7 +1434,7 @@
     const canConfirm =
       t.unresolved === 0 &&
       t.totalItems > 0 &&
-      !ciState.rows.some((r) => r.editing) &&
+      !ciState.rows.some((r) => r.editing || r.creatingNew) &&
       !!rate &&
       !!$("#ciSupplier").value.trim() &&
       !!$("#ciInvoiceNumber").value.trim();
@@ -1339,15 +1469,37 @@
       throw new Error("Enter the exchange rate before confirming.");
     }
     const lines = ciState.rows
-      .filter((r) => r.action === "add" && r.itemId)
-      .map((r) => ({
-        item_id: r.itemId, quantity: r.qty, unit: r.unit,
-        // No document price (e.g. an Order Approval) -- send null, not a
-        // fabricated 0, so checkin_transaction() falls back to the Master
-        // Inventory's own unit_cost instead of recording a false free cost.
-        unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
-        original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
-      }));
+      .filter((r) => (r.action === "add" && r.itemId) || (r.action === "create-new" && r.newItemData))
+      .map((r) => {
+        if (r.action === "create-new") {
+          // A brand-new Master Inventory item -- item_id is null, and
+          // checkin_transaction() creates the row itself from new_item.
+          // Unlike an existing item, there's no Master Inventory unit_cost
+          // to fall back on, so the front-end already required this to be
+          // a positive number before the row could reach this state.
+          return {
+            item_id: null, quantity: r.qty, unit: r.unit,
+            unit_cost: r.invoiceUnitCost * rate,
+            original_unit_cost: r.invoiceUnitCost,
+            new_item: {
+              item_code: r.newItemData.code,
+              description: r.newItemData.description,
+              category: r.newItemData.category,
+              unit_of_measure: r.newItemData.unit,
+              buffer_level: r.newItemData.bufferLevel,
+              approved_by: r.newItemData.approvedBy,
+            },
+          };
+        }
+        return {
+          item_id: r.itemId, quantity: r.qty, unit: r.unit,
+          // No document price (e.g. an Order Approval) -- send null, not a
+          // fabricated 0, so checkin_transaction() falls back to the Master
+          // Inventory's own unit_cost instead of recording a false free cost.
+          unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
+          original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
+        };
+      });
 
     const res = await fetch(CHECKIN_FN_URL, {
       method: "POST",
@@ -1370,6 +1522,12 @@
     if (!data.ok) {
       if (data.error === "duplicate_document") {
         throw new Error("This document has already been checked in — re-processing it would double-count the stock.");
+      }
+      if (data.error === "duplicate_code") {
+        throw new Error(`Code ${data.item_code || ""} already exists in the Master Inventory — this can't be added as a new item. Use Edit to match it to the existing one instead.`);
+      }
+      if (data.error === "approver_required") {
+        throw new Error("A named approver is required for every new Master Inventory item before Check-in can be confirmed.");
       }
       throw new Error(data.detail || data.error || "The Check-in was not applied.");
     }
