@@ -203,6 +203,37 @@
     return byCode;
   }
 
+  // Exact-code lookup, tolerant of case differences between how a supplier
+  // document prints a code and how Master Inventory stores it (e.g. a real
+  // invoice printed "30016r" in lowercase where Master Inventory has
+  // "30016R") -- a plain Map.get() is case-sensitive and was silently
+  // treating that as "code not found" even though it's the exact same item.
+  // Confirmed against the live Master Inventory that no two distinct codes
+  // collide when case-normalised, so this can never blend two different
+  // products together. Falls back to the map's own casing first so this
+  // never changes behaviour for the (overwhelming) common case where the
+  // casing already matches.
+  function lookupExactCode(itemsByCode, code) {
+    if (!code) return [];
+    const direct = itemsByCode.get(code);
+    if (direct) return direct;
+    const upper = code.toUpperCase();
+    for (const [k, v] of itemsByCode) {
+      if (k.toUpperCase() === upper) return v;
+    }
+    return [];
+  }
+
+  // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
+  // -- the only place either an invoice line or a Master Inventory
+  // description ever states a roll/length size. Returns null when there's
+  // no such token, so a plain "Each"/"pcs" label (the common case) is never
+  // treated as if it claimed a length.
+  function parseLengthToken(text) {
+    const m = String(text || "").match(/(\d+(?:\.\d+)?)\s*m\b/i);
+    return m ? parseFloat(m[1]) : null;
+  }
+
   // Best-variant picker. For bars: prefer the row whose bar_length_mm matches
   // the PDF's bar length. For fittings: prefer a row with non-zero cost
   // (skips zero-cost placeholder rows that belong to a different product
@@ -228,7 +259,7 @@
   function buildRows(entries, itemsByCode) {
     const rows = [];
     for (const e of entries) {
-      const candidates = itemsByCode.get(e.code) || [];
+      const candidates = lookupExactCode(itemsByCode, e.code);
       const item = pickInventoryRow(e, candidates);
 
       const requiredQty = e.kind === "bar" ? e.bars : e.qty;
@@ -340,6 +371,11 @@
     if (displayStatus === "skipped") return statusChip("skipped");
     if (displayStatus === "ok") return `<span class="fp-status-ok">${dot}Matched</span>`;
     if (displayStatus === "new") return `<span class="fp-status-new">${dot}New item</span>`;
+    // Deliberately reuses the same amber "Review" treatment as a truncated
+    // code -- both mean "a match exists to consider, not a dead end" -- but
+    // with its own label so the two situations are never mistaken for the
+    // same thing when read from the Status column alone.
+    if (displayStatus === "exact-diff") return `<span class="fp-status-review">${dot}Exact match — review</span>`;
     if (displayStatus === "unmatched" && row.truncatedHint) {
       return `<span class="fp-status-review">${dot}Review</span>`;
     }
@@ -1046,7 +1082,7 @@
   function buildCheckinRows(lines, descriptions, itemsByCode) {
     const rows = [];
     lines.forEach((l, i) => {
-      const candidates = itemsByCode.get(l.code) || [];
+      const candidates = lookupExactCode(itemsByCode, l.code);
       const item = pickInventoryRow({ kind: "checkin" }, candidates);
       // Description comes straight from the row parser when that format
       // captures it inline (every non-Commercial-Invoice format); only the
@@ -1064,6 +1100,37 @@
           current: null, newQty: null,
           status: "unmatched", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint,
+        });
+        return;
+      }
+      // The exact item code exists -- check for a genuine pack-size claim
+      // mismatch. Master Inventory's own unit_of_measure is a fixed
+      // internal accounting unit ("pcs" on nearly every item, verified
+      // against the live data) and was never meant to be compared word-
+      // for-word against the invoice's presentational Unit text ("Each",
+      // "Sheet", etc.) -- doing that flagged almost every ordinary row as
+      // "different" and was wrong. The only place either side actually
+      // states a pack size is a "<number>m" token: the invoice's Unit
+      // field sometimes carries one ("300m"), and Master Inventory's own
+      // description sometimes carries one in parentheses ("...(200m)").
+      // Only flag when BOTH sides state one and they disagree -- this
+      // can't misfire on the common case where neither side claims a
+      // length at all.
+      const invoiceLen = parseLengthToken(l.unit);
+      const masterLen = parseLengthToken(item.description);
+      if (invoiceLen != null && masterLen != null && invoiceLen !== masterLen) {
+        rows.push({
+          code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
+          invoiceUnitCost: l.unitCost,
+          current: item.current_qty, newQty: null,
+          status: "exact-diff", action: "pending", decided: false,
+          itemId: null, editing: false, truncatedHint: false,
+          exactMatchItem: {
+            id: item.id, code: item.item_code, description: item.description,
+            unit: item.unit_of_measure || "",
+            packSize: `${masterLen}m`, invoicePackSize: `${invoiceLen}m`,
+            current_qty: item.current_qty,
+          },
         });
         return;
       }
@@ -1153,6 +1220,17 @@
         ${editBtn}
       </div>`;
     }
+    if (row.status === "exact-diff") {
+      // No "+ New item" here on purpose -- the code already exists, so
+      // creating another record under it would just be rejected as a
+      // duplicate at Confirm. The real choices are: accept the existing
+      // record as-is, pick a different one manually, or skip the line.
+      return `<div class="fp-row-actions">
+        <button data-act="use-existing" data-i="${idx}" class="on">Use Existing Item</button>
+        ${editBtn}
+        <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
+      </div>`;
+    }
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
@@ -1173,6 +1251,20 @@
     if (!r) return;
     if (act === "skip") { r.action = "skip"; r.decided = true; }
     else if (act === "add") { r.action = "add"; r.decided = true; }
+    else if (act === "use-existing") {
+      // Explicit human confirmation that the exact-code match is correct
+      // despite the flagged difference. Resolves exactly like any other
+      // matched row -- same quantity, same unit, no conversion applied --
+      // the flag was informational, not something this action "fixes".
+      const item = r.exactMatchItem;
+      if (!item) return;
+      r.itemId = item.id;
+      r.description = item.description || r.description;
+      r.current = item.current_qty;
+      r.newQty = item.current_qty + r.qty;
+      r.status = "ok"; r.action = "add"; r.decided = true;
+      r.usedDespiteDifference = { code: item.code, masterPackSize: item.packSize, invoicePackSize: item.invoicePackSize };
+    }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
     else if (act === "save-edit") {
@@ -1401,9 +1493,22 @@
         ? `<button type="button" class="fp-code-review-flag" data-act="edit" data-i="${i}"
              title="Code may be incomplete. Please verify the correct item before confirming.">⚠ Review</button>`
         : "";
+      // The exact code exists in Master Inventory, but the invoice's own
+      // Unit text doesn't match what's on file for it -- shown side by
+      // side so the difference is visible before anyone decides anything,
+      // exactly as it was found (no conversion, no guessed value).
+      const exactDiffNote = r.status === "exact-diff" ? `<div class="fp-exactdiff">
+          <div class="fp-exactdiff-h">Exact Item Code found in Master Inventory</div>
+          <div><span class="lbl">Master Inventory:</span> <span class="code">${esc(r.exactMatchItem.code)}</span> — ${esc(r.exactMatchItem.description)} · Unit: <b>${esc(r.exactMatchItem.unit || "—")}</b></div>
+          <div><span class="lbl">Supplier Invoice:</span> <span class="code">${esc(r.code)}</span> — ${esc(r.description || "—")} · Unit: <b>${esc(r.unit || "—")}</b></div>
+          <div class="fp-exactdiff-warn">⚠ Unit/pack size differs — review before using. No conversion is applied automatically.</div>
+        </div>` : "";
+      const usedDiffNote = r.usedDespiteDifference ? `<div class="small muted" style="margin-top:2px">
+          Used despite a pack-size difference (invoice: ${esc(r.usedDespiteDifference.invoicePackSize || "—")}, Master Inventory: ${esc(r.usedDespiteDifference.masterPackSize || "—")}) — confirmed by the user.
+        </div>` : "";
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}${reviewFlag}</td>
-        <td>${esc(r.description)}</td>
+        <td>${esc(r.description)}${exactDiffNote}${usedDiffNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">+${fmt(r.qty)} ${esc(r.unit)}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
@@ -1414,15 +1519,20 @@
       </tr>`;
     }).join("");
 
-    const warnBox = unmatched > 0 ? `<div class="fp-warn">
-      <h4>${unmatched} item${unmatched === 1 ? "" : "s"} need${unmatched === 1 ? "s" : ""} a decision</h4>
+    const exactDiffCount = ciState.rows.filter((r) => !r.decided && r.status === "exact-diff").length;
+    const warnBox = (unmatched > 0 || exactDiffCount > 0) ? `<div class="fp-warn">
+      <h4>${unmatched + exactDiffCount} item${unmatched + exactDiffCount === 1 ? "" : "s"} need${unmatched + exactDiffCount === 1 ? "s" : ""} a decision</h4>
       <ul>
-        <li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
+        ${unmatched > 0 ? `<li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
           Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
           to confirm you've seen it. A new Master Inventory item is never created from here.
           <span class="fp-batch-actions">
             <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
-          </span></li>
+          </span></li>` : ""}
+        ${exactDiffCount > 0 ? `<li><b>${exactDiffCount} item${exactDiffCount === 1 ? "" : "s"} with an exact code match, but a detail differs</b> —
+          the item code already exists in the Master Inventory, but the invoice's unit doesn't match what's on file.
+          Review the comparison shown under each of these rows, then click Use Existing Item once you've confirmed it,
+          or Edit to pick a different item instead.</li>` : ""}
       </ul>
     </div>` : "";
 

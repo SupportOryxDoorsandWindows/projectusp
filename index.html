@@ -483,6 +483,16 @@ tbody tr:hover{background:var(--line-soft)}
   display:flex; align-items:center; justify-content:space-between; gap:var(--space-4); flex-wrap:wrap;
   margin-top:var(--space-4); padding-top:var(--space-3); border-top:1px dashed var(--line);
 }
+
+/* Check-in "exact code match, detail differs" comparison block */
+.fp-exactdiff{
+  margin-top:var(--space-2); background:var(--accent); border-radius:var(--r-sm);
+  padding:var(--space-3) var(--space-4); font-size:12.5px; max-width:520px;
+}
+.fp-exactdiff-h{font-family:var(--font-display); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--accent-deep); margin-bottom:4px}
+.fp-exactdiff .lbl{color:var(--accent-deep); font-weight:600}
+.fp-exactdiff .code{font-family:var(--font-mono)}
+.fp-exactdiff-warn{margin-top:4px; font-weight:600; color:var(--accent-deep)}
 .fp-confirmbar{
   display:flex; align-items:center; justify-content:space-between;
   padding:var(--space-5) var(--space-6); gap:var(--space-4); flex-wrap:wrap;
