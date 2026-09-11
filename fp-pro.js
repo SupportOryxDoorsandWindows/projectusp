@@ -327,6 +327,20 @@
     return `<span class="fp-status-skip">${esc(status)}</span>`;
   }
 
+  // Check-in has its own status chip (separate from Check-out's statusChip
+  // above) purely so a short-code row can show an amber "Review" state --
+  // this is presentation only, it does not change r.status/decided/action,
+  // which the rest of the Check-in logic (tallies, confirm gating) still reads.
+  function ciStatusChip(row, displayStatus) {
+    if (displayStatus === "skipped") return statusChip("skipped");
+    if (displayStatus === "ok") return `<span class="fp-status-ok">🟢 Matched</span>`;
+    if (displayStatus === "unmatched" && row.truncatedHint) {
+      return `<span class="fp-status-review">🟡 Review</span>`;
+    }
+    if (displayStatus === "unmatched") return `<span class="fp-status-unmatched">🔴 Unmatched</span>`;
+    return statusChip(displayStatus);
+  }
+
   function unresolvedByStatus() {
     // Shortages no longer require a decision -- they deduct by default and
     // go negative. Only unmatched codes (never guessed) need acknowledgement.
@@ -1164,13 +1178,23 @@
 
     const rowsHtml = ciState.rows.map((r, i) => {
       if (r.editing) {
-        const codeLabel = r.itemId ? `${esc(r.code)} — ${esc(r.description)}` : "";
+        // For an already-matched row, prefill with its own code so re-opening
+        // Edit shows where it stands. For an unmatched/short-code row, prefill
+        // with the extracted description instead -- the search box already
+        // matches on description as well as code (wireCodePicker's
+        // renderResults), so this surfaces likely Master Inventory matches
+        // immediately on focus without any new matching logic. Either way
+        // the hidden value only ever commits from a clicked suggestion.
+        const codeLabel = r.itemId
+          ? `${esc(r.code)} — ${esc(r.description)}`
+          : esc(r.description || r.code);
         return `<tr class="fp-editing">
           <td class="fp-code-picker">
             <input class="fp-inline-input" id="ciEditCodeSearch${i}" type="text" value="${codeLabel}"
               placeholder="Type to search Master Inventory" autocomplete="off">
             <input type="hidden" id="ciEditCodeValue${i}" value="${r.itemId ? esc(r.code) : ""}">
             <div class="fp-dropdown-results" id="ciEditCodeResults${i}" hidden></div>
+            ${!r.itemId ? `<div class="small muted" style="margin-top:2px">Extracted code: <code>${esc(r.code)}</code> — search below to find the right Master Inventory item.</div>` : ""}
           </td>
           <td><input class="fp-inline-input" id="ciEditDesc${i}" type="text" value="${esc(r.description)}" readonly></td>
           <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
@@ -1191,18 +1215,24 @@
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
       const aedValue = rate && r.invoiceUnitCost != null ? r.qty * r.invoiceUnitCost * rate : null;
-      const truncatedNote = r.truncatedHint && r.status === "unmatched"
-        ? `<div class="small muted" style="color:var(--danger)">Code looks unusually short — the source document may have truncated it. Don't guess the rest; pick the right item from the list if you can confirm it, or leave unmatched.</div>`
+      // Short-code warning now lives as a small badge next to the Code cell
+      // instead of a bold paragraph under the Description -- same signal
+      // (code may be truncated, never guessed/auto-completed), just less
+      // alarming to read. Clicking it opens the same Edit row as the Edit
+      // button (data-act/data-i match applyCiRowAction's existing handling).
+      const reviewFlag = r.truncatedHint && r.status === "unmatched"
+        ? `<button type="button" class="fp-code-review-flag" data-act="edit" data-i="${i}"
+             title="Code may be incomplete. Please verify the correct item before confirming.">⚠ Review</button>`
         : "";
       return `<tr class="${rowClass}">
-        <td class="code">${esc(r.code)}</td>
-        <td>${esc(r.description)}${truncatedNote}</td>
+        <td class="code">${esc(r.code)}${reviewFlag}</td>
+        <td>${esc(r.description)}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">+${fmt(r.qty)} ${esc(r.unit)}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
         <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
-        <td>${statusChip(displayStatus)}</td>
+        <td>${ciStatusChip(r, displayStatus)}</td>
         <td>${ciRenderRowActionButtons(i, r)}</td>
       </tr>`;
     }).join("");
@@ -1278,7 +1308,7 @@
     $("#ciConfirmBar").hidden = false;
     $("#ciConfirm").disabled = !canConfirm;
 
-    document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button").forEach((b) => {
+    document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button, #ciOut .fp-code-review-flag").forEach((b) => {
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
     ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
