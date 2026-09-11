@@ -410,34 +410,24 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-currency-card .field-label{display:block; margin-bottom:2px}
 .fp-currency-card input{width:120px}
 .fp-currency-card .fp-currency-note{font-size:12px; color:var(--text-muted); flex-basis:100%}
-.fp-status-ok{
-  background:var(--brand); color:var(--white);
+.fp-status-ok, .fp-status-short, .fp-status-unmatched, .fp-status-skip, .fp-status-review{
+  display:inline-flex; align-items:center; gap:4px; white-space:nowrap;
   font-family:var(--font-display); font-weight:700; font-size:10px;
   padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
 }
-.fp-status-short{
-  background:var(--danger-bg); color:var(--danger);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-}
-.fp-status-unmatched{
-  background:var(--accent); color:var(--brand);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-}
-.fp-status-skip{
-  background:var(--panel); color:var(--text-muted);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
-  border:1px solid var(--line);
-}
-.fp-status-review{
-  background:var(--accent); color:var(--accent-deep);
-  font-family:var(--font-display); font-weight:700; font-size:10px;
-  padding:2px 8px; border-radius:var(--r-pill); text-transform:uppercase; letter-spacing:0.04em;
+.fp-status-ok{background:var(--brand); color:var(--white)}
+.fp-status-short{background:var(--danger-bg); color:var(--danger)}
+.fp-status-unmatched{background:var(--accent); color:var(--brand)}
+.fp-status-skip{background:var(--panel); color:var(--text-muted); border:1px solid var(--line)}
+.fp-status-review{background:var(--accent); color:var(--accent-deep)}
+.fp-status-review .fp-dot{background:var(--accent-deep)}
+.fp-status-ok .fp-dot{background:var(--white)}
+.fp-status-unmatched .fp-dot{background:var(--brand)}
+.fp-dot{
+  display:inline-block; width:6px; height:6px; border-radius:50%; flex:none;
 }
 .fp-code-review-flag{
-  display:inline-flex; align-items:center; gap:2px;
+  display:inline-flex; align-items:center; gap:2px; white-space:nowrap;
   background:none; border:none; padding:0; margin-left:6px;
   font-family:var(--font-body); font-size:11px; font-weight:600;
   color:var(--accent-deep); cursor:pointer; text-decoration:underline dotted;

@@ -332,12 +332,17 @@
   // this is presentation only, it does not change r.status/decided/action,
   // which the rest of the Check-in logic (tallies, confirm gating) still reads.
   function ciStatusChip(row, displayStatus) {
+    // A CSS dot instead of a colour emoji -- emoji glyphs render
+    // inconsistently across OS/browser font stacks (can show monochrome or
+    // force a line-wrap between the glyph and the label); a dot is reliable
+    // everywhere and the nowrap pill CSS keeps it glued to its label.
+    const dot = `<span class="fp-dot"></span>`;
     if (displayStatus === "skipped") return statusChip("skipped");
-    if (displayStatus === "ok") return `<span class="fp-status-ok">🟢 Matched</span>`;
+    if (displayStatus === "ok") return `<span class="fp-status-ok">${dot}Matched</span>`;
     if (displayStatus === "unmatched" && row.truncatedHint) {
-      return `<span class="fp-status-review">🟡 Review</span>`;
+      return `<span class="fp-status-review">${dot}Review</span>`;
     }
-    if (displayStatus === "unmatched") return `<span class="fp-status-unmatched">🔴 Unmatched</span>`;
+    if (displayStatus === "unmatched") return `<span class="fp-status-unmatched">${dot}Unmatched</span>`;
     return statusChip(displayStatus);
   }
 
