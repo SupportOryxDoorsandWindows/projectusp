@@ -902,16 +902,63 @@
     return out;
   }
 
+  // The document's own title doesn't gate whether it can be read (per the
+  // universal-reader requirement) -- but it's still useful, purely as
+  // information shown back to the user, to say what kind of document this
+  // looks like. First label found wins; an unrecognised title still reads
+  // fine, it's just labelled generically.
+  const DOC_TYPE_PATTERNS = [
+    { type: "Commercial Invoice", re: /commercial\s+invoice/i },
+    { type: "Pro-Forma Invoice", re: /pro-?forma\s+invoice/i },
+    { type: "Tax Invoice", re: /tax\s+invoice/i },
+    { type: "Supplier Invoice", re: /supplier\s+invoice/i },
+    { type: "Delivery Note", re: /delivery\s+note/i },
+    { type: "Purchase Order", re: /purchase\s+order/i },
+    { type: "Quotation", re: /quotation/i },
+    { type: "Quote", re: /\bquote\b/i },
+    { type: "Invoice", re: /\binvoice\b/i },
+  ];
+  function detectDocumentType(text) {
+    for (const p of DOC_TYPE_PATTERNS) if (p.re.test(text)) return p.type;
+    return "Supplier document";
+  }
+
   function parseCheckinHeader(text) {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    const supplier = lines.find((l) => /pty ltd|llc|inc\.?$|company|screens|trading|industries/i.test(l)) || "";
+    // "Oryx" is always the recipient in these documents, never the supplier
+    // -- excluding it stops the (usually earlier, on-page) "ORYX DOOR
+    // SYSTEMS L.L.C" letterhead line from being picked up ahead of the
+    // actual supplier's own name lower down the page. Email/contact lines
+    // are excluded too -- a salesperson's address (e.g.
+    // "exports@freedomscreens.com") often contains the same keyword
+    // ("screens") as the real company-name line and would otherwise win by
+    // appearing first.
+    const supplier = lines.find((l) => !/\boryx\b/i.test(l) && !/@/.test(l) && /pty ltd|llc|\bltd\b|co\.,?\s*ltd|inc\.?$|company|screens|trading|industries/i.test(l)) || "";
     // SQ- covers Quotes/Order Approvals (Quote Number), alongside the
-    // existing Commercial Invoice / delivery note prefixes.
-    const invoiceNumber = (text.match(/\b(?:SI|SO|SQ|INV|DN)-\d+\b/i) || [])[0] || "";
-    const poNumber = (text.match(/\bPO-[\w-]+\b/i) || [])[0] || "";
-    const dm = text.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
+    // existing Commercial Invoice / delivery note prefixes. Falls back to a
+    // labelled document number ("Pro-Forma Invoice # \n S00055") for
+    // suppliers whose own numbering doesn't use one of those prefixes --
+    // the captured token must contain at least one digit so a plain label
+    // word ("Date") is never mistaken for the number itself.
+    const invoiceNumber = (text.match(/\b(?:SI|SO|SQ|INV|DN)-\d+\b/i) || [])[0]
+      || (text.match(/(?:pro-?forma\s+invoice|commercial\s+invoice|tax\s+invoice|supplier\s+invoice|invoice|quotation|quote|delivery\s+note)\s*#?\s*:?\s*\n?\s*([A-Za-z]{0,4}\d[A-Za-z0-9-]{0,19})\b/i) || [])[1]
+      || "";
+    // Strict "PO-1234" first (existing behaviour, unchanged), then a
+    // labelled "Your Reference" value, then a looser "PO 1234"/"PO26-1139"
+    // mention -- in that order, so a stricter/more-certain match always
+    // wins over a broader guess.
+    const poNumber = (text.match(/\bPO-[\w-]+\b/i) || [])[0]
+      || ((text.match(/your\s+reference\s*\n?\s*([^\n]{2,40})/i) || [])[1] || "").trim()
+      || (text.match(/\bPO[\s-][A-Za-z0-9-]{2,20}\b/i) || [])[0]
+      || "";
+    // Prefer a date sitting right next to an explicit "Issued/Invoice/
+    // Document Date" label; fall back to the first date-shaped token found
+    // anywhere, as before.
+    const dm = text.match(/(?:issued|invoice|document)\s+date\s*\n?\s*(\d{2})\/(\d{2})\/(\d{4})/i)
+      || text.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
     const isoDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
-    return { supplier, invoiceNumber, poNumber, isoDate };
+    const docType = detectDocumentType(text);
+    return { supplier, invoiceNumber, poNumber, isoDate, docType };
   }
 
   // --- Additional Check-in document layouts (Quotes, Order Approvals) ----
@@ -979,6 +1026,118 @@
       extract: (m) => ({ unit: m[1], qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
     },
   ];
+
+  // --- General "line-item block" layout -----------------------------------
+  // Some suppliers' PDF export tools (seen in Freedom Screens' Pro-Forma
+  // Invoice / Quotation templates) group each row's own text by its Y
+  // position on the page rather than emitting one row per physical text
+  // line, producing a repeating block like:
+  //   [190022] ASSEM Spring S35 SWP 1600mm (Left
+  //   Black)
+  //   METAL - HS CODE: 732090
+  //   50.00  Units  USD  20.60  0% EXEMPT  USD  1,030.00
+  // -- code+description on their own line(s), an optional material/HS-code
+  // line, then the whole numeric run (qty, unit, price, optional tax,
+  // amount) together on one line. Some rows compress further, with the
+  // code+description AND the numeric run sharing one line
+  // ("[230027] SMB1 Sill Cap BLK  75.00  Units  USD  1.62  ..."), and some
+  // items carry no code at all ("Shipping Crate  1.00  Units  ..."). None of
+  // the single-line CHECKIN_FORMATS regexes above can match any of this (no
+  // fixed column order or position), so this is a structurally different
+  // reading strategy, tried alongside the others in parseCheckinDocument --
+  // not a per-document special case. Item code is optional by design: a
+  // no-code row still comes through with code="" so it reaches the Preview
+  // as unmatched/needs-review rather than disappearing.
+  const BLOCK_CODE_DESC_RE = /^\[([A-Za-z0-9][A-Za-z0-9-]{1,19})\]\s*(.*)$/;
+  const BLOCK_HS_LINE_RE = /\bHS\s*CODE\b/i;
+  const BLOCK_UNIT_WORD = "(?:units?|pcs?|pieces?|each|box(?:es)?|set|sheets?|rolls?|meters?|metres?|kgs?|ltrs?|litres?)";
+  const BLOCK_CUR = SUPPORTED_CURRENCIES.join("|");
+  const BLOCK_TAX = "(?:\\d+(?:\\.\\d+)?%\\s*(?:exempt|vat|gst|tax)?|vat\\s*\\d+(?:\\.\\d+)?%|gst\\s*\\d+(?:\\.\\d+)?%|exempt|n\\/a)";
+  // Captures: 1=qty 2=unit(optional) 3=currency 4=price 5=currency 6=amount.
+  // Not anchored at the start, only at the end ($) -- so it matches
+  // wherever this numeric run appears on the line, leaving anything before
+  // it (a code+description prefix, or nothing at all) as the description.
+  const BLOCK_ANCHOR_RE = new RegExp(
+    `([\\d,]+(?:\\.\\d+)?)\\s+(${BLOCK_UNIT_WORD})?\\s*(${BLOCK_CUR})\\s+([\\d,]+\\.\\d{2})\\s*(?:${BLOCK_TAX}\\s*)?(${BLOCK_CUR})\\s+([\\d,]+\\.\\d{2})\\s*$`,
+    "i"
+  );
+  // A qty (+ optional unit), and nothing else on the line -- the only shape
+  // a priceless Delivery Note row can take here. Only ever tried once an
+  // actual `[CODE]` bracket has just been seen for this item (see
+  // parseBlockDocument) -- not merely "some description text was seen" --
+  // so an unrelated document full of bare numbers (e.g. a drawing's
+  // dimensions) can never be misread as a wall of priceless line items.
+  const BLOCK_QTY_ONLY_RE = new RegExp(`^([\\d,]+(?:\\.\\d+)?)\\s*(${BLOCK_UNIT_WORD})?\\s*$`, "i");
+  // Page/letterhead furniture -- never treated as a code, an anchor, or
+  // meaningful description text, regardless of where it happens to fall.
+  const BLOCK_SKIP_LINE_RE = /^(tax id|swift|bic|account number|recipient|intermediary|international payments|untaxed amount|grand total|amount due|balance due|vat\s*\d|^total$|^subtotal$|freedom screens|head office|subdistrict|province|thailand$|oryx door systems|wh no\.|industrial area|united arab emirates|gst id|dubai du|page\s|revolut)/i;
+
+  function parseBlockDocument(text) {
+    const rawLines = text.split("\n");
+    const entries = [];
+    let pendingCode = "";
+    let pendingDesc = [];
+    for (const raw of rawLines) {
+      const line = raw.trim();
+      if (!line || BLOCK_SKIP_LINE_RE.test(line) || BLOCK_HS_LINE_RE.test(line)) continue;
+
+      const anchorMatch = line.match(BLOCK_ANCHOR_RE);
+      if (anchorMatch) {
+        const prefix = line.slice(0, anchorMatch.index).trim();
+        let code = pendingCode;
+        let descParts = pendingDesc;
+        if (prefix) {
+          const codeMatch = prefix.match(BLOCK_CODE_DESC_RE);
+          if (codeMatch) { code = codeMatch[1]; descParts = codeMatch[2] ? [codeMatch[2]] : []; }
+          else descParts = [...descParts, prefix];
+        }
+        entries.push({
+          code,
+          description: descParts.join(" ").replace(/\s+/g, " ").trim(),
+          unit: anchorMatch[2] || "",
+          qty: parseFloat(anchorMatch[1].replace(/,/g, "")),
+          unitCost: parseFloat(anchorMatch[4].replace(/,/g, "")),
+        });
+        pendingCode = "";
+        pendingDesc = [];
+        continue;
+      }
+
+      const codeMatch = line.match(BLOCK_CODE_DESC_RE);
+      if (codeMatch) {
+        pendingCode = codeMatch[1];
+        pendingDesc = codeMatch[2] ? [codeMatch[2]] : [];
+        continue;
+      }
+
+      // Gated on an actual `[CODE]` bracket having just been seen -- not
+      // merely "some description text" -- otherwise any ordinary document
+      // full of bare numbers (a drawing's dimensions, a spec sheet's
+      // measurements) would be misread as a wall of priceless line items.
+      // A real Delivery Note row without pricing still satisfies this,
+      // since it has its own item code.
+      const qtyOnly = pendingCode && line.match(BLOCK_QTY_ONLY_RE);
+      if (qtyOnly) {
+        entries.push({
+          code: pendingCode,
+          description: pendingDesc.join(" ").replace(/\s+/g, " ").trim(),
+          unit: qtyOnly[2] || "",
+          qty: parseFloat(qtyOnly[1].replace(/,/g, "")),
+          unitCost: null,
+        });
+        pendingCode = "";
+        pendingDesc = [];
+        continue;
+      }
+
+      // Ordinary text -- either a continuation of the current item's
+      // description (this is how a wrapped line, e.g. "(Left" / "Black)",
+      // gets stitched back into one string) or otherwise-harmless filler
+      // that gets discarded the moment the next real item/code resets it.
+      if (line.length <= 90) pendingDesc.push(line);
+    }
+    return entries;
+  }
 
   // Recovers rows whose description wrapped across multiple physical lines,
   // splitting "<numbers> <description> <code> <ln>" into a numbers-only line
@@ -1057,6 +1216,14 @@
       const { rows: wrapped } = stitchWrappedRows(rawLines, format);
       entries.push(...wrapped);
       if (entries.length > best.entries.length) best = { formatId: format.id, formatLabel: format.label, entries };
+    }
+    // The block layout (one field per line -- see parseBlockDocument above)
+    // is structurally different from every regex-per-line format above, so
+    // it's tried as its own candidate and only wins if it actually reads
+    // more rows than every fixed-layout format did.
+    const blockEntries = parseBlockDocument(text);
+    if (blockEntries.length > best.entries.length) {
+      best = { formatId: "block-lines", formatLabel: "Line-item blocks (one field per line)", entries: blockEntries };
     }
     if (!best.entries.length) return best;
 
@@ -1948,7 +2115,7 @@
       const gapNote = doc.missingLnNumbers && doc.missingLnNumbers.length
         ? ` Invoice lines detected: ${totalDetected}. Check-in rows created: ${doc.entries.length}. Line${doc.missingLnNumbers.length === 1 ? "" : "s"} ${doc.missingLnNumbers.join(", ")} could not be reliably read — review ${doc.missingLnNumbers.length === 1 ? "it" : "them"} manually before confirming; nothing was guessed.`
         : "";
-      ciStatus(`Analysis ready — read as ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}`);
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}`);
     } catch (err) {
       console.error(err);
       ciStatus("Could not analyse the document: " + err.message, "err");
