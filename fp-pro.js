@@ -928,19 +928,27 @@
     // "Oryx" is always the recipient in these documents, never the supplier
     // -- excluding it stops the (usually earlier, on-page) "ORYX DOOR
     // SYSTEMS L.L.C" letterhead line from being picked up ahead of the
-    // actual supplier's own name lower down the page. Email/contact lines
-    // are excluded too -- a salesperson's address (e.g.
+    // actual supplier's own name lower down the page. Email lines are
+    // excluded too -- a salesperson's address (e.g.
     // "exports@freedomscreens.com") often contains the same keyword
     // ("screens") as the real company-name line and would otherwise win by
-    // appearing first.
-    const supplier = lines.find((l) => !/\boryx\b/i.test(l) && !/@/.test(l) && /pty ltd|llc|\bltd\b|co\.,?\s*ltd|inc\.?$|company|screens|trading|industries/i.test(l)) || "";
+    // appearing first. Same reasoning for a bank-details line ("Bank Name:
+    // SBI ... For Freedom Screens India LLP") -- it names the account
+    // holder, not the letterhead, but shares the same keyword.
+    const supplier = lines.find((l) => !/\boryx\b/i.test(l) && !/@/.test(l) && !/\bbank\b/i.test(l) && /pty ltd|llc|\bltd\b|co\.,?\s*ltd|inc\.?$|company|screens|trading|industries/i.test(l)) || "";
     // SQ- covers Quotes/Order Approvals (Quote Number), alongside the
     // existing Commercial Invoice / delivery note prefixes. Falls back to a
     // labelled document number ("Pro-Forma Invoice # \n S00055") for
     // suppliers whose own numbering doesn't use one of those prefixes --
     // the captured token must contain at least one digit so a plain label
     // word ("Date") is never mistaken for the number itself.
+    // "FSI/25-26/Pi25" (Freedom Screens India's own PI numbering) is its own
+    // fallback: their "PI NO" / "DATE" header sits on its own line with the
+    // actual values on the next line, too far from the label for the
+    // generic labelled-number pattern below to bridge safely -- but the
+    // "FSI/" prefix itself is distinctive enough to match directly.
     const invoiceNumber = (text.match(/\b(?:SI|SO|SQ|INV|DN)-\d+\b/i) || [])[0]
+      || (text.match(/\bFSI\/[^\s,;]+/i) || [])[0]
       || (text.match(/(?:pro-?forma\s+invoice|commercial\s+invoice|tax\s+invoice|supplier\s+invoice|invoice|quotation|quote|delivery\s+note)\s*#?\s*:?\s*\n?\s*([A-Za-z]{0,4}\d[A-Za-z0-9-]{0,19})\b/i) || [])[1]
       || "";
     // Strict "PO-1234" first (existing behaviour, unchanged), then a
@@ -953,9 +961,12 @@
       || "";
     // Prefer a date sitting right next to an explicit "Issued/Invoice/
     // Document Date" label; fall back to the first date-shaped token found
-    // anywhere, as before.
-    const dm = text.match(/(?:issued|invoice|document)\s+date\s*\n?\s*(\d{2})\/(\d{2})\/(\d{4})/i)
-      || text.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
+    // anywhere. Accepts either "/" or "-" as the separator -- both appear
+    // across real supplier documents (17/02/2026 vs 25-02-2026) -- while
+    // still assuming DD-MM-YYYY field order throughout, consistent with
+    // every document seen so far.
+    const dm = text.match(/(?:issued|invoice|document)\s+date\s*\n?\s*(\d{2})[\/-](\d{2})[\/-](\d{4})/i)
+      || text.match(/\b(\d{2})[\/-](\d{2})[\/-](\d{4})\b/);
     const isoDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
     const docType = detectDocumentType(text);
     return { supplier, invoiceNumber, poNumber, isoDate, docType };
@@ -981,6 +992,15 @@
   // conditions, signature blocks, page numbers) doesn't accidentally match.
   const QUOTE_CODE_RE = "[A-Za-z0-9-]{3,15}";
   const QUOTE_LN_RE = "\\d{1,3}";
+  // A genuine product description always has at least one letter in it --
+  // this lookahead (zero-width, doesn't change capture-group numbering)
+  // stops these loose "numbers ... description ... numbers" patterns from
+  // matching unrelated all-digit boilerplate elsewhere in a document (an
+  // ABN/registration number, a bank account number). Found via a real
+  // supplier document whose "ABN 27 093 847 388" line satisfied every other
+  // constraint in the Order Approval pattern and was wrongly read as a line
+  // item ("093" as the description) before this was added.
+  const QUOTE_DESC_RE = "(?=.*[A-Za-z]).+?";
 
   const CHECKIN_FORMATS = [
     {
@@ -997,24 +1017,24 @@
       // e.g. "306.50 6.13 0% 6.13 50 ZLS1 End Cap 60 A WHT 3300 1"
       id: "quote-discount",
       label: "Quote (with Discount %)",
-      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})\\s+(.+?)\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
-      extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseFloat(m[2]), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
       // A wrapped description pushes the code/line number onto a later
       // physical line -- this matches just the numeric prefix, so the row
       // can still be recovered by stitching it to the terminal code/line
       // that follows (see stitchWrappedRows below), instead of being lost.
-      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})$`),
-      orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseInt(m[3], 10) }),
+      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)$`),
+      orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseFloat(m[3]) }),
     },
     {
       // "Total | Tax % | Price | Qty | Description | Code | Ln"
       // e.g. "116.00 0% 0.58 200 SMB1 Slide Lock WHT 230034 1"
       id: "quote-tax",
       label: "Quote (with Tax %)",
-      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})\\s+(.+?)\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
-      extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
-      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{2})\\s+(\\d{1,6})$`),
-      orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseInt(m[3], 10) }),
+      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseFloat(m[2]), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)$`),
+      orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseFloat(m[3]) }),
     },
     {
       // "Units | Qty | Description | Code | Ln" -- no pricing at all (e.g. a
@@ -1022,8 +1042,36 @@
       // shows "—" for cost/value on these rows rather than a fabricated 0.
       id: "order-approval",
       label: "Order Approval (no pricing)",
-      lineRe: new RegExp(`^(\\S+)\\s+(\\d{1,6})\\s+(.+?)\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
-      extract: (m) => ({ unit: m[1], qty: parseInt(m[2], 10), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+      lineRe: new RegExp(`^(\\S+)\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      extract: (m) => ({ unit: m[1], qty: parseFloat(m[2]), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
+    },
+    {
+      // "Sl No | Particulars | Qty | Rate | Amount" -- forward (left-to-right)
+      // column order, seen on Freedom Screens India's own Proforma Invoice
+      // template, e.g. "1 ZLS1-Infinity 60mm-IS( 2.9m)Mill 25 11.50 287.50".
+      // No item code column at all -- every row comes through with code=""
+      // so it reaches the Preview needing a manual Master Inventory pick,
+      // exactly as rule 10 requires when there's no code to match by. Sl No
+      // is deliberately NOT read as `ln` for gap-detection: real documents
+      // of this kind have genuine unexplained gaps in their own numbering
+      // (e.g. row 13 simply absent), which is not the same thing as this
+      // reader failing to parse a row.
+      id: "sl-no-table",
+      label: "Sl No / Particulars table (no item code)",
+      lineRe: new RegExp(`^(\\d{1,3})\\s+(${QUOTE_DESC_RE})\\s+(\\d+(?:\\.\\d+)?)\\s+([\\d,]+(?:\\.\\d+)?)\\s+([\\d,]+\\.\\d{1,2})\\s*$`),
+      extract: (m) => ({ code: "", description: m[2].trim(), qty: parseFloat(m[3]), unitCost: parseFloat(m[4].replace(/,/g, "")) }),
+    },
+    {
+      // Same Freedom Screens India template, with two extra columns
+      // inserted between Particulars and Qty -- Cut Length (metres) and an
+      // HSN/HS code -- for extrusion items sold by cut length, e.g.
+      // "1 ZLS1-Track-01(3.682kgs) 5.1 76101000 200 38.000 7600.000". HSN is
+      // required to be 6-8 digits (a real HS/HSN code) so this format can't
+      // be confused with the plainer 5-field "sl-no-table" above.
+      id: "sl-no-table-cutlength",
+      label: "Sl No / Particulars table with cut length + HSN (no item code)",
+      lineRe: new RegExp(`^(\\d{1,3})\\s+(${QUOTE_DESC_RE})\\s+\\d+(?:\\.\\d+)?\\s+\\d{6,8}\\s+(\\d+(?:\\.\\d+)?)\\s+([\\d,]+(?:\\.\\d+)?)\\s+([\\d,]+\\.\\d{1,3})\\s*$`),
+      extract: (m) => ({ code: "", description: m[2].trim(), qty: parseFloat(m[3]), unitCost: parseFloat(m[4].replace(/,/g, "")) }),
     },
   ];
 
@@ -1053,12 +1101,19 @@
   const BLOCK_UNIT_WORD = "(?:units?|pcs?|pieces?|each|box(?:es)?|set|sheets?|rolls?|meters?|metres?|kgs?|ltrs?|litres?)";
   const BLOCK_CUR = SUPPORTED_CURRENCIES.join("|");
   const BLOCK_TAX = "(?:\\d+(?:\\.\\d+)?%\\s*(?:exempt|vat|gst|tax)?|vat\\s*\\d+(?:\\.\\d+)?%|gst\\s*\\d+(?:\\.\\d+)?%|exempt|n\\/a)";
-  // Captures: 1=qty 2=unit(optional) 3=currency 4=price 5=currency 6=amount.
-  // Not anchored at the start, only at the end ($) -- so it matches
-  // wherever this numeric run appears on the line, leaving anything before
-  // it (a code+description prefix, or nothing at all) as the description.
+  // Captures: 1=qty 2=unit(optional) 3=currency-before-price(optional)
+  // 4=price 5=currency-before-amount 6=amount. Not anchored at the start,
+  // only at the end ($) -- so it matches wherever this numeric run appears
+  // on the line, leaving anything before it (a code+description prefix, or
+  // nothing at all) as the description. The currency right before Price is
+  // optional -- some suppliers state it there twice (once per money value,
+  // "USD 20.60 ... USD 1,030.00"), others only once, right before Amount
+  // ("20.600000 ... USD 1,030.00") -- and Price's own decimal precision is
+  // left open (some of the same documents print 6 decimal places on unit
+  // price, e.g. "2.480000", not the usual 2) since it's read verbatim
+  // either way, never rounded or reformatted by this reader.
   const BLOCK_ANCHOR_RE = new RegExp(
-    `([\\d,]+(?:\\.\\d+)?)\\s+(${BLOCK_UNIT_WORD})?\\s*(${BLOCK_CUR})\\s+([\\d,]+\\.\\d{2})\\s*(?:${BLOCK_TAX}\\s*)?(${BLOCK_CUR})\\s+([\\d,]+\\.\\d{2})\\s*$`,
+    `([\\d,]+(?:\\.\\d+)?)\\s+(${BLOCK_UNIT_WORD})?\\s*(?:(${BLOCK_CUR})\\s+)?([\\d,]+\\.\\d+)\\s*(?:${BLOCK_TAX}\\s*)?(${BLOCK_CUR})\\s+([\\d,]+\\.\\d{1,2})\\s*$`,
     "i"
   );
   // A qty (+ optional unit), and nothing else on the line -- the only shape
@@ -1188,7 +1243,13 @@
     let n = maxLn + 1;
     while (missing.length < 50) {
       const re = lnAtStart ? new RegExp(`^${n}\\b`) : new RegExp(`\\b${n}$`);
-      const found = rawLines.some((raw) => re.test(raw.trim()));
+      // A pagination footer ("Page 1 of 2") legitimately ends with a small
+      // number that has nothing to do with a line item -- skip those lines
+      // so "of 2" doesn't get mistaken for evidence of a missing Ln 2.
+      const found = rawLines.some((raw) => {
+        const l = raw.trim();
+        return !/^page\s+\d+\s+of\s+\d+$/i.test(l) && re.test(l);
+      });
       if (!found) break;
       missing.push(n);
       n++;
@@ -1257,12 +1318,23 @@
       const maxLn = Math.max(...lns);
       const missing = [];
       for (let n = 1; n <= maxLn; n++) if (!seen.has(n)) missing.push(n);
-      // A hole below maxLn is caught above, but nothing above can ever
-      // reveal a row missing from the very end of the document -- probe
-      // the raw text directly for it (see probeTrailingMissingLines).
-      const winningFormat = CHECKIN_FORMATS.find((f) => f.id === best.formatId);
-      if (winningFormat) missing.push(...probeTrailingMissingLines(rawLines, winningFormat, maxLn));
-      best.missingLnNumbers = missing;
+      // Sanity check on the Ln numbers themselves: if nearly everything
+      // between 1 and the highest Ln seen is "missing", that's a sign this
+      // format matched one stray line with an unrelated large Ln (e.g. a
+      // registration/account number elsewhere in the document) rather than
+      // dozens of genuinely unparseable rows -- surfacing hundreds of fake
+      // "missing line" numbers would bury real gap warnings in noise, so
+      // this format's Ln sequence is treated as not trustworthy instead.
+      if (missing.length > Math.max(50, best.entries.length * 5)) {
+        best.missingLnNumbers = [];
+      } else {
+        // A hole below maxLn is caught above, but nothing above can ever
+        // reveal a row missing from the very end of the document -- probe
+        // the raw text directly for it (see probeTrailingMissingLines).
+        const winningFormat = CHECKIN_FORMATS.find((f) => f.id === best.formatId);
+        if (winningFormat) missing.push(...probeTrailingMissingLines(rawLines, winningFormat, maxLn));
+        best.missingLnNumbers = missing;
+      }
     } else {
       best.missingLnNumbers = [];
     }
