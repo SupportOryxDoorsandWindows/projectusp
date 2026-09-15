@@ -2173,15 +2173,27 @@
     // never applied without being visible and editable first. Leaving it
     // blank/zero is exactly Case A (no shipping) and leaves every figure
     // above completely unchanged.
+    //
+    // The note text below is a staff-facing instruction, not just a status
+    // report -- every branch tells the person what to actually do next
+    // (enter it / check it / leave it blank), since this is a new step in
+    // an existing workflow and the page itself is the only training most
+    // people will get.
+    let shippingGuidance;
+    if (ciState.shippingNeedsReview) {
+      shippingGuidance = `${ciState.shippingNote} Type the confirmed amount into the box above, or leave it blank if there's no shipping charge on this document.`;
+    } else if (ciState.shippingAmountOriginal > 0) {
+      shippingGuidance = `${ciState.shippingNote} Check this is the right amount before confirming — if not, correct it above.`;
+    } else {
+      shippingGuidance = "No shipping/freight charge was found on this document. If the supplier billed shipping or freight separately, type the amount into the box above and it'll be spread evenly across the items below. If not, leave this blank — nothing changes.";
+    }
     const shippingCard = `<div class="fp-currency-card" id="fpShippingCard">
         <div><label class="field-label" for="ciShippingInput">Shipping / freight cost (${esc(cur)})</label>
           <input id="ciShippingInput" type="number" step="any" min="0"
             value="${ciState.shippingAmountOriginal != null ? ciState.shippingAmountOriginal : ""}" placeholder="0.00"></div>
         <div><label class="field-label">Inventory line items</label><strong>${shippingActiveCount}</strong></div>
         <div><label class="field-label">Shipping per item</label><strong>${shippingPerItem != null ? genericMoney(shippingPerItem, cur) : "—"}</strong></div>
-        <div class="fp-currency-note">${esc(ciState.shippingNote || "No shipping/freight charge detected in this document.")}${
-          ciState.shippingNeedsReview ? " Enter the confirmed amount above, or leave blank if there's no shipping charge." : ""
-        }</div>
+        <div class="fp-currency-note">${esc(shippingGuidance)}</div>
       </div>`;
 
     $("#ciOut").innerHTML = `
