@@ -852,15 +852,33 @@
   // for a charge and pull in an unrelated total sitting below it.
   const SHIPPING_TERM_RE = /\b(shipping(?:\s*(?:&|and)\s*handling)?(?:\s+cost)?|freight(?:\s*(?:&|and)\s*insurance)?(?:\s+charge)?|delivery\s+charge|transport(?:ation)?|handling\s+charge)\b/i;
   const NOT_SHIPPING_RE = /\b(tax|vat|gst|discount|sub\s*-?\s*total|grand\s*total)\b/i;
+  // A genuine freight/shipping summary charge is a standalone label+amount
+  // near the totals -- not a fully-structured priced row with its own
+  // qty/unit/tax columns. A real supplier document had a "Shipping Crate"
+  // *product* line (a packing crate sold as a line item, in the same
+  // Qty/Unit/Price/Tax%/Total shape as every other item on the invoice) --
+  // its own tax-rate token ("0% EXEMPT") is what distinguishes it from an
+  // actual freight charge line, so a line carrying one is never a candidate.
+  const ITEM_ROW_SHAPE_RE = /\d+(?:\.\d+)?\s*%/;
   const MONEY_TOKEN_RE = /([\d,]+\.\d{1,4})/;
+  // A DD.MM.YYYY / DD-MM-YYYY / DD/MM/YYYY date reads as a valid (wrong)
+  // money token to MONEY_TOKEN_RE (e.g. "07.11.2025" contains "07.11") --
+  // strip full date-shaped tokens out of a line before searching it for an
+  // amount, so a document date sitting next to the word "Freight" (e.g. a
+  // shipment-method line like "07.11.2025 SEA FREIGHT") is never misread as
+  // a freight cost of 7.11.
+  const DATE_TOKEN_RE = /\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{4}\b/g;
+  function stripDates(line) {
+    return line.replace(DATE_TOKEN_RE, " ");
+  }
 
   function detectShippingCharge(text) {
     const rawLines = text.split("\n");
     const candidates = [];
     for (let i = 0; i < rawLines.length; i++) {
       const line = rawLines[i].trim();
-      if (!line || !SHIPPING_TERM_RE.test(line) || NOT_SHIPPING_RE.test(line)) continue;
-      const onLine = line.match(MONEY_TOKEN_RE);
+      if (!line || !SHIPPING_TERM_RE.test(line) || NOT_SHIPPING_RE.test(line) || ITEM_ROW_SHAPE_RE.test(line)) continue;
+      const onLine = stripDates(line).match(MONEY_TOKEN_RE);
       if (onLine) {
         const amt = parseFloat(onLine[1].replace(/,/g, ""));
         if (amt > 0) candidates.push({ label: line, amount: amt });
@@ -871,8 +889,8 @@
       const isBareLabel = line.split(/\s+/).length <= 3 && /^[A-Za-z][A-Za-z\s&]*$/.test(line);
       if (!isBareLabel) continue;
       const next = (rawLines[i + 1] || "").trim();
-      if (!next || NOT_SHIPPING_RE.test(next)) continue;
-      const nm = next.match(MONEY_TOKEN_RE);
+      if (!next || NOT_SHIPPING_RE.test(next) || ITEM_ROW_SHAPE_RE.test(next)) continue;
+      const nm = stripDates(next).match(MONEY_TOKEN_RE);
       if (nm) {
         const amt = parseFloat(nm[1].replace(/,/g, ""));
         if (amt > 0) candidates.push({ label: `${line} / ${next}`, amount: amt });
