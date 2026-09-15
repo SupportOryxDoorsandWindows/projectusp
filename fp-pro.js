@@ -1017,13 +1017,18 @@
       // e.g. "306.50 6.13 0% 6.13 50 ZLS1 End Cap 60 A WHT 3300 1"
       id: "quote-discount",
       label: "Quote (with Discount %)",
-      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      // The leading Total and Discounted-Price amounts are display-only
+      // (never captured) but still have to match -- a supplier that drops a
+      // trailing zero ("1,805.0" instead of "1,805.00") must not fail the
+      // whole row just because these two unused fields expect exactly 2
+      // decimals.
+      lineRe: new RegExp(`^[\\d,]+\\.\\d{1,2}\\s+[\\d,]+\\.\\d{1,2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
       extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseFloat(m[2]), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
       // A wrapped description pushes the code/line number onto a later
       // physical line -- this matches just the numeric prefix, so the row
       // can still be recovered by stitching it to the terminal code/line
       // that follows (see stitchWrappedRows below), instead of being lost.
-      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)$`),
+      orphanRe: new RegExp(`^([\\d,]+\\.\\d{1,2})\\s+[\\d,]+\\.\\d{1,2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)$`),
       orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseFloat(m[3]) }),
     },
     {
@@ -1031,9 +1036,9 @@
       // e.g. "116.00 0% 0.58 200 SMB1 Slide Lock WHT 230034 1"
       id: "quote-tax",
       label: "Quote (with Tax %)",
-      lineRe: new RegExp(`^[\\d,]+\\.\\d{2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
+      lineRe: new RegExp(`^[\\d,]+\\.\\d{1,2}\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(${QUOTE_DESC_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_LN_RE})$`),
       extract: (m) => ({ unitCost: parseFloat(m[1].replace(/,/g, "")), qty: parseFloat(m[2]), description: m[3].trim(), code: m[4], ln: parseInt(m[5], 10) }),
-      orphanRe: new RegExp(`^([\\d,]+\\.\\d{2})\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)$`),
+      orphanRe: new RegExp(`^([\\d,]+\\.\\d{1,2})\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)$`),
       orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseFloat(m[3]) }),
     },
     {
@@ -1072,6 +1077,26 @@
       label: "Sl No / Particulars table with cut length + HSN (no item code)",
       lineRe: new RegExp(`^(\\d{1,3})\\s+(${QUOTE_DESC_RE})\\s+\\d+(?:\\.\\d+)?\\s+\\d{6,8}\\s+(\\d+(?:\\.\\d+)?)\\s+([\\d,]+(?:\\.\\d+)?)\\s+([\\d,]+\\.\\d{1,3})\\s*$`),
       extract: (m) => ({ code: "", description: m[2].trim(), qty: parseFloat(m[3]), unitCost: parseFloat(m[4].replace(/,/g, "")) }),
+    },
+    {
+      // ORYX's own "Zipline/Components Order Form" template (a single fixed
+      // form, not a repeating table -- these documents carry exactly one
+      // filled-in item row). Its labelled boxes (Description, Unit of
+      // Measure, Material, Price, Qty, Sub Total, Comments) all sit on the
+      // same text baseline as the Code, so pdf.js's y-grouping reads them as
+      // one squashed line, e.g.
+      // "910005R  Pet Mesh 3m wide  3m x 30m Roll  Plastic  902.50  2  1,805.00  1,805.00  Airfreight"
+      // or, when the form has no Material column filled in,
+      // "30001R  Bug Fur 12mm (100m Roll)  100m  285.67  3  857.01". The
+      // description/unit/material text in between Code and Price is read as
+      // one combined description rather than split into separate fields --
+      // there's no reliable delimiter between them -- and the Sub Total may
+      // repeat once (a duplicate Sub Total box) followed by an optional
+      // one-word shipping comment; both are optional so either layout matches.
+      id: "single-item-order-form",
+      label: "Single-item order form (Code / Description / Price / Qty / Sub Total)",
+      lineRe: new RegExp(`^(\\d{3,7}[A-Z]?)\\s+(${QUOTE_DESC_RE})\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+[\\d,]+\\.\\d{1,2}(?:\\s+[\\d,]+\\.\\d{1,2})?(?:\\s+[A-Za-z]+)?\\s*$`),
+      extract: (m) => ({ code: m[1], description: m[2].trim(), unitCost: parseFloat(m[3].replace(/,/g, "")), qty: parseFloat(m[4]) }),
     },
   ];
 
@@ -1257,13 +1282,48 @@
     return missing;
   }
 
+  // Freedom Screens India's "PROFORMA INVOICE Revised" template (seen on
+  // FSI/24-25/Pi15R) wraps each Sl No table row across three separate
+  // physical lines instead of one -- the Sl No alone, then the Particulars
+  // text alone, then "Qty Rate Amount" alone, e.g.
+  //   1
+  //   SMB1 Track Retainer-01 (5.4m)
+  //   60  8.0  480.0
+  // rather than the single-line "1 <desc> 60 8.0 480.0" the sl-no-table
+  // format expects. Rejoining that exact three-line shape back into one
+  // line lets sl-no-table match it without a second parallel format to
+  // maintain. A bare "Packing" charge line (no leading Sl No) is correctly
+  // left untouched here -- it never matches this shape.
+  function mergeWrappedSlNoRows(rawLines) {
+    const lnOnlyRe = /^(\d{1,3})\s*$/;
+    const numTripleRe = /^(\d+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)\s+([\d,]+\.\d{1,3})\s*$/;
+    const out = [];
+    let i = 0;
+    while (i < rawLines.length) {
+      const m0 = rawLines[i].trim().match(lnOnlyRe);
+      const l1 = (rawLines[i + 1] || "").trim();
+      const l2 = (rawLines[i + 2] || "").trim();
+      if (m0 && l1 && /[A-Za-z]/.test(l1) && !numTripleRe.test(l1)) {
+        const m2 = l2.match(numTripleRe);
+        if (m2) {
+          out.push(`${m0[1]} ${l1} ${m2[1]} ${m2[2]} ${m2[3]}`);
+          i += 3;
+          continue;
+        }
+      }
+      out.push(rawLines[i]);
+      i++;
+    }
+    return out;
+  }
+
   // Tries every known Check-in document layout and uses whichever produces
   // the most matched rows -- this is the "recognise the document's actual
   // structure" step. Zero rows across every format means the document isn't
   // one this reader recognises; the caller must not fabricate anything from
   // that and must show a clear message instead.
   function parseCheckinDocument(text) {
-    const rawLines = text.split("\n");
+    const rawLines = mergeWrappedSlNoRows(text.split("\n"));
     let best = { formatId: null, formatLabel: null, entries: [] };
     for (const format of CHECKIN_FORMATS) {
       const entries = [];
