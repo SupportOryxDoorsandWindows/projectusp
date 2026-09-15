@@ -746,6 +746,15 @@
     ratesByCurrency: null,
     missingLnNumbers: [], // line numbers detected in the raw text but not readable into a row
     missingLnAcknowledged: false,
+    // Landed Cost: total shipping/freight charge, in the document's own
+    // currency (ciState.currency) -- null means "no shipping applies",
+    // which leaves every existing calculation untouched. Set from
+    // detectShippingCharge() on Analyse, but always user-editable in the
+    // preview before Confirm; never written anywhere without being visible
+    // there first.
+    shippingAmountOriginal: null,
+    shippingNote: "",
+    shippingNeedsReview: false,
   };
 
   // Currencies this reader looks for on a supplier document. Detection just
@@ -826,6 +835,69 @@
     "unavailable": "unavailable",
     "n/a": "n/a",
   };
+
+  // --- Landed Cost: shipping/freight detection ----------------------------
+  //
+  // Only ever a convenience prefill for the editable Shipping / Freight
+  // field in the Check-in preview -- never applied silently. A genuine
+  // shipping/freight label ("Freight", "Shipping Cost", "Delivery Charge"...)
+  // paired with a money amount on the same line, or on the very next line
+  // when the label stands completely alone. Tax/VAT/GST/discount/subtotal/
+  // grand-total lines are excluded outright, and a line that merely mentions
+  // one of these words as part of a wider column-header row (e.g. Freedom
+  // Screens Australia's boilerplate "Tax Rat Price Freight" header, which
+  // never carries a value of its own) is deliberately NOT treated as a
+  // standalone label -- only a short, bare label line qualifies for the
+  // look-at-the-next-line fallback, so a header row can never be mistaken
+  // for a charge and pull in an unrelated total sitting below it.
+  const SHIPPING_TERM_RE = /\b(shipping(?:\s*(?:&|and)\s*handling)?(?:\s+cost)?|freight(?:\s*(?:&|and)\s*insurance)?(?:\s+charge)?|delivery\s+charge|transport(?:ation)?|handling\s+charge)\b/i;
+  const NOT_SHIPPING_RE = /\b(tax|vat|gst|discount|sub\s*-?\s*total|grand\s*total)\b/i;
+  const MONEY_TOKEN_RE = /([\d,]+\.\d{1,4})/;
+
+  function detectShippingCharge(text) {
+    const rawLines = text.split("\n");
+    const candidates = [];
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i].trim();
+      if (!line || !SHIPPING_TERM_RE.test(line) || NOT_SHIPPING_RE.test(line)) continue;
+      const onLine = line.match(MONEY_TOKEN_RE);
+      if (onLine) {
+        const amt = parseFloat(onLine[1].replace(/,/g, ""));
+        if (amt > 0) candidates.push({ label: line, amount: amt });
+        continue;
+      }
+      // A bare label line (just the word itself, not a multi-column header)
+      // -- look at the very next non-blank line for its value only.
+      const isBareLabel = line.split(/\s+/).length <= 3 && /^[A-Za-z][A-Za-z\s&]*$/.test(line);
+      if (!isBareLabel) continue;
+      const next = (rawLines[i + 1] || "").trim();
+      if (!next || NOT_SHIPPING_RE.test(next)) continue;
+      const nm = next.match(MONEY_TOKEN_RE);
+      if (nm) {
+        const amt = parseFloat(nm[1].replace(/,/g, ""));
+        if (amt > 0) candidates.push({ label: `${line} / ${next}`, amount: amt });
+      }
+    }
+    const seen = new Set();
+    const uniq = candidates.filter((c) => {
+      const k = c.label + "|" + c.amount;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    if (!uniq.length) {
+      return { amount: null, note: "No shipping/freight charge detected in this document.", needsReview: false };
+    }
+    const distinctAmounts = new Set(uniq.map((c) => c.amount));
+    if (distinctAmounts.size > 1) {
+      return {
+        amount: null,
+        needsReview: true,
+        note: `Found ${uniq.length} possible shipping/freight amounts (${uniq.map((c) => c.amount).join(", ")}) — couldn't tell which one is correct. Enter the confirmed amount manually, or leave blank if there's no shipping charge.`,
+      };
+    }
+    return { amount: uniq[0].amount, needsReview: false, note: `Detected from "${uniq[0].label.trim()}" — review before confirming.` };
+  }
 
   function genericMoney(n, code) {
     if (n === null || n === undefined || isNaN(n)) return "—";
@@ -1519,14 +1591,68 @@
     return ciState.currency === "AED" ? 1 : (ciState.exchangeRate || null);
   }
 
+  // Landed Cost: splits ciState.shippingAmountOriginal equally across every
+  // *inventory line item* currently checking in (action "add" or
+  // "create-new" -- exactly the same set ciTally() already counts; a
+  // skipped, unmatched-pending, or otherwise undecided row is never counted
+  // as a line item, per spec). Deliberately divides by the number of LINES,
+  // not by total quantity -- a document with Qty 100 / Qty 2 / Qty 50 still
+  // gets an even 3-way split. Recomputed fresh from the current row list on
+  // every call (render, tally, confirm) rather than cached, so it always
+  // reflects whatever the user has skipped/acknowledged so far.
+  //
+  // Cent-based integer arithmetic so the allocations always sum back to
+  // exactly the original amount -- e.g. USD 100 / 3 lines never becomes
+  // 33.33 + 33.33 + 33.33 = 99.99. Any leftover cent from the division goes
+  // entirely to the last line item, per spec ("apply the difference to the
+  // final valid inventory line").
+  function ciShippingAllocation() {
+    const alloc = new Map(); // row index -> allocated amount, original currency
+    const total = ciState.shippingAmountOriginal;
+    if (!ciState.rows || !(total > 0)) return alloc;
+    const activeIdx = [];
+    ciState.rows.forEach((r, i) => { if (r.action === "add" || r.action === "create-new") activeIdx.push(i); });
+    if (!activeIdx.length) return alloc;
+    const totalCents = Math.round(total * 100);
+    const base = Math.floor(totalCents / activeIdx.length);
+    const remainder = totalCents - base * activeIdx.length;
+    activeIdx.forEach((rowIdx, pos) => {
+      const cents = base + (pos === activeIdx.length - 1 ? remainder : 0);
+      alloc.set(rowIdx, cents / 100);
+    });
+    return alloc;
+  }
+
+  // The landed unit cost for one row: its own invoice unit cost plus this
+  // row's share of shipping. Left as null (never a fabricated number) when
+  // the document itself gave no unit cost for this line (e.g. a no-pricing
+  // Order Approval) -- the shipping allocation still exists and is still
+  // shown, but it can't be added to an unknown base cost.
+  function ciLandedUnitCost(rowIdx, shipAlloc) {
+    const r = ciState.rows[rowIdx];
+    if (r.invoiceUnitCost == null) return null;
+    return r.invoiceUnitCost + (shipAlloc.get(rowIdx) || 0);
+  }
+
   function ciTally() {
     // A confirmed new-item row ("create-new") checks in and adds value just
     // like a matched row -- it counts alongside "add" in every total below.
-    const active = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new");
+    const shipAlloc = ciShippingAllocation();
     const rate = ciRate();
-    const totalValueOriginal = active.reduce((s, r) => s + r.qty * (r.invoiceUnitCost || 0), 0);
+    let totalItems = 0;
+    let totalValueOriginal = 0;
+    ciState.rows.forEach((r, i) => {
+      if (r.action !== "add" && r.action !== "create-new") return;
+      totalItems++;
+      // Falls back to the plain invoice unit cost when there's no shipping
+      // to allocate (shipAlloc empty) -- identical to the pre-Landed-Cost
+      // calculation, so a document with no shipping charge is completely
+      // unaffected.
+      const landed = ciLandedUnitCost(i, shipAlloc);
+      totalValueOriginal += r.qty * (landed != null ? landed : (r.invoiceUnitCost || 0));
+    });
     return {
-      totalItems: active.length,
+      totalItems,
       totalValueOriginal,
       totalValueAed: rate ? totalValueOriginal * rate : null,
       unresolved: ciState.rows.filter((r) => !r.decided).length,
@@ -1799,6 +1925,11 @@
     const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
     const cur = ciState.currency;
+    const shipAlloc = ciShippingAllocation();
+    const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
+    const shippingPerItem = ciState.shippingAmountOriginal > 0 && shippingActiveCount > 0
+      ? ciState.shippingAmountOriginal / shippingActiveCount
+      : null;
 
     const rowsHtml = ciState.rows.map((r, i) => {
       if (r.creatingNew) {
@@ -1810,7 +1941,7 @@
             <label class="fp-newitem-ack"><input type="checkbox" id="ciNewAck${i}"> None of these match — this is genuinely a new item.</label>
           </div>` : "";
         return `<tr class="fp-editing">
-          <td colspan="9">
+          <td colspan="11">
             <div class="fp-newitem-panel">
               <div class="fp-newitem-tag">Will create a new Master Inventory record</div>
               <h4>${esc(r.code)} — ${esc(r.description)}</h4>
@@ -1874,6 +2005,8 @@
           <td class="num">—</td>
           <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
           <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
           <td class="small muted">Editing…</td>
           <td><div class="fp-row-actions">
             <button data-act="save-edit" data-i="${i}" class="on">Save</button>
@@ -1883,7 +2016,16 @@
       }
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
-      const aedValue = rate && r.invoiceUnitCost != null ? r.qty * r.invoiceUnitCost * rate : null;
+      // Landed Cost: this row's share of shipping (0 for a skipped/pending
+      // row -- shipAlloc only ever has entries for "add"/"create-new" rows)
+      // and its landed unit cost (original unit cost + that share). Value
+      // (AED) below is based on the landed figure once shipping applies --
+      // with no shipping charge entered, shipAlloc is empty, landedUnitCost
+      // falls back to the plain invoiceUnitCost, and this is byte-for-byte
+      // the same number the pre-Landed-Cost calculation produced.
+      const shipAllocForRow = shipAlloc.get(i) || 0;
+      const landedUnitCost = ciLandedUnitCost(i, shipAlloc);
+      const aedValue = rate && landedUnitCost != null ? r.qty * landedUnitCost * rate : null;
       // Short-code warning now lives as a small badge next to the Code cell
       // instead of a bold paragraph under the Description -- same signal
       // (code may be truncated, never guessed/auto-completed), just less
@@ -1943,6 +2085,8 @@
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
         <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+        <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, cur) : "—"}</td>
+        <td class="num">${landedUnitCost != null ? genericMoney(landedUnitCost, cur) : "—"}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${ciStatusChip(r, displayStatus)}</td>
         <td>${ciRenderRowActionButtons(i, r)}</td>
@@ -2006,8 +2150,25 @@
           }</div>
         </div>`;
 
+    // Landed Cost: always shown once a document has been read, so shipping
+    // can be added/corrected here even when detection found nothing --
+    // never applied without being visible and editable first. Leaving it
+    // blank/zero is exactly Case A (no shipping) and leaves every figure
+    // above completely unchanged.
+    const shippingCard = `<div class="fp-currency-card" id="fpShippingCard">
+        <div><label class="field-label" for="ciShippingInput">Shipping / freight cost (${esc(cur)})</label>
+          <input id="ciShippingInput" type="number" step="any" min="0"
+            value="${ciState.shippingAmountOriginal != null ? ciState.shippingAmountOriginal : ""}" placeholder="0.00"></div>
+        <div><label class="field-label">Inventory line items</label><strong>${shippingActiveCount}</strong></div>
+        <div><label class="field-label">Shipping per item</label><strong>${shippingPerItem != null ? genericMoney(shippingPerItem, cur) : "—"}</strong></div>
+        <div class="fp-currency-note">${esc(ciState.shippingNote || "No shipping/freight charge detected in this document.")}${
+          ciState.shippingNeedsReview ? " Enter the confirmed amount above, or leave blank if there's no shipping charge." : ""
+        }</div>
+      </div>`;
+
     $("#ciOut").innerHTML = `
       ${currencyCard}
+      ${shippingCard}
       <div class="fp-tally">
         <div class="fp-tally-item"><strong>${t.totalItems}</strong><span>Items to check in</span></div>
         <div class="fp-tally-item"><strong>${t.totalValueAed != null ? money(t.totalValueAed) : "—"}</strong><span>AED inventory value</span></div>
@@ -2025,7 +2186,9 @@
             <th class="num">Check-in qty</th>
             <th class="num">New stock</th>
             <th class="num">Unit cost (${esc(cur)})</th>
-            <th class="num">Value (AED)</th>
+            <th class="num">Shipping alloc. (${esc(cur)})</th>
+            <th class="num">Landed unit cost (${esc(cur)})</th>
+            <th class="num">Value (AED)${ciState.shippingAmountOriginal > 0 ? " incl. shipping" : ""}</th>
             <th>Status</th><th>Action</th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
@@ -2062,6 +2225,20 @@
         ciRender();
       });
     }
+    const shippingInput = document.getElementById("ciShippingInput");
+    if (shippingInput) {
+      shippingInput.addEventListener("change", () => {
+        const v = parseFloat(shippingInput.value);
+        ciState.shippingAmountOriginal = isFinite(v) && v > 0 ? v : null;
+        // The user has now explicitly set (or cleared) the amount -- the
+        // "ambiguous, please confirm" flag no longer applies either way.
+        ciState.shippingNeedsReview = false;
+        ciState.shippingNote = ciState.shippingAmountOriginal != null
+          ? "Entered manually."
+          : "No shipping/freight charge detected in this document.";
+        ciRender();
+      });
+    }
     const missingLnAckEl = document.getElementById("ciMissingLnAck");
     if (missingLnAckEl) {
       missingLnAckEl.addEventListener("change", () => {
@@ -2080,19 +2257,36 @@
     if (ciState.currency !== "AED" && !(rate > 0)) {
       throw new Error("Enter the exchange rate before confirming.");
     }
+    // Computed once, fresh, from the current row list -- same allocation
+    // ciRender() just showed. Kept keyed by row index (not by array position
+    // after filtering) so each line's shipping share lines up with the exact
+    // row it was shown against in the preview.
+    const shipAlloc = ciShippingAllocation();
     const lines = ciState.rows
-      .filter((r) => (r.action === "add" && r.itemId) || (r.action === "create-new" && r.newItemData))
-      .map((r) => {
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => (r.action === "add" && r.itemId) || (r.action === "create-new" && r.newItemData))
+      .map(({ r, i }) => {
+        const shipAllocForRow = shipAlloc.get(i) || 0;
+        // Document-level total is repeated on every line (same pattern as
+        // supplier/invoice_number/po_number below) -- purely for audit, so
+        // each transaction row can show the whole shipping picture on its
+        // own without needing to look up sibling rows from the same
+        // document. Sent only when shipping actually applies to this line.
+        const shippingCostTotal = shipAllocForRow > 0 ? ciState.shippingAmountOriginal : null;
         if (r.action === "create-new") {
           // A brand-new Master Inventory item -- item_id is null, and
           // checkin_transaction() creates the row itself from new_item.
           // Unlike an existing item, there's no Master Inventory unit_cost
           // to fall back on, so the front-end already required this to be
           // a positive number before the row could reach this state.
+          const landedUnitCost = r.invoiceUnitCost + shipAllocForRow;
           return {
             item_id: null, quantity: r.qty, unit: r.unit,
-            unit_cost: r.invoiceUnitCost * rate,
+            unit_cost: landedUnitCost * rate,
             original_unit_cost: r.invoiceUnitCost,
+            shipping_cost_total: shippingCostTotal,
+            shipping_allocated: shipAllocForRow > 0 ? shipAllocForRow : null,
+            landed_unit_cost: landedUnitCost,
             new_item: {
               item_code: r.newItemData.code,
               description: r.newItemData.description,
@@ -2103,13 +2297,21 @@
             },
           };
         }
+        // No document price (e.g. an Order Approval) -- landed cost stays
+        // null too, never guessed from an unknown base cost. Shipping is
+        // still recorded for audit even though it can't be folded into a
+        // unit cost that doesn't exist.
+        const landedUnitCost = r.invoiceUnitCost != null ? r.invoiceUnitCost + shipAllocForRow : null;
         return {
           item_id: r.itemId, quantity: r.qty, unit: r.unit,
           // No document price (e.g. an Order Approval) -- send null, not a
           // fabricated 0, so checkin_transaction() falls back to the Master
           // Inventory's own unit_cost instead of recording a false free cost.
-          unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
+          unit_cost: landedUnitCost != null ? landedUnitCost * rate : null,
           original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
+          shipping_cost_total: shippingCostTotal,
+          shipping_allocated: shipAllocForRow > 0 ? shipAllocForRow : null,
+          landed_unit_cost: landedUnitCost,
           // Packaging facts, purely for audit -- quantity/unit_cost above
           // already reflect Master Inventory's own unit basis; these just
           // preserve what the supplier document actually said (e.g. "4
@@ -2157,11 +2359,14 @@
     const currencyNote = ciState.currency !== "AED"
       ? ` Converted from ${esc(ciState.currency)} at a rate of 1 ${esc(ciState.currency)} = ${rate} AED (${esc(RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource)}${ciState.rateDate ? `, rate date ${esc(ciState.rateDate)}` : ""}).`
       : "";
+    const shippingNote = ciState.shippingAmountOriginal > 0
+      ? ` Shipping/freight of ${esc(genericMoney(ciState.shippingAmountOriginal, ciState.currency))} was split equally across ${lines.length} line item${lines.length === 1 ? "" : "s"} and folded into each item's landed cost.`
+      : "";
     $("#ciDone").innerHTML = `
       <div class="fp-done">
         <h3>Check-in confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} added</h3>
         <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
-        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}</p>
+        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}</p>
         <div class="fp-done-actions">
           <button class="ghost" id="ciNew">Start another Check-in</button>
         </div>
@@ -2205,6 +2410,15 @@
       }
       ciState.missingLnNumbers = doc.missingLnNumbers || [];
       ciState.missingLnAcknowledged = false;
+
+      // Landed Cost: a convenience prefill only -- always shown editable in
+      // the preview (see ciRender's shippingCard) before Confirm is ever
+      // reachable, so an ambiguous or missed detection can always be
+      // corrected by hand rather than silently applied or silently dropped.
+      const shipping = detectShippingCharge(pdfText);
+      ciState.shippingAmountOriginal = shipping.amount;
+      ciState.shippingNote = shipping.note;
+      ciState.shippingNeedsReview = shipping.needsReview;
 
       if (ciState.currency === "AED") {
         ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
@@ -2262,6 +2476,7 @@
     ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
+    ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     $("#ciPdf").value = "";
     $("#ciPdfName").textContent = "Click or drop the PDF file here";
     $("#ciDrop").classList.remove("ready");
@@ -2420,7 +2635,7 @@
             <tbody>
               ${g.lines.map((tx) => `<tr>
                 <td class="code">${esc(tx.item_code)}</td>
-                <td>${esc(tx.description)}</td>
+                <td>${esc(tx.description)}${tx.shipping_allocated ? `<div class="small muted" style="margin-top:2px">Landed cost: includes ${esc(genericMoney(tx.shipping_allocated, tx.original_currency || ""))} shipping allocation (original cost ${esc(genericMoney(tx.original_unit_cost, tx.original_currency || ""))} + shipping = ${esc(genericMoney(tx.landed_unit_cost, tx.original_currency || ""))} landed).</div>` : ""}</td>
                 <td class="num">${fmt(tx.quantity)} ${esc(tx.unit)}</td>
                 <td class="num">${money(tx.value)}</td>
               </tr>`).join("")}
