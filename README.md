@@ -152,6 +152,32 @@ the bottom of `build_kb.py` — key it on the system id (`series-2`, `hy40`, …
 and rebuild. Series 1 is there as the worked example. New terms go in
 `GLOSSARY` in the same file.
 
+### Adding systems from a supplier PDF or Word document
+
+`build_kb.py` only reads the one maintained spreadsheet, whose sheet names,
+rows and columns it hardcodes. Supplier product sheets don't share that
+layout — column order varies and headers are worded differently from one
+supplier to the next — so `parse_supplier_docs.py` reads those by matching
+table headers against known field names instead of a fixed cell position:
+
+```bash
+pip3 install -r requirements.txt   # adds pdfplumber, python-docx
+python3 parse_supplier_docs.py supplier_sheet.pdf catalog.docx --merge-into data/kb.json
+```
+
+It prints a report to stderr of anything it couldn't confidently read —
+scanned pages with no text layer, columns it didn't recognise (kept as free
+text rather than dropped), and two systems that would collide on the same
+id (kept the first, flagged the second for you to resolve) — instead of
+silently guessing. Re-running it with the same files is safe: it replaces
+the same supplier-derived systems in place rather than duplicating them.
+Push to Supabase afterwards as usual.
+
+If `data/kb.json` or `data/kb.js` is ever lost or corrupted locally, run
+`python3 pull_from_supabase.py` to rebuild both straight from the live
+(read-only) Supabase tables — no spreadsheet needed, since Supabase is the
+deployed source of truth.
+
 ## Branding
 
 The interface follows the Oryx AI Knowledge Hub design system
@@ -194,7 +220,10 @@ Three decisions worth knowing about:
 | `app.js` | Sizing engine, knowledge retrieval, UI |
 | `assets/logos/` | Oryx logo and favicon |
 | `build_kb.py` | Spreadsheet → `data/`; also holds the engineering notes and glossary |
+| `parse_supplier_docs.py` | Supplier PDF/DOCX → `data/kb.json`, merged in by system id |
 | `push_to_supabase.py` | `data/` → Supabase tables and storage |
+| `pull_from_supabase.py` | Supabase → `data/kb.json` and `kb.js` (read-only, for recovery) |
+| `requirements.txt` | Python dependencies for the build/parse scripts |
 | `serve.py` | Local preview server |
 | `data/` | Built output — git-ignored, never published |
 
