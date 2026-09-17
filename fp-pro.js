@@ -1072,7 +1072,7 @@
         note: `Found ${uniq.length} possible shipping/freight/packing amounts (${uniq.map((c) => c.amount).join(", ")}) — couldn't tell which one is correct. Enter the confirmed amount manually, or leave blank if there's no such charge.`,
       };
     }
-    return { amount: uniq[0].amount, needsReview: false, note: `Detected from "${uniq[0].label.trim()}" — review before confirming.` };
+    return { amount: uniq[0].amount, needsReview: false, label: uniq[0].label.trim(), note: `Detected from "${uniq[0].label.trim()}" — review before confirming.` };
   }
 
   function genericMoney(n, code) {
@@ -2828,7 +2828,12 @@
           }, badPageNumbers);
         } catch (ocrErr) {
           console.error(ocrErr);
-          if (!isStale()) ciStatus("This document has pages with no usable text layer, and OCR failed to run (" + ocrErr.message + "). Nothing was changed.", "err");
+          if (!isStale()) {
+            ciState.rows = null;
+            $("#ciConfirmBar").hidden = true;
+            $("#ciDone").innerHTML = "";
+            ciStatus("This document has pages with no usable text layer, and OCR failed to run (" + ocrErr.message + "). Nothing was changed.", "err");
+          }
           return;
         }
         if (isStale()) return;
@@ -2848,6 +2853,9 @@
           }
         }
         if (stillBad.length === pages.length) {
+          ciState.rows = null;
+          $("#ciConfirmBar").hidden = true;
+          $("#ciDone").innerHTML = "";
           ciStatus("This document appears to be entirely scanned images (or an unreadable font), and OCR could not extract usable text from it either. Please check the file manually — nothing was changed.", "err");
           return;
         }
@@ -2883,7 +2891,28 @@
       if (isStale()) return;
       const doc = parseCheckinDocument(pdfText);
       if (!doc.entries.length) {
-        ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
+        // A new file selection already clears any previous preview (see
+        // wireCiDrop), but re-analysing the *same* selection after editing
+        // a header field must never leave a still-enabled Confirm button
+        // pointing at an earlier, unrelated successful analysis once this
+        // run turns out to have nothing to check in.
+        ciState.rows = null;
+        $("#ciConfirmBar").hidden = true;
+        $("#ciDone").innerHTML = "";
+        // Zero goods rows isn't always this reader failing to recognise a
+        // layout -- a document can genuinely carry no goods at all, e.g. a
+        // supplier's stand-alone packing/freight charge invoice (the same
+        // "Additional Packing charges (in crate)" real-world sample the
+        // Landed Cost feature above was built from). Telling that apart
+        // from an actually-unrecognised layout means a charge-only document
+        // reads as "nothing to receive here" instead of looking like a
+        // reader bug.
+        const chargeOnly = detectShippingCharge(pdfText);
+        if (chargeOnly.amount != null) {
+          ciStatus(`This document has no goods to receive — it only contains a shipping/freight/packing charge of ${genericMoney(chargeOnly.amount, ciState.currency)} (from "${chargeOnly.label}"). Nothing can be checked in as stock from this document; the Master Inventory has not been changed. This charge still needs to be folded into the items it belongs to on their own invoice — that has to be done by hand for now.`, "err");
+        } else {
+          ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
+        }
         return;
       }
       ciState.missingLnNumbers = doc.missingLnNumbers || [];
