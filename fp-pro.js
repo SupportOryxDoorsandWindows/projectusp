@@ -72,7 +72,13 @@
 
   /* --------------------------- PDF parsing ------------------- */
 
-  async function extractPdfText(file) {
+  // Returns one text-layer string per page (1-indexed via array position),
+  // not just one string for the whole document -- the Check-in reader needs
+  // to judge (and, if needed, OCR) each page's usability separately, since a
+  // mixed document (a normal typed header page, a scanned/photographed
+  // item-table page) is otherwise judged "usable" overall from its good
+  // page and the actually-unreadable page never gets OCR'd.
+  async function extractPdfTextPerPage(file) {
     await loadLibs();
     const buf = await file.arrayBuffer();
     const pdf = await window.__pdfjs.getDocument({ data: buf }).promise;
@@ -91,7 +97,11 @@
       }
       pages.push(pageText);
     }
-    return pages.join("\n\n");
+    return pages;
+  }
+
+  async function extractPdfText(file) {
+    return (await extractPdfTextPerPage(file)).join("\n\n");
   }
 
   function parseJobHeader(text) {
@@ -733,6 +743,13 @@
 
   const CHECKIN_FN_URL = window.ORYX_CONFIG.supabaseUrl + "/functions/v1/checkin";
 
+  // Bumped whenever a new file is selected (see wireCiDrop) or a new
+  // analysis starts (see ciAnalyse) -- an in-flight ciAnalyse() checks this
+  // after every await and abandons its results if it no longer matches,
+  // so a slow OCR run for a file the user has since replaced can never
+  // overwrite the newer selection's state.
+  let ciAnalyseToken = 0;
+
   const ciState = {
     pdfFile: null,
     pdfHash: null,
@@ -755,7 +772,127 @@
     shippingAmountOriginal: null,
     shippingNote: "",
     shippingNeedsReview: false,
+    // Set when the text layer had nothing usable and this document was
+    // instead read via OCR (see ocrPdfPages below) -- OCR can misread a
+    // character rather than simply fail to find one, so Confirm stays
+    // gated behind an explicit acknowledgement, same as missingLnNumbers.
+    usedOcr: false,
+    ocrAcknowledged: false,
+    // 1-indexed page numbers that stayed unreadable even after OCR --
+    // their text is left out of parsing entirely (see ciAnalyse) rather
+    // than risk feeding garbage into a format's regex.
+    ocrStillUnreadablePages: [],
+    // Set when no known document layout matched at all and this document
+    // was instead read via the last-resort greedy token matcher (see
+    // parseGreedyTokenDocument below) -- same reasoning as usedOcr.
+    lowConfidenceFallback: false,
+    lowConfidenceAcknowledged: false,
   };
+
+  // --- OCR fallback (scanned pages / no usable text layer) -----------------
+  //
+  // pdf.js's text layer is empty for a genuinely scanned page, and -- verified
+  // against a real supplier PDF -- comes back as meaningless glyph IDs
+  // ("(cid:N)" tokens under pdfplumber; pdf.js has no more information to
+  // recover the real characters from either) for a document whose font
+  // carries no ToUnicode mapping. Neither case is "hard to parse" -- there is
+  // no correct text to extract, only an image to read -- so both fall back to
+  // rendering each page as a bitmap and reading it with OCR instead. This
+  // never overrides a working text layer; see textLayerLooksUsable() below.
+  const TESSERACT_SRC = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+
+  let tesseractLibPromise = null;
+  function loadTesseractLib() {
+    if (window.Tesseract) return Promise.resolve();
+    if (tesseractLibPromise) return tesseractLibPromise;
+    tesseractLibPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = TESSERACT_SRC;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error("Could not load the OCR library from CDN."));
+      document.head.appendChild(s);
+    // A failed CDN load (a transient network blip, an ad blocker) must not
+    // permanently disable OCR for the rest of the session -- clearing the
+    // cached promise on rejection lets the next attempt actually retry
+    // instead of replaying the same failure forever.
+    }).catch((err) => { tesseractLibPromise = null; throw err; });
+    return tesseractLibPromise;
+  }
+
+  // A usable text layer has real words in it, not just a handful of stray
+  // characters -- fewer than 20 non-space characters is treated the same as
+  // "no text at all" (a mostly-blank scanned page can still carry a faint
+  // header/footer). Fewer than 3 recognisable 3+ letter words despite that
+  // much text is the signature of the missing-ToUnicode case: plenty of
+  // "characters" come out, but none of them spell anything, because they
+  // were never mapped to real letters to begin with.
+  //
+  // A missing character mapping doesn't always come back as unprintable
+  // junk, though -- verified against a real supplier PDF that a text
+  // extractor can instead fall back to a literal "(cid:123)" placeholder
+  // per glyph, which is ordinary printable ASCII and reads as plenty of
+  // "words" (CID_TOKEN_RE) to the checks above. A document made of more
+  // than a handful of these is checked for explicitly, on top of the
+  // ratio/word checks, since it would otherwise pass them by accident.
+  const CID_TOKEN_RE = /\(cid:\d+\)/g;
+  function textLayerLooksUsable(text) {
+    const dense = (text || "").replace(/\s+/g, "");
+    if (dense.length < 20) return false;
+    if ((text.match(CID_TOKEN_RE) || []).length > 5) return false;
+    const words = (text || "").match(/[A-Za-z]{3,}/g) || [];
+    if (words.length < 3) return false;
+    const printable = dense.replace(/[^\x20-\x7E]/g, "").length;
+    return printable / dense.length > 0.6;
+  }
+
+  // Renders every page to a bitmap via pdf.js (already loaded for the normal
+  // text path) and reads each one with Tesseract.js. Far slower than the
+  // text layer -- only ever tried after that path has already failed -- and,
+  // unlike the text layer, can misread a character rather than simply fail
+  // to find one, which is why the caller surfaces this to the user as
+  // something to double-check, never as a plain, silent success.
+  // OCRs just the given 1-indexed page numbers (default: every page) and
+  // returns a Map<pageNumber, text> -- the caller decides per page whether
+  // the text layer was usable (see textLayerLooksUsable), so only the pages
+  // that actually need it pay OCR's cost, and a page with a good text layer
+  // is never re-read as a lossier image for no reason.
+  async function ocrPdfPages(file, onProgress, pageNumbers) {
+    await Promise.all([loadLibs(), loadTesseractLib()]);
+    const buf = await file.arrayBuffer();
+    const pdf = await window.__pdfjs.getDocument({ data: buf }).promise;
+    const targets = pageNumbers && pageNumbers.length
+      ? pageNumbers
+      : Array.from({ length: pdf.numPages }, (_, k) => k + 1);
+    const worker = await Tesseract.createWorker("eng");
+    try {
+      const results = new Map();
+      let done = 0;
+      for (const i of targets) {
+        done++;
+        if (onProgress) onProgress(done, targets.length, i);
+        const page = await pdf.getPage(i);
+        // 2x scale -- pdf.js's default viewport is 72dpi equivalent, well
+        // below what OCR needs; this brings it to roughly 144dpi. Not
+        // independently verified against a real scanned document (no
+        // browser in this environment) -- if OCR accuracy on small codes/
+        // decimals turns out to be poor in practice, raise this before
+        // reworking anything else.
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+        const { data } = await worker.recognize(canvas);
+        results.set(i, data.text);
+      }
+      return results;
+    } finally {
+      // Swallowed deliberately -- a termination failure here must never
+      // mask a real error from the recognition loop above (or silently
+      // replace a clean return with an unhandled rejection).
+      await worker.terminate().catch((termErr) => console.error("OCR worker termination failed:", termErr));
+    }
+  }
 
   // Currencies this reader looks for on a supplier document. Detection just
   // counts which of these codes appears most often in the text -- good
@@ -1309,6 +1446,140 @@
     return entries;
   }
 
+  // --- Last-resort "greedy token" reader ------------------------------
+  //
+  // Tried only when every fixed-layout format above AND parseBlockDocument
+  // both find nothing at all -- a genuinely last-resort, wider-net pass for
+  // a document whose row data is scattered across more physical lines than
+  // parseBlockDocument's own state machine expects: a long description that
+  // wraps *around* the numeric run instead of only before it, or a single
+  // field (e.g. a discount percentage) landing on its own line because the
+  // PDF's layout engine wrapped it away from the rest of its row -- both
+  // seen on real supplier Quotes. It reuses the same anchor/code/skip
+  // patterns as parseBlockDocument, just tolerant of the numeric run being
+  // split across up to GREEDY_MERGE_WINDOW physical lines, and of one short
+  // fragment line immediately after it still belonging to the description.
+  //
+  // Every entry this produces is tagged lowConfidence: true -- the caller
+  // must surface that plainly and require the user to check the document by
+  // hand (same as the missing-line-number gap check above), because a wider
+  // net is also more likely to glue two unrelated fragments together.
+  const GREEDY_MERGE_WINDOW = 3;
+
+  function parseGreedyTokenDocument(text) {
+    const rawLines = text.split("\n").map((l) => l.trim());
+    const entries = [];
+    let pendingCode = "";
+    let pendingDesc = [];
+    const consumed = new Set();
+
+    for (let i = 0; i < rawLines.length; i++) {
+      if (consumed.has(i)) continue;
+      const line = rawLines[i];
+      if (!line || BLOCK_SKIP_LINE_RE.test(line) || BLOCK_HS_LINE_RE.test(line)) continue;
+
+      // Try the anchor on this line alone, then merged with up to
+      // GREEDY_MERGE_WINDOW physical lines in total -- a merge only ever
+      // pulls in lines that didn't match anything else on their own.
+      // Letterhead/boilerplate lines (BLOCK_SKIP_LINE_RE/BLOCK_HS_LINE_RE)
+      // are dropped from the merge candidate itself, not just skipped when
+      // encountered on their own -- otherwise a stray "HS CODE: ..." line
+      // sitting inside the window would get glued into the description
+      // instead of being ignored, same as parseBlockDocument's own
+      // line-by-line skip already ensures. Growing the window stops dead
+      // the moment a *later* line itself opens a new `[CODE]` block --
+      // without this, a merge could reach past an unrelated/incomplete
+      // item straight into the next item's own numeric row, fabricating a
+      // record that mixes one item's code with another's quantity/price
+      // (confirmed with a real repro during review: an unclosed "[A100]
+      // ..." item followed by "[B200] ... <numbers>" produced a single
+      // fake A100/B200 hybrid row instead of correctly leaving A100
+      // unrecovered and reading B200 on its own).
+      let anchorMatch = null, mergedThrough = i, mergedLine = line;
+      {
+        const collected = [];
+        for (let end = i; end < Math.min(i + GREEDY_MERGE_WINDOW, rawLines.length); end++) {
+          const l = rawLines[end];
+          if (end > i && BLOCK_CODE_DESC_RE.test(l)) break;
+          if (l && !BLOCK_SKIP_LINE_RE.test(l) && !BLOCK_HS_LINE_RE.test(l)) collected.push(l);
+          const merged = collected.join(" ");
+          const m = merged.match(BLOCK_ANCHOR_RE);
+          if (m) { anchorMatch = m; mergedThrough = end; mergedLine = merged; break; }
+        }
+      }
+
+      if (anchorMatch) {
+        const prefix = mergedLine.slice(0, anchorMatch.index).trim();
+        let code = pendingCode;
+        let descParts = pendingDesc;
+        if (prefix) {
+          const codeMatch = prefix.match(BLOCK_CODE_DESC_RE);
+          // A bracketed code found inside the merge prefix unambiguously
+          // starts a new item -- any pendingCode/pendingDesc carried over
+          // from stray text before it (page preamble, or a previous
+          // incomplete block that never found its own numeric row) belongs
+          // to a different row, or no row at all, and must not leak into
+          // this one (confirmed with a real repro: loose preamble text
+          // before a "[CODE] ..." line was otherwise prepended to that
+          // line's own description).
+          if (codeMatch) { code = codeMatch[1]; descParts = codeMatch[2] ? [codeMatch[2]] : []; }
+          else descParts = [...descParts, prefix];
+        }
+        // A short, bare continuation line immediately after the anchor (a
+        // closing "Roll)" that wrapped past the numeric run) belongs to
+        // this row's description -- but only a short, clearly-fragment
+        // line qualifies, never a full sentence, another row's own
+        // code/anchor line, or boilerplate.
+        const after = rawLines[mergedThrough + 1] || "";
+        let trailingConsumed = -1;
+        if (after && after.length <= 40 && !BLOCK_CODE_DESC_RE.test(after) && !BLOCK_ANCHOR_RE.test(after)
+            && !BLOCK_SKIP_LINE_RE.test(after) && !BLOCK_HS_LINE_RE.test(after)) {
+          descParts = [...descParts, after];
+          trailingConsumed = mergedThrough + 1;
+        }
+
+        entries.push({
+          code,
+          description: descParts.join(" ").replace(/\s+/g, " ").trim(),
+          unit: anchorMatch[2] || "",
+          qty: parseFloat(anchorMatch[1].replace(/,/g, "")),
+          unitCost: parseFloat(anchorMatch[4].replace(/,/g, "")),
+          lowConfidence: true,
+        });
+        for (let k = i; k <= mergedThrough; k++) consumed.add(k);
+        if (trailingConsumed !== -1) consumed.add(trailingConsumed);
+        pendingCode = "";
+        pendingDesc = [];
+        continue;
+      }
+
+      const codeMatch = line.match(BLOCK_CODE_DESC_RE);
+      if (codeMatch) {
+        pendingCode = codeMatch[1];
+        pendingDesc = codeMatch[2] ? [codeMatch[2]] : [];
+        continue;
+      }
+
+      const qtyOnly = pendingCode && line.match(BLOCK_QTY_ONLY_RE);
+      if (qtyOnly) {
+        entries.push({
+          code: pendingCode,
+          description: pendingDesc.join(" ").replace(/\s+/g, " ").trim(),
+          unit: qtyOnly[2] || "",
+          qty: parseFloat(qtyOnly[1].replace(/,/g, "")),
+          unitCost: null,
+          lowConfidence: true,
+        });
+        pendingCode = "";
+        pendingDesc = [];
+        continue;
+      }
+
+      if (line.length <= 90) pendingDesc.push(line);
+    }
+    return entries;
+  }
+
   // Recovers rows whose description wrapped across multiple physical lines,
   // splitting "<numbers> <description> <code> <ln>" into a numbers-only line
   // followed by one or more description lines and a final "<code> <ln>"
@@ -1436,6 +1707,16 @@
     if (blockEntries.length > best.entries.length) {
       best = { formatId: "block-lines", formatLabel: "Line-item blocks (one field per line)", entries: blockEntries };
     }
+    // Absolute last resort: only tried when nothing above -- not even the
+    // block-layout reader -- found a single row. Never allowed to outrank a
+    // real structured match just by finding more raw entries, since it's
+    // inherently more error-prone (see parseGreedyTokenDocument above).
+    if (!best.entries.length) {
+      const greedyEntries = parseGreedyTokenDocument(text);
+      if (greedyEntries.length) {
+        best = { formatId: "greedy-tokens", formatLabel: "Greedy token matching (low-confidence fallback)", entries: greedyEntries };
+      }
+    }
     if (!best.entries.length) return best;
 
     // The same genuine item can appear twice on one document -- sum rather
@@ -1512,6 +1793,7 @@
           current: null, newQty: null,
           status: "unmatched", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint,
+          lowConfidence: !!l.lowConfidence,
         });
         return;
       }
@@ -1537,6 +1819,7 @@
           current: item.current_qty, newQty: null,
           status: "exact-diff", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint: false,
+          lowConfidence: !!l.lowConfidence,
           exactMatchItem: {
             id: item.id, code: item.item_code, description: item.description,
             unit: item.unit_of_measure || "",
@@ -1568,6 +1851,7 @@
           current: item.current_qty, newQty: null,
           status: "pack-review", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint: false,
+          lowConfidence: !!l.lowConfidence,
           packMismatch: {
             itemId: item.id, itemDescription: item.description, itemCurrentQty: item.current_qty,
             itemUnit: item.unit_of_measure || "",
@@ -1582,6 +1866,7 @@
         current: item.current_qty, newQty: item.current_qty + l.qty,
         status: "ok", action: "add", decided: true,
         itemId: item.id, editing: false, truncatedHint: false,
+        lowConfidence: !!l.lowConfidence,
         packageInfo: invoicePkg ? { type: invoicePkg.type, qtyPerPackage: invoicePkg.qtyPerPackage, unit: invoicePkg.unit } : null,
       });
     });
@@ -1938,6 +2223,30 @@
     });
   }
 
+  // Single source of truth for whether Confirm may actually run -- used both
+  // to enable/disable the button in ciRender() and, defensively, inside
+  // ciConfirm() itself. The button's disabled state alone isn't trustworthy:
+  // a stale render, or a race with re-selecting a file mid-analysis, could
+  // in principle leave it enabled when one of these conditions no longer
+  // holds, and this is the actual gate on whether anything gets written to
+  // Supabase, not just whether the button looked clickable.
+  function ciCanConfirm() {
+    if (!ciState.rows || !ciState.rows.length) return false;
+    const t = ciTally();
+    const rate = ciRate();
+    return (
+      t.unresolved === 0 &&
+      t.totalItems > 0 &&
+      !ciState.rows.some((r) => r.editing || r.creatingNew) &&
+      (!ciState.missingLnNumbers.length || ciState.missingLnAcknowledged) &&
+      (!ciState.usedOcr || ciState.ocrAcknowledged) &&
+      (!ciState.lowConfidenceFallback || ciState.lowConfidenceAcknowledged) &&
+      !!rate &&
+      !!$("#ciSupplier").value.trim() &&
+      !!$("#ciInvoiceNumber").value.trim()
+    );
+  }
+
   function ciRender() {
     const t = ciTally();
     const rate = ciRate();
@@ -2053,6 +2362,15 @@
         ? `<button type="button" class="fp-code-review-flag" data-act="edit" data-i="${i}"
              title="Code may be incomplete. Please verify the correct item before confirming.">⚠ Review</button>`
         : "";
+      // Plain (non-interactive) badge -- this row's code/qty/price came from
+      // OCR or the greedy fallback matcher rather than a normal text-layer
+      // read, so it's more likely than usual to contain a misread value.
+      // Deliberately not a .fp-code-review-flag button: that class is wired
+      // to applyCiRowAction(i, act) via data-i/data-act, which this badge
+      // doesn't set.
+      const lowConfBadge = r.lowConfidence
+        ? `<span title="Read via the greedy token-matching fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
+        : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
       // side so the difference is visible before anyone decides anything,
@@ -2097,7 +2415,7 @@
         ? `${fmt(r.qty)} ${esc(pkgForDisplay.type)}${r.qty === 1 ? "" : "s"} × ${esc(pkgForDisplay.qtyPerPackage)}${esc(pkgForDisplay.unit)}`
         : `+${fmt(r.qty)} ${esc(r.unit)}`;
       return `<tr class="${rowClass}">
-        <td class="code">${esc(r.code)}${reviewFlag}</td>
+        <td class="code">${esc(r.code)}${reviewFlag}${lowConfBadge}</td>
         <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
@@ -2146,6 +2464,35 @@
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px">
         <input type="checkbox" id="ciMissingLnAck" ${ciState.missingLnAcknowledged ? "checked" : ""}>
         I've checked the original document for the line${ciState.missingLnNumbers.length === 1 ? "" : "s"} above.
+      </label>
+    </div>` : "";
+
+    // OCR can misread a character (0/O, 1/I, 5/S...) rather than simply fail
+    // to find one -- unlike a normal text-layer read, so Confirm stays gated
+    // behind an explicit acknowledgement here too.
+    const ocrStillBadNote = ciState.ocrStillUnreadablePages.length
+      ? ` Page${ciState.ocrStillUnreadablePages.length === 1 ? "" : "s"} <b>${ciState.ocrStillUnreadablePages.join(", ")}</b> could not be read even with OCR and ${ciState.ocrStillUnreadablePages.length === 1 ? "was" : "were"} left out entirely — check ${ciState.ocrStillUnreadablePages.length === 1 ? "it" : "them"} manually for any items not shown below.`
+      : "";
+    const ocrBox = ciState.usedOcr ? `<div class="fp-warn">
+      <h4>Part of this document was read using OCR</h4>
+      <p class="small" style="margin:0 0 var(--space-2)">At least one page had no reliable text layer (a scanned page, or a
+        font with no character mapping), so this reader fell back to reading it as an image. OCR can misread similar-looking
+        characters — check every code, quantity and price below against the original document before confirming.${ocrStillBadNote}</p>
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px">
+        <input type="checkbox" id="ciOcrAck" ${ciState.ocrAcknowledged ? "checked" : ""}>
+        I've checked the codes, quantities and prices below against the original document.
+      </label>
+    </div>` : "";
+
+    const lowConfBox = ciState.lowConfidenceFallback ? `<div class="fp-warn">
+      <h4>This document was read with a low-confidence fallback</h4>
+      <p class="small" style="margin:0 0 var(--space-2)">No known document layout matched this file, so it was read with a
+        best-effort matcher that pieces scattered fields back together. This is more likely to misread a code, quantity or
+        price than the reader's normal formats — check every row below (marked ⚠ low-confidence) against the original
+        document before confirming.</p>
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px">
+        <input type="checkbox" id="ciLowConfAck" ${ciState.lowConfidenceAcknowledged ? "checked" : ""}>
+        I've checked every row below against the original document.
       </label>
     </div>` : "";
 
@@ -2207,6 +2554,8 @@
       </div>
       ${warnBox}
       ${missingLnBox}
+      ${ocrBox}
+      ${lowConfBox}
       <div class="fp-section-h">Check-in preview</div>
       <div class="fp-scroll">
         <table class="fp-table">
@@ -2228,14 +2577,7 @@
       The confirm button unlocks once every unmatched row has been edited or acknowledged${cur !== "AED" ? " and the exchange rate is entered" : ""}.</p>
     `;
 
-    const canConfirm =
-      t.unresolved === 0 &&
-      t.totalItems > 0 &&
-      !ciState.rows.some((r) => r.editing || r.creatingNew) &&
-      (!ciState.missingLnNumbers.length || ciState.missingLnAcknowledged) &&
-      !!rate &&
-      !!$("#ciSupplier").value.trim() &&
-      !!$("#ciInvoiceNumber").value.trim();
+    const canConfirm = ciCanConfirm();
     $("#ciConfirmSummary").textContent =
       `${t.totalItems} items · ${t.totalValueAed != null ? money(t.totalValueAed) : "—"}` + (t.skipped ? ` · ${t.skipped} skipped` : "");
     $("#ciConfirmBar").hidden = false;
@@ -2276,9 +2618,29 @@
         ciRender();
       });
     }
+    const ocrAckEl = document.getElementById("ciOcrAck");
+    if (ocrAckEl) {
+      ocrAckEl.addEventListener("change", () => {
+        ciState.ocrAcknowledged = ocrAckEl.checked;
+        ciRender();
+      });
+    }
+    const lowConfAckEl = document.getElementById("ciLowConfAck");
+    if (lowConfAckEl) {
+      lowConfAckEl.addEventListener("change", () => {
+        ciState.lowConfidenceAcknowledged = lowConfAckEl.checked;
+        ciRender();
+      });
+    }
   }
 
   async function ciConfirm() {
+    // Re-check the real gate, not just the Confirm button's disabled
+    // attribute -- see ciCanConfirm() for why that's not trustworthy on
+    // its own.
+    if (!ciCanConfirm()) {
+      throw new Error("This Check-in can't be confirmed yet — an unresolved row, an unacknowledged warning, or a missing field needs attention. Please review the preview above.");
+    }
     const supplier = $("#ciSupplier").value.trim();
     const invoiceNumber = $("#ciInvoiceNumber").value.trim();
     const poNumber = $("#ciPoNumber").value.trim();
@@ -2408,14 +2770,78 @@
     if (!ciState.pdfFile) return;
     const btn = $("#ciExtract");
     btn.disabled = true;
+    // This run's own generation number -- OCR in particular can leave this
+    // in flight for several seconds. If the user selects a different file
+    // (bumping ciAnalyseToken -- see wireCiDrop) or starts a fresh Analyse
+    // before this one finishes, isStale() goes true and this run abandons
+    // its results instead of overwriting the newer selection's state.
+    const myToken = ++ciAnalyseToken;
+    const isStale = () => myToken !== ciAnalyseToken;
     ciStatus("Reading the document and matching items against the Master Inventory…");
     try {
-      const [pdfText, itemsByCode, hash, ratesByCurrency] = await Promise.all([
-        extractPdfText(ciState.pdfFile),
+      let [pages, itemsByCode, hash, ratesByCurrency] = await Promise.all([
+        extractPdfTextPerPage(ciState.pdfFile),
         loadInventoryItems(),
         pdfFingerprint(ciState.pdfFile),
         loadExchangeRates(),
       ]);
+
+      ciState.usedOcr = false;
+      ciState.ocrAcknowledged = false;
+      ciState.lowConfidenceFallback = false;
+      ciState.lowConfidenceAcknowledged = false;
+      // Checked per page, not on the whole joined document -- a normal
+      // typed header page must never make an actually-scanned item-table
+      // page look "usable" just because the document as a whole reads fine
+      // on average.
+      const badPageNumbers = pages
+        .map((t, idx) => (textLayerLooksUsable(t) ? null : idx + 1))
+        .filter((n) => n !== null);
+      if (badPageNumbers.length) {
+        const pageWord = badPageNumbers.length === 1 ? `page ${badPageNumbers[0]}` : `pages ${badPageNumbers.join(", ")}`;
+        ciStatus(`No usable text layer on ${pageWord} (likely a scanned page, or a font with no character mapping) — running OCR on ${badPageNumbers.length === 1 ? "it" : "them"} instead. This can take a little longer…`);
+        let ocrResults;
+        try {
+          ocrResults = await ocrPdfPages(ciState.pdfFile, (done, total) => {
+            ciStatus(`Running OCR on page ${done} of ${total}…`);
+          }, badPageNumbers);
+        } catch (ocrErr) {
+          console.error(ocrErr);
+          if (!isStale()) ciStatus("This document has pages with no usable text layer, and OCR failed to run (" + ocrErr.message + "). Nothing was changed.", "err");
+          return;
+        }
+        if (isStale()) return;
+        const stillBad = [];
+        for (const n of badPageNumbers) {
+          const ocrText = ocrResults.get(n) || "";
+          if (textLayerLooksUsable(ocrText)) {
+            pages[n - 1] = ocrText;
+          } else {
+            // Never let known-garbage text (still-unreadable even after
+            // OCR) leak into parsing -- an empty page is a page this
+            // reader plainly couldn't find any items on; garbage text
+            // risks accidentally satisfying some format's regex and
+            // fabricating a row from noise instead.
+            pages[n - 1] = "";
+            stillBad.push(n);
+          }
+        }
+        if (stillBad.length === pages.length) {
+          ciStatus("This document appears to be entirely scanned images (or an unreadable font), and OCR could not extract usable text from it either. Please check the file manually — nothing was changed.", "err");
+          return;
+        }
+        ciState.usedOcr = true;
+        ciState.ocrStillUnreadablePages = stillBad;
+      } else {
+        ciState.ocrStillUnreadablePages = [];
+      }
+      // OCR's multi-second delay is exactly the window where the user could
+      // have moved on to a different file -- never let a superseded run
+      // write its (possibly OCR'd, possibly minutes-stale) results over
+      // whatever the current selection's own analysis has already shown.
+      if (isStale()) return;
+
+      let pdfText = pages.join("\n\n");
       ciState.itemsByCode = itemsByCode;
       ciState.pdfHash = hash;
       ciState.header = parseCheckinHeader(pdfText);
@@ -2433,6 +2859,7 @@
       // parseCheckinDocument() above. Checked before touching the currency
       // API: an unrecognised document should fail fast with a clear message,
       // not spend a network round-trip first.
+      if (isStale()) return;
       const doc = parseCheckinDocument(pdfText);
       if (!doc.entries.length) {
         ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
@@ -2440,6 +2867,7 @@
       }
       ciState.missingLnNumbers = doc.missingLnNumbers || [];
       ciState.missingLnAcknowledged = false;
+      ciState.lowConfidenceFallback = doc.formatId === "greedy-tokens";
 
       // Landed Cost: a convenience prefill only -- always shown editable in
       // the preview (see ciRender's shippingCard) before Confirm is ever
@@ -2477,6 +2905,7 @@
       const descriptions = doc.formatId === "commercial-invoice"
         ? parseCommercialInvoiceDescriptions(pdfText, doc.entries.length)
         : [];
+      if (isStale()) return;
       ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode);
       ciRender();
 
@@ -2491,12 +2920,21 @@
       const gapNote = doc.missingLnNumbers && doc.missingLnNumbers.length
         ? ` Invoice lines detected: ${totalDetected}. Check-in rows created: ${doc.entries.length}. Line${doc.missingLnNumbers.length === 1 ? "" : "s"} ${doc.missingLnNumbers.join(", ")} could not be reliably read — review ${doc.missingLnNumbers.length === 1 ? "it" : "them"} manually before confirming; nothing was guessed.`
         : "";
-      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}`);
+      const stillBadNote = ciState.ocrStillUnreadablePages.length
+        ? ` Page${ciState.ocrStillUnreadablePages.length === 1 ? "" : "s"} ${ciState.ocrStillUnreadablePages.join(", ")} could not be read even with OCR and ${ciState.ocrStillUnreadablePages.length === 1 ? "was" : "were"} skipped — check ${ciState.ocrStillUnreadablePages.length === 1 ? "it" : "them"} manually for any items not listed below.`
+        : "";
+      const ocrNote = ciState.usedOcr
+        ? ` Part of this document had no usable text layer and was read using OCR instead — OCR can misread similar-looking characters, so check codes, quantities and prices carefully before confirming.${stillBadNote}`
+        : "";
+      const lowConfNote = ciState.lowConfidenceFallback
+        ? " No known document layout matched this file, so it was read with a low-confidence, best-effort matcher — check every row against the original document before confirming."
+        : "";
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}`);
     } catch (err) {
       console.error(err);
-      ciStatus("Could not analyse the document: " + err.message, "err");
+      if (!isStale()) ciStatus("Could not analyse the document: " + err.message, "err");
     } finally {
-      btn.disabled = false;
+      if (!isStale()) btn.disabled = false;
     }
   }
 
@@ -2507,6 +2945,8 @@
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
+    ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
+    ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
     $("#ciPdf").value = "";
     $("#ciPdfName").textContent = "Click or drop the PDF file here";
     $("#ciDrop").classList.remove("ready");
@@ -2540,6 +2980,22 @@
       const f = inputEl.files && inputEl.files[0];
       if (!f) return;
       ciState.pdfFile = f;
+      // Selecting a different file must never leave a stale, still-enabled
+      // Confirm button (or stale rows) for the previously analysed document
+      // on screen -- OCR in particular can leave Analyse running for several
+      // seconds, long enough for someone to pick a different file and be
+      // shown a Confirm button that would actually submit the old one.
+      // ciAnalyseToken also invalidates any in-flight analysis of the
+      // previous file (see ciAnalyse) so its results can never land here.
+      ciAnalyseToken++;
+      ciState.rows = null;
+      ciState.header = null;
+      ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
+      ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
+      ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
+      ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
+      $("#ciOut").innerHTML = "";
+      $("#ciConfirmBar").hidden = true;
       $("#ciPdfName").textContent = f.name;
       dropEl.classList.add("ready");
       $("#ciExtract").disabled = false;
