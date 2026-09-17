@@ -763,8 +763,8 @@
     ratesByCurrency: null,
     missingLnNumbers: [], // line numbers detected in the raw text but not readable into a row
     missingLnAcknowledged: false,
-    // Landed Cost: total shipping/freight charge, in the document's own
-    // currency (ciState.currency) -- null means "no shipping applies",
+    // Landed Cost: total shipping/freight/packing charge, in the document's
+    // own currency (ciState.currency) -- null means "no such charge applies",
     // which leaves every existing calculation untouched. Set from
     // detectShippingCharge() on Analyse, but always user-editable in the
     // preview before Confirm; never written anywhere without being visible
@@ -973,21 +973,29 @@
     "n/a": "n/a",
   };
 
-  // --- Landed Cost: shipping/freight detection ----------------------------
+  // --- Landed Cost: shipping/freight/packing detection --------------------
   //
-  // Only ever a convenience prefill for the editable Shipping / Freight
-  // field in the Check-in preview -- never applied silently. A genuine
-  // shipping/freight label ("Freight", "Shipping Cost", "Delivery Charge"...)
-  // paired with a money amount on the same line, or on the very next line
-  // when the label stands completely alone. Tax/VAT/GST/discount/subtotal/
-  // grand-total lines are excluded outright, and a line that merely mentions
-  // one of these words as part of a wider column-header row (e.g. Freedom
-  // Screens Australia's boilerplate "Tax Rat Price Freight" header, which
-  // never carries a value of its own) is deliberately NOT treated as a
-  // standalone label -- only a short, bare label line qualifies for the
-  // look-at-the-next-line fallback, so a header row can never be mistaken
-  // for a charge and pull in an unrelated total sitting below it.
-  const SHIPPING_TERM_RE = /\b(shipping(?:\s*(?:&|and)\s*handling)?(?:\s+cost)?|freight(?:\s*(?:&|and)\s*insurance)?(?:\s+charge)?|delivery\s+charge|transport(?:ation)?|handling\s+charge)\b/i;
+  // Only ever a convenience prefill for the editable Shipping / Freight /
+  // Packing field in the Check-in preview -- never applied silently. A
+  // genuine charge label ("Freight", "Shipping Cost", "Delivery Charge",
+  // "Additional Packing Charges"...) paired with a money amount on the same
+  // line, or on the very next line when the label stands completely alone.
+  // Tax/VAT/GST/discount/subtotal/grand-total lines are excluded outright,
+  // and a line that merely mentions one of these words as part of a wider
+  // column-header row (e.g. Freedom Screens Australia's boilerplate "Tax Rat
+  // Price Freight" header, which never carries a value of its own) is
+  // deliberately NOT treated as a standalone label -- only a short, bare
+  // label line qualifies for the look-at-the-next-line fallback, so a header
+  // row can never be mistaken for a charge and pull in an unrelated total
+  // sitting below it.
+  //
+  // Packing/crating charges were added on top of the original shipping/
+  // freight set after a real supplier document (Freedom Screens India, a
+  // Proforma Invoice) turned out to bill "Additional Packing charges (in
+  // crate)" as its own line -- the same kind of per-shipment fee as
+  // freight, just labelled differently, and one this reader should split
+  // across the shipment's items the same way.
+  const SHIPPING_TERM_RE = /\b(shipping(?:\s*(?:&|and)\s*handling)?(?:\s+cost)?|freight(?:\s*(?:&|and)\s*insurance)?(?:\s+charge)?|delivery\s+charge|transport(?:ation)?|handling\s+charge|(?:additional\s+)?packing(?:\s*(?:&|and)\s*crating)?(?:\s+charges?|\s+fee)|crating(?:\s+charges?|\s+fee))\b/i;
   const NOT_SHIPPING_RE = /\b(tax|vat|gst|discount|sub\s*-?\s*total|grand\s*total)\b/i;
   // A genuine freight/shipping summary charge is a standalone label+amount
   // near the totals -- not a fully-structured priced row with its own
@@ -1009,13 +1017,26 @@
     return line.replace(DATE_TOKEN_RE, " ");
   }
 
+  // The *last* money-shaped token on a line, not the first. A bare "label:
+  // amount" line only ever has one, so this changes nothing for the
+  // shipping/freight case this was originally built for -- but a genuine
+  // priced table row (the Freedom Screens India "Additional Packing
+  // charges" sample: SI No / Description / HSN / Qty / Rate / Amount, e.g.
+  // "1 Additional Packing charges (in crate) 998540 1.00 59.00 No 59.00")
+  // has several, and the Amount is always the rightmost one -- the first
+  // would instead grab the Qty column ("1.00") as if that were the charge.
+  function lastMoneyMatch(s) {
+    const matches = [...s.matchAll(new RegExp(MONEY_TOKEN_RE, "g"))];
+    return matches.length ? matches[matches.length - 1] : null;
+  }
+
   function detectShippingCharge(text) {
     const rawLines = text.split("\n");
     const candidates = [];
     for (let i = 0; i < rawLines.length; i++) {
       const line = rawLines[i].trim();
       if (!line || !SHIPPING_TERM_RE.test(line) || NOT_SHIPPING_RE.test(line) || ITEM_ROW_SHAPE_RE.test(line)) continue;
-      const onLine = stripDates(line).match(MONEY_TOKEN_RE);
+      const onLine = lastMoneyMatch(stripDates(line));
       if (onLine) {
         const amt = parseFloat(onLine[1].replace(/,/g, ""));
         if (amt > 0) candidates.push({ label: line, amount: amt });
@@ -1027,7 +1048,7 @@
       if (!isBareLabel) continue;
       const next = (rawLines[i + 1] || "").trim();
       if (!next || NOT_SHIPPING_RE.test(next) || ITEM_ROW_SHAPE_RE.test(next)) continue;
-      const nm = stripDates(next).match(MONEY_TOKEN_RE);
+      const nm = lastMoneyMatch(stripDates(next));
       if (nm) {
         const amt = parseFloat(nm[1].replace(/,/g, ""));
         if (amt > 0) candidates.push({ label: `${line} / ${next}`, amount: amt });
@@ -1041,14 +1062,14 @@
       return true;
     });
     if (!uniq.length) {
-      return { amount: null, note: "No shipping/freight charge detected in this document.", needsReview: false };
+      return { amount: null, note: "No shipping/freight/packing charge detected in this document.", needsReview: false };
     }
     const distinctAmounts = new Set(uniq.map((c) => c.amount));
     if (distinctAmounts.size > 1) {
       return {
         amount: null,
         needsReview: true,
-        note: `Found ${uniq.length} possible shipping/freight amounts (${uniq.map((c) => c.amount).join(", ")}) — couldn't tell which one is correct. Enter the confirmed amount manually, or leave blank if there's no shipping charge.`,
+        note: `Found ${uniq.length} possible shipping/freight/packing amounts (${uniq.map((c) => c.amount).join(", ")}) — couldn't tell which one is correct. Enter the confirmed amount manually, or leave blank if there's no such charge.`,
       };
     }
     return { amount: uniq[0].amount, needsReview: false, note: `Detected from "${uniq[0].label.trim()}" — review before confirming.` };
@@ -2532,10 +2553,10 @@
     } else if (ciState.shippingAmountOriginal > 0) {
       shippingGuidance = `${ciState.shippingNote} Check this is the right amount before confirming — if not, correct it above.`;
     } else {
-      shippingGuidance = "No shipping/freight charge was found on this document. If the supplier billed shipping or freight separately, type the amount into the box above and it'll be spread evenly across the items below. If not, leave this blank — nothing changes.";
+      shippingGuidance = "No shipping/freight/packing charge was found on this document. If the supplier billed shipping, freight or packing separately, type the amount into the box above and it'll be spread evenly across the items below. If not, leave this blank — nothing changes.";
     }
     const shippingCard = `<div class="fp-currency-card" id="fpShippingCard">
-        <div><label class="field-label" for="ciShippingInput">Shipping / freight cost (${esc(cur)})</label>
+        <div><label class="field-label" for="ciShippingInput">Shipping / freight / packing cost (${esc(cur)})</label>
           <input id="ciShippingInput" type="number" step="any" min="0"
             value="${ciState.shippingAmountOriginal != null ? ciState.shippingAmountOriginal : ""}" placeholder="0.00"></div>
         <div><label class="field-label">Inventory line items</label><strong>${shippingActiveCount}</strong></div>
@@ -2607,7 +2628,7 @@
         ciState.shippingNeedsReview = false;
         ciState.shippingNote = ciState.shippingAmountOriginal != null
           ? "Entered manually."
-          : "No shipping/freight charge detected in this document.";
+          : "No shipping/freight/packing charge detected in this document.";
         ciRender();
       });
     }
@@ -2752,7 +2773,7 @@
       ? ` Converted from ${esc(ciState.currency)} at a rate of 1 ${esc(ciState.currency)} = ${rate} AED (${esc(RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource)}${ciState.rateDate ? `, rate date ${esc(ciState.rateDate)}` : ""}).`
       : "";
     const shippingNote = ciState.shippingAmountOriginal > 0
-      ? ` Shipping/freight of ${esc(genericMoney(ciState.shippingAmountOriginal, ciState.currency))} was split equally across ${lines.length} line item${lines.length === 1 ? "" : "s"} and folded into each item's landed cost.`
+      ? ` Shipping/freight/packing cost of ${esc(genericMoney(ciState.shippingAmountOriginal, ciState.currency))} was split equally across ${lines.length} line item${lines.length === 1 ? "" : "s"} and folded into each item's landed cost.`
       : "";
     $("#ciDone").innerHTML = `
       <div class="fp-done">
