@@ -1308,6 +1308,23 @@
       orphanExtract: (m) => ({ unitCost: parseFloat(m[2].replace(/,/g, "")), qty: parseFloat(m[3]) }),
     },
     {
+      // "Ln | Code | Description | Qty | Price | Tax % | Total" -- forward
+      // (left-to-right) column order, the OPPOSITE of "quote-tax" above.
+      // Seen specifically on Freedom Screens Australia's own Quote template
+      // when it has to be read via OCR: this template's PDF has a broken
+      // internal font/character mapping (a real document, "Quote_SQ-
+      // 00000268", visually normal but every character in its native text
+      // layer decodes to a garbled control character) -- but OCR reads the
+      // rendered page in true left-to-right visual order, which turns out
+      // to be the reverse of what quote-tax's own native-text-layer
+      // extraction produces for the same supplier's other documents. e.g.
+      // "1 910002 Patio Mesh 2.7m PH 15.00 493.99 0% 7,409.85".
+      id: "quote-forward-tax",
+      label: "Quote, forward column order (OCR)",
+      lineRe: new RegExp(`^(${QUOTE_LN_RE})\\s+(${QUOTE_CODE_RE})\\s+(${QUOTE_DESC_RE})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+([\\d,]+\\.\\d{1,2})\\s+\\d+(?:\\.\\d+)?%\\s+([\\d,]+\\.\\d{1,2})$`),
+      extract: (m) => ({ ln: parseInt(m[1], 10), code: m[2], description: m[3].trim(), qty: parseFloat(m[4]), unitCost: parseFloat(m[5].replace(/,/g, "")) }),
+    },
+    {
       // "Units | Qty | Description | Code | Ln" -- no pricing at all (e.g. a
       // signed Order Approval). unitCost is left undefined; the preview
       // shows "—" for cost/value on these rows rather than a fabricated 0.
@@ -1650,6 +1667,45 @@
     return { rows, usedIdx };
   }
 
+  // The "single-item-order-form" format above assumes Description, Unit of
+  // Measure, Material, Price, Qty and Sub Total all land on the same
+  // physical line as the Code -- true on some real ORYX order forms, but a
+  // real one (INTERNATIONAL COMPONENT ZIPLINE ORDER FORM, Pet Mesh 3m) was
+  // found to split its own Unit of Measure text across three separate
+  // lines ("3m x" / "30m" / "Roll") instead, so the single-line match never
+  // fires at all. This has no orphanRe of its own (stitchWrappedRows above
+  // only recovers rows via a numeric-only opening line before a terminal
+  // "<code> <ln>" pair, which doesn't fit this format's shape), so it's
+  // joined here instead: starting from any code-shaped opening line, add
+  // one physical line at a time and re-test the format's own lineRe after
+  // each addition, stopping at the FIRST match -- never growing the join
+  // past the fewest lines needed, so trailing unrelated page content
+  // (titles, dates, signatures) below the real row can never be absorbed
+  // into it.
+  function stitchSingleItemOrderFormRows(rawLines, format) {
+    const startRe = /^\d{3,7}[A-Z]?\s+\S/;
+    const rows = [];
+    const usedIdx = new Set();
+    for (let i = 0; i < rawLines.length; i++) {
+      if (usedIdx.has(i)) continue;
+      const first = rawLines[i].trim();
+      if (!startRe.test(first)) continue;
+      let joined = first;
+      for (let j = i + 1; j < Math.min(i + 9, rawLines.length); j++) {
+        const next = rawLines[j].trim();
+        if (!next) continue;
+        joined += " " + next;
+        const m = joined.match(format.lineRe);
+        if (m) {
+          rows.push(format.extract(m));
+          for (let k = i; k <= j; k++) usedIdx.add(k);
+          break;
+        }
+      }
+    }
+    return { rows, usedIdx };
+  }
+
   // The existing gap check below only finds a HOLE below the highest parsed
   // line number -- it has no way to notice a row missing from the very end
   // of the document, because there's no later successfully-parsed row to
@@ -1736,6 +1792,10 @@
       });
       const { rows: wrapped } = stitchWrappedRows(rawLines, format);
       entries.push(...wrapped);
+      if (format.id === "single-item-order-form") {
+        const { rows: stitched } = stitchSingleItemOrderFormRows(rawLines, format);
+        entries.push(...stitched);
+      }
       if (entries.length > best.entries.length) best = { formatId: format.id, formatLabel: format.label, entries };
     }
     // The block layout (one field per line -- see parseBlockDocument above)
