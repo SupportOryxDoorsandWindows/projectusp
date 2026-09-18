@@ -244,6 +244,24 @@
     return m ? parseFloat(m[1]) : null;
   }
 
+  // Master Inventory only ever states a genuine roll/bundle length inside
+  // parentheses -- "(200m)", "(300m Roll)" -- so this deliberately only
+  // looks inside parenthesised groups, unlike parseLengthToken's whole-
+  // string search. That distinction matters for descriptions like "Patio
+  // Mesh 2.7m (30M)", where "2.7m" is the roll's WIDTH (stated outside the
+  // parentheses) and "30M" inside them is the actual roll length -- reusing
+  // parseLengthToken there would silently grab the width instead and divide
+  // the roll's price by 2.7 instead of 30.
+  function parseBundleLengthM(description) {
+    const groups = String(description || "").match(/\(([^()]*)\)/g);
+    if (!groups) return null;
+    for (const g of groups) {
+      const m = g.match(/(\d+(?:\.\d+)?)\s*m\b/i);
+      if (m) return parseFloat(m[1]);
+    }
+    return null;
+  }
+
   // Detects a stated pack size in free text: either an "<n> per <container>"
   // count ("108 per sheet") or an "<n>m" roll/length token ("200m"). Returns
   // { type, qtyPerPackage, unit } or null if neither pattern is present --
@@ -1832,7 +1850,7 @@
       // can't misfire on the common case where neither side claims a
       // length at all.
       const invoiceLen = parseLengthToken(l.unit);
-      const masterLen = parseLengthToken(item.description);
+      const masterLen = parseBundleLengthM(item.description);
       if (invoiceLen != null && masterLen != null && invoiceLen !== masterLen) {
         rows.push({
           code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
@@ -1847,6 +1865,36 @@
             packSize: `${masterLen}m`, invoicePackSize: `${invoiceLen}m`,
             current_qty: item.current_qty,
           },
+        });
+        return;
+      }
+      // Roll/bundle auto-conversion. Master Inventory states this item's
+      // own roll length in its description ("...(300m Roll)") and the
+      // invoice does NOT restate that length itself -- meaning the
+      // invoice's quantity number is a roll/bundle COUNT ("1", "4"), not a
+      // metre count. Master Inventory already tracks stock and unit cost
+      // for these items in metres (confirmed against real records: e.g.
+      // 30003R's current_qty and unit_cost are both metre-based, not
+      // roll-based), so the roll count is expanded to metres and the roll
+      // price is divided down to a per-metre cost automatically -- the
+      // same way every other matched row here checks in without a manual
+      // review step. The roll count itself is kept (packageInfo.rollCount)
+      // purely so the Qty column can still show "+1 (300 m)" instead of
+      // the less readable "+300 m", and so the original per-roll price is
+      // preserved for the audit trail at Confirm.
+      if (masterLen != null && invoiceLen == null) {
+        const rollCount = l.qty;
+        const qtyMetres = rollCount * masterLen;
+        const perMetreCost = l.unitCost != null ? l.unitCost / masterLen : null;
+        const bundleType = /roll|coil|reel/i.test(item.description) ? "Roll" : "Length";
+        rows.push({
+          code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: qtyMetres,
+          invoiceUnitCost: perMetreCost,
+          current: item.current_qty, newQty: item.current_qty + qtyMetres,
+          status: "ok", action: "add", decided: true,
+          itemId: item.id, editing: false, truncatedHint: false,
+          lowConfidence: !!l.lowConfidence,
+          packageInfo: { type: bundleType, qtyPerPackage: masterLen, unit: "m", rollCount, rollUnitCost: l.unitCost },
         });
         return;
       }
@@ -1895,13 +1943,51 @@
   }
 
   function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit) {
+    // The typed qty is still the invoice's own number (e.g. "1" roll) --
+    // captured before row.qty is overwritten below, so the roll/bundle
+    // check further down still has the pre-edit invoice quantity to expand,
+    // exactly like the initial-parse path in buildCheckinRows.
+    const invoiceQty = newQty;
     row.code = newCode; row.description = newDescription; row.qty = newQty; row.unit = newUnit;
+    // A manual edit means the human is now stating the final code/quantity
+    // directly -- any auto-detected roll/bundle packaging from the original
+    // parse no longer applies (it would still reference the pre-edit
+    // item's roll length and count) and would misreport at Confirm and
+    // misdivide shipping in ciLandedUnitCost() if left in place. Recomputed
+    // fresh below if the newly-picked item turns out to be a roll/bundle
+    // item too.
+    row.packageInfo = null;
     const candidates = ciState.itemsByCode.get(newCode) || [];
     const item = pickInventoryRow({ kind: "checkin" }, candidates);
     if (!item) {
       row.current = null; row.newQty = null;
       row.status = "unmatched"; row.action = "pending"; row.decided = false;
       row.itemId = null;
+      return;
+    }
+    // Most Edit corrections are exactly this: the invoice's own Code
+    // column was wrong, incomplete, or (as with some suppliers' Quote
+    // templates) simply never carried Oryx's full Master Inventory code at
+    // all -- so this is often the FIRST point a roll/bundle item's real
+    // Master Inventory record is known. Without this check, an item fixed
+    // via Edit would silently skip the same auto-conversion a correctly-
+    // coded row on the same document already gets, checking in "+1" (a
+    // roll) instead of the roll's real length in metres.
+    const bundleLenM = parseBundleLengthM(item.description);
+    if (bundleLenM != null && parseLengthToken(newUnit) == null) {
+      const rollCount = invoiceQty;
+      const qtyMetres = rollCount * bundleLenM;
+      const rollUnitCost = row.invoiceUnitCost; // original per-roll price, before conversion
+      const perMetreCost = rollUnitCost != null ? rollUnitCost / bundleLenM : null;
+      const bundleType = /roll|coil|reel/i.test(item.description) ? "Roll" : "Length";
+      row.qty = qtyMetres;
+      row.invoiceUnitCost = perMetreCost;
+      row.current = item.current_qty;
+      row.newQty = item.current_qty + qtyMetres;
+      row.status = "ok"; row.action = "add"; row.decided = true;
+      row.itemId = item.id;
+      row.description = item.description || newDescription;
+      row.packageInfo = { type: bundleType, qtyPerPackage: bundleLenM, unit: "m", rollCount, rollUnitCost };
       return;
     }
     row.description = item.description || newDescription;
@@ -1952,10 +2038,22 @@
   // the document itself gave no unit cost for this line (e.g. a no-pricing
   // Order Approval) -- the shipping allocation still exists and is still
   // shown, but it can't be added to an unknown base cost.
+  //
+  // A roll/bundle row (packageInfo.unit === "m") already carries a
+  // PER-METRE unit cost, but shipAlloc is a flat dollar amount for the
+  // whole line (split by line count, not quantity, per spec) -- adding it
+  // straight to a per-metre cost would treat the whole shipping share as
+  // if it applied to a single metre. It's spread across this row's own
+  // metres (r.qty) first, so multiplying back out (qty × landed) still
+  // reconstructs exactly the line's original cost plus its shipping share.
   function ciLandedUnitCost(rowIdx, shipAlloc) {
     const r = ciState.rows[rowIdx];
     if (r.invoiceUnitCost == null) return null;
-    return r.invoiceUnitCost + (shipAlloc.get(rowIdx) || 0);
+    const shipForRow = shipAlloc.get(rowIdx) || 0;
+    if (r.packageInfo && r.packageInfo.unit === "m" && r.packageInfo.rollCount != null && r.qty > 0) {
+      return r.invoiceUnitCost + (shipForRow / r.qty);
+    }
+    return r.invoiceUnitCost + shipForRow;
   }
 
   function ciTally() {
@@ -2432,7 +2530,17 @@
       // cleared packageInfo (see "confirm-pack" above) would fall back to
       // the stale pre-resolution packaging phrase.
       const pkgForDisplay = r.packageInfo || (r.status === "pack-review" ? r.packMismatch.invoicePkg : null);
-      const qtyDisplay = pkgForDisplay
+      // An auto-converted roll/bundle row carries its own roll count
+      // (pkgForDisplay.rollCount) separately from r.qty, which here holds
+      // the expanded METRE total actually being written to stock -- shown
+      // as "+1 Roll (300 m)" so staff can see both the roll count they
+      // recognise from the invoice and the real inventory quantity, rather
+      // than "300 Rolls × 300m" (wrong) or a bare "+300 m" (no longer
+      // recognisable as "1 roll").
+      const qtyDisplay = pkgForDisplay && pkgForDisplay.rollCount != null
+        ? `+${fmt(pkgForDisplay.rollCount)} ${esc(pkgForDisplay.type)}${pkgForDisplay.rollCount === 1 ? "" : "s"}
+           <div class="small muted">(${fmt(r.qty)} ${esc(pkgForDisplay.unit)})</div>`
+        : pkgForDisplay
         ? `${fmt(r.qty)} ${esc(pkgForDisplay.type)}${r.qty === 1 ? "" : "s"} × ${esc(pkgForDisplay.qtyPerPackage)}${esc(pkgForDisplay.unit)}`
         : `+${fmt(r.qty)} ${esc(r.unit)}`;
       return `<tr class="${rowClass}">
@@ -2713,8 +2821,19 @@
         // No document price (e.g. an Order Approval) -- landed cost stays
         // null too, never guessed from an unknown base cost. Shipping is
         // still recorded for audit even though it can't be folded into a
-        // unit cost that doesn't exist.
-        const landedUnitCost = r.invoiceUnitCost != null ? r.invoiceUnitCost + shipAllocForRow : null;
+        // unit cost that doesn't exist. Goes through the same
+        // ciLandedUnitCost() the preview used (not a re-derived formula
+        // here) so a roll/bundle row's shipping share is spread across its
+        // metres exactly as shown on screen -- what was previewed is what
+        // gets saved.
+        const landedUnitCost = ciLandedUnitCost(i, shipAlloc);
+        // A roll/bundle row's package_cost is the original PER-ROLL
+        // invoice price, not r.invoiceUnitCost (which is per-metre for
+        // these rows) -- rollUnitCost preserves that for audit; every
+        // other packaged row falls back to invoiceUnitCost exactly as before.
+        const auditUnitCost = r.packageInfo && r.packageInfo.rollUnitCost != null
+          ? r.packageInfo.rollUnitCost
+          : r.invoiceUnitCost;
         return {
           item_id: r.itemId, quantity: r.qty, unit: r.unit,
           // No document price (e.g. an Order Approval) -- send null, not a
@@ -2730,10 +2849,10 @@
           // preserve what the supplier document actually said (e.g. "4
           // rolls of 200m at AED 331.65/roll") so it's never lost.
           package_type: r.packageInfo ? r.packageInfo.type : null,
-          package_qty: r.packageInfo ? r.qty : null,
+          package_qty: r.packageInfo ? (r.packageInfo.rollCount != null ? r.packageInfo.rollCount : r.qty) : null,
           qty_per_package: r.packageInfo ? r.packageInfo.qtyPerPackage : null,
           package_unit: r.packageInfo ? r.packageInfo.unit : null,
-          package_cost: r.packageInfo && r.invoiceUnitCost != null ? r.invoiceUnitCost * rate : null,
+          package_cost: r.packageInfo && auditUnitCost != null ? auditUnitCost * rate : null,
         };
       });
 
