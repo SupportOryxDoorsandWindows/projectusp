@@ -3309,6 +3309,12 @@
     renderTransactionHistory(txs);
   }
 
+  function txTypeBadge(type) {
+    if (type === "check_in") return `<span class="fp-status-ok">Check-in</span>`;
+    if (type === "stock_adjustment") return `<span class="fp-status-review">Stock adjustment</span>`;
+    return `<span class="fp-status-unmatched">Check-out</span>`;
+  }
+
   // One row per transaction event (Check-out job or Check-in document), not
   // per line item — expandable to see the individual items that moved.
   // Check-out groups by (job, client, timestamp); Check-in groups by
@@ -3336,7 +3342,7 @@
       <tr class="fp-tx-group" data-key="${esc(g.key)}">
         <td><button class="fp-tx-toggle" data-key="${esc(g.key)}" aria-label="Show items">▸</button></td>
         <td>${esc(String(g.created_at).slice(0, 16).replace("T", " "))}</td>
-        <td>${g.type === "check_in" ? `<span class="fp-status-ok">Check-in</span>` : `<span class="fp-status-unmatched">Check-out</span>`}</td>
+        <td>${txTypeBadge(g.type)}</td>
         <td class="code">${esc(g.reference || "—")}</td>
         <td>${esc(g.party || "—")}</td>
         <td class="num">${g.lines.length}</td>
