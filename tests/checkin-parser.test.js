@@ -139,7 +139,39 @@ Sl No Bundle/ Roll NO Description Qty(in Nos) Dimension Grosss Weight(in Kg)
 2 Roll 2 ZLS1-INFINITY DRAW BAR 2500 MM 10 256X19X19 34
 Total No of Rolls 2 Gross Weight(in Kg) 74
 `;
-assert.equal(parseCheckinDocument(packingList).entries.length, 0);
+const packingListDoc = parseCheckinDocument(packingList);
+assert.equal(packingListDoc.formatId, "packing-list-no-codes");
+assert.deepEqual(
+  packingListDoc.entries.map((e) => [e.code, e.description, e.qty, e.unitCost]),
+  [
+    ["", "ZLS1-INFINITY DRAW BAR 2900 MM", 10, null],
+    ["", "ZLS1-INFINITY DRAW BAR 2500 MM", 10, null],
+  ]
+);
+
+const detachedPackingList = `
+Sl No
+Bundle/ Roll NO
+Qty(in Nos)
+Dimension (LXWXH) CM
+Grosss Weight(in Kg)
+1 Roll 1 10 297X19X19 40
+2 Roll 2 10 256X19X19 34
+Total No of Rolls 2 74
+ZLS1-INFINITY DRAW BAR 2900 MM
+PACKING LIST
+Description
+ZLS1-INFINITY DRAW BAR 2500 MM
+`;
+const detachedPackingDoc = parseCheckinDocument(detachedPackingList);
+assert.equal(detachedPackingDoc.formatId, "packing-list-no-codes");
+assert.deepEqual(
+  detachedPackingDoc.entries.map((e) => [e.description, e.qty]),
+  [
+    ["ZLS1-INFINITY DRAW BAR 2900 MM", 10],
+    ["ZLS1-INFINITY DRAW BAR 2500 MM", 10],
+  ]
+);
 
 const layoutlessSupplierRows = `
 Random supplier export
