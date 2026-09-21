@@ -3447,7 +3447,8 @@
         // reader bug.
         const chargeOnly = detectShippingCharge(pdfText);
         if (chargeOnly.amount != null) {
-          ciStatus(`This document has no goods to receive — it only contains a shipping/freight/packing charge of ${genericMoney(chargeOnly.amount, ciState.currency)} (from "${chargeOnly.label}"). Nothing can be checked in as stock from this document; the Master Inventory has not been changed. This charge still needs to be folded into the items it belongs to on their own invoice — that has to be done by hand for now.`, "err");
+          ciRenderChargeOnly(chargeOnly);
+          ciStatus(`Document read successfully — one non-stock charge found. The Master Inventory has not been changed.`);
         } else {
           ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
         }
@@ -3557,6 +3558,32 @@
     const el = $("#ciStatus");
     el.textContent = text || "";
     el.style.color = kind === "err" ? "var(--danger)" : "";
+  }
+
+  function ciRenderChargeOnly(charge) {
+    const cur = ciState.currency || "AED";
+    $("#ciOut").innerHTML = `
+      <div class="fp-section-h">Document preview</div>
+      <div class="fp-scroll">
+        <table class="fp-table">
+          <thead><tr>
+            <th>Type</th>
+            <th>Source description</th>
+            <th class="num">Amount</th>
+            <th>Inventory action</th>
+          </tr></thead>
+          <tbody><tr>
+            <td>Shipping / freight / packing charge</td>
+            <td>${esc(charge.label || "Charge")}</td>
+            <td class="num">${esc(genericMoney(charge.amount, cur))}</td>
+            <td><span class="fp-status-review"><span class="fp-dot"></span>Not added to stock</span></td>
+          </tr></tbody>
+        </table>
+      </div>
+      <div class="fp-warn" style="margin-top:var(--space-3)">
+        <h4>Cost only — no goods to receive</h4>
+        <p class="small" style="margin:0">This document contains a separate charge, not an inventory item. Apply the cost to the related goods invoice when its items are checked in. Confirm Check-in stays unavailable, so this preview cannot change stock.</p>
+      </div>`;
   }
 
   function wireCiDrop(dropEl, inputEl) {
