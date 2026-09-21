@@ -1015,6 +1015,10 @@
   // across the shipment's items the same way.
   const SHIPPING_TERM_RE = /\b(shipping(?:\s*(?:&|and)\s*handling)?(?:\s+cost)?|freight(?:\s*(?:&|and)\s*insurance)?(?:\s+charge)?|delivery\s+charge|transport(?:ation)?|handling\s+charge|(?:additional\s+)?packing(?:\s*(?:&|and)\s*crating)?(?:\s+charges?|\s+fee)|crating(?:\s+charges?|\s+fee))\b/i;
   const NOT_SHIPPING_RE = /\b(tax|vat|gst|discount|sub\s*-?\s*total|grand\s*total)\b/i;
+  // Column headings that can contain a shipping word without describing an
+  // actual charge. These are excluded from the wrapped-line OCR fallback
+  // below, where looking ahead for a number would otherwise be too broad.
+  const SHIPPING_HEADER_RE = /\b(qty|quantity|unit|price|rate|tax|amount|total)\b/i;
   // A genuine freight/shipping summary charge is a standalone label+amount
   // near the totals -- not a fully-structured priced row with its own
   // qty/unit/tax columns. A real supplier document had a "Shipping Crate"
@@ -1059,6 +1063,31 @@
         const amt = parseFloat(onLine[1].replace(/,/g, ""));
         if (amt > 0) candidates.push({ label: line, amount: amt });
         continue;
+      }
+      // OCR often splits one visual table row into several lines. The real
+      // Freedom Screens packing-charge sample becomes:
+      //   Additional Packing charges (in
+      //   1
+      //   crate) 998540 1.00 59.00 No 59.00
+      // Join at most the next two non-empty fragments when the first line is
+      // a short charge label. The header guard prevents phrases such as
+      // "Tax Rate Price Freight" from borrowing an unrelated amount below.
+      const labelWordCount = line.split(/\s+/).length;
+      if (labelWordCount <= 8 && !SHIPPING_HEADER_RE.test(line)) {
+        const fragments = [];
+        for (let j = i + 1; j < rawLines.length && fragments.length < 2; j++) {
+          const fragment = rawLines[j].trim();
+          if (fragment) fragments.push(fragment);
+        }
+        const wrapped = [line, ...fragments].join(" ");
+        if (!NOT_SHIPPING_RE.test(wrapped) && !ITEM_ROW_SHAPE_RE.test(wrapped)) {
+          const wm = lastMoneyMatch(stripDates(wrapped));
+          if (wm) {
+            const amt = parseFloat(wm[1].replace(/,/g, ""));
+            if (amt > 0) candidates.push({ label: wrapped, amount: amt });
+            continue;
+          }
+        }
       }
       // A bare label line (just the word itself, not a multi-column header)
       // -- look at the very next non-blank line for its value only.

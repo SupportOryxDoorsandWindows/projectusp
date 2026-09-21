@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable };\n})();`
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge } = context.window.__ciTest;
 
 const freedomApproval = `
 COMMON PARTS
@@ -108,5 +108,29 @@ assert.deepEqual(
 
 assert.equal(textLayerLooksUsable(""), false);
 assert.equal(textLayerLooksUsable("(cid:0)(cid:2)(cid:3)(cid:4)(cid:5)(cid:6)(cid:7)"), false);
+
+const wrappedOcrPackingCharge = `
+SI Description of Rate per Amount
+No. Goods and Services Cut length(in mtr) HSN/SAC aty(nNos) ep pa
+Additional Packing charges (in
+1
+crate) 998540 1.00 59.00 No 59.00
+Amount Chargeable (in words) E.&O.E
+USD: Fifty Nine Only
+`;
+assert.deepEqual(
+  detectShippingCharge(wrappedOcrPackingCharge),
+  {
+    amount: 59,
+    needsReview: false,
+    label: "Additional Packing charges (in 1 crate) 998540 1.00 59.00 No 59.00",
+    note: 'Detected from "Additional Packing charges (in 1 crate) 998540 1.00 59.00 No 59.00" — review before confirming.',
+  }
+);
+
+assert.equal(
+  detectShippingCharge("Tax Rate Price Freight\nA100 Nylon Cord 10 4.50 45.00\nGrand Total 45.00").amount,
+  null
+);
 
 console.log("check-in parser tests passed");
