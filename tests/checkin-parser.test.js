@@ -1,0 +1,97 @@
+const assert = require("assert");
+const fs = require("fs");
+const vm = require("vm");
+
+const source = fs.readFileSync("fp-pro.js", "utf8").replace(
+  /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable };\n})();`
+);
+
+const fakeEl = {
+  addEventListener() {},
+  classList: { add() {}, remove() {} },
+  style: {},
+  hidden: false,
+  disabled: false,
+  value: "",
+  innerHTML: "",
+  textContent: "",
+  querySelectorAll() { return []; },
+  appendChild() {},
+};
+
+const context = {
+  console,
+  window: {
+    ORYX_CONFIG: { supabaseUrl: "https://example.supabase.co", supabaseKey: "key" },
+    supabase: {
+      createClient() {
+        return {
+          from() {
+            return { select() { return this; }, order() { return this; }, limit() { return this; } };
+          },
+        };
+      },
+    },
+  },
+  document: { querySelector() { return fakeEl; }, createElement() { return fakeEl; }, head: fakeEl },
+  setTimeout,
+  clearTimeout,
+  crypto: { subtle: {} },
+};
+
+vm.runInNewContext(source, context);
+const { parseCheckinDocument, textLayerLooksUsable } = context.window.__ciTest;
+
+const freedomApproval = `
+COMMON PARTS
+134002 ZLS1-Brake Rod-01 1.5m length Each Metal 2 USD 2.48 400 USD 9 92.00
+End Caps - MILL
+630062 ZLX-End Cap-100-A-01 Each MILL 100mm 1 USD 1 1.39 20 20 USD 2 27.80
+EXTRAS
+30016R Keder (200m roll) Plastic 200m Extras USD 3 31.65 3 USD 9 94.95
+`;
+
+const freedomDoc = parseCheckinDocument(freedomApproval);
+assert.equal(freedomDoc.formatId, "freedom-approval-order");
+assert.equal(freedomDoc.entries.length, 3);
+assert.deepEqual(
+  freedomDoc.entries.map((e) => [e.code, e.qty, e.unitCost]),
+  [
+    ["134002", 400, 2.48],
+    ["630062", 20, 11.39],
+    ["30016R", 3, 331.65],
+  ]
+);
+
+const ziplineOrder = `
+ZIPLINE COMPONENTS - INTERNATIONAL
+Old Part New Part Required
+Image Description Unit Material Price AUD Qty Colour Sub Total Comments
+Number Number Quantity
+3m x
+910005R Pet Mesh 3m wide 30m Plastic 902.50 2 1 ,805.00
+Roll
+Total 1 ,805.00
+`;
+
+const ziplineDoc = parseCheckinDocument(ziplineOrder);
+assert.equal(ziplineDoc.formatId, "single-item-order-form");
+assert.equal(ziplineDoc.entries.length, 1);
+assert.equal(ziplineDoc.entries[0].code, "910005R");
+assert.equal(ziplineDoc.entries[0].qty, 2);
+assert.equal(ziplineDoc.entries[0].unitCost, 902.5);
+
+const packingList = `
+PACKING LIST Date DATE25-12-2025
+Sl No Bundle/ Roll NO Description Qty(in Nos) Dimension Grosss Weight(in Kg)
+1 Roll 1 ZLS1-INFINITY DRAW BAR 2900 MM 10 297X19X19 40
+2 Roll 2 ZLS1-INFINITY DRAW BAR 2500 MM 10 256X19X19 34
+Total No of Rolls 2 Gross Weight(in Kg) 74
+`;
+assert.equal(parseCheckinDocument(packingList).entries.length, 0);
+
+assert.equal(textLayerLooksUsable(""), false);
+assert.equal(textLayerLooksUsable("(cid:0)(cid:2)(cid:3)(cid:4)(cid:5)(cid:6)(cid:7)"), false);
+
+console.log("check-in parser tests passed");
