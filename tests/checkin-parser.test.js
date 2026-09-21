@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge };\n})();`
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows } = context.window.__ciTest;
 
 const freedomApproval = `
 COMMON PARTS
@@ -63,6 +63,51 @@ assert.deepEqual(
     ["30016R", 3, 331.65],
   ]
 );
+
+const packagedInventory = new Map([
+  ["30016R", [{
+    id: "keder", item_code: "30016R", description: "Keder (200m roll)",
+    unit_of_measure: "m", current_qty: 100, unit_cost: 1.5,
+  }]],
+  ["30003R", [{
+    id: "bug-fur", item_code: "30003R", description: "Bug Fur 16mm (300m Roll)",
+    unit_of_measure: "m", current_qty: 20, unit_cost: 1.7,
+  }]],
+  ["30001R", [{
+    id: "bug-fur-12", item_code: "30001R", description: "Bug Fur 12mm (125m)",
+    unit_of_measure: "m", current_qty: 20, unit_cost: 1.7,
+  }]],
+]);
+
+const packagedRows = buildCheckinRows([
+  { code: "30016R", description: "Keder (200m roll)", unit: "200m", qty: 4, unitCost: 331.65 },
+  { code: "30003R", description: "Bug Fur 16mm (300m Roll)", unit: "Units", qty: 1, unitCost: 499.94 },
+], [], packagedInventory);
+
+assert.deepEqual(
+  packagedRows.map((r) => [r.code, r.qty, r.invoiceUnitCost, r.newQty, r.packageInfo.rollCount]),
+  [
+    ["30016R", 800, 331.65 / 200, 900, 4],
+    ["30003R", 300, 499.94 / 300, 320, 1],
+  ]
+);
+assert.equal(packagedRows[0].packageInfo.qtyPerPackage, 200);
+assert.equal(packagedRows[1].packageInfo.qtyPerPackage, 300);
+assert.equal(packagedRows[0].packageInfo.type, "Roll");
+assert.equal(packagedRows[1].packageInfo.type, "Roll");
+
+const mismatchedRoll = buildCheckinRows([
+  { code: "30003R", description: "Bug Fur", unit: "200m", qty: 1, unitCost: 499.94 },
+], [], packagedInventory)[0];
+assert.equal(mismatchedRoll.status, "exact-diff");
+assert.equal(mismatchedRoll.decided, false);
+
+const descriptionMismatch = buildCheckinRows([
+  { code: "30001R", description: "Bug Fur 12mm (100m Roll)", unit: "Plastic", qty: 3, unitCost: 285.67 },
+], [], packagedInventory)[0];
+assert.equal(descriptionMismatch.status, "exact-diff");
+assert.equal(descriptionMismatch.exactMatchItem.invoicePackSize, "100m");
+assert.equal(descriptionMismatch.exactMatchItem.packSize, "125m");
 
 const freedomCellStream = `
 Part code

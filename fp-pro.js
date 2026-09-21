@@ -1127,6 +1127,11 @@
     return `${code} ` + fmt(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  function genericUnitMoney(n, code, unit) {
+    if (n === null || n === undefined || isNaN(n)) return "—";
+    return `${code} ` + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ` / ${unit}`;
+  }
+
   // Matches the numbered line-item rows of a Commercial Invoice table, e.g.
   // "6 230034 Each 200 0.58 0.00 116.00 392530" -> Ln, Part Number, Units,
   // Qty, Price, GST, Total, HS Code. Verified against the supplied sample
@@ -2251,13 +2256,13 @@
       // for-word against the invoice's presentational Unit text ("Each",
       // "Sheet", etc.) -- doing that flagged almost every ordinary row as
       // "different" and was wrong. The only place either side actually
-      // states a pack size is a "<number>m" token: the invoice's Unit
-      // field sometimes carries one ("300m"), and Master Inventory's own
-      // description sometimes carries one in parentheses ("...(200m)").
+      // states a pack size is a "<number>m" token: the invoice's Unit field
+      // or description sometimes carries one ("300m", "(200m roll)"), and
+      // Master Inventory's own description carries one in parentheses.
       // Only flag when BOTH sides state one and they disagree -- this
       // can't misfire on the common case where neither side claims a
       // length at all.
-      const invoiceLen = parseLengthToken(l.unit);
+      const invoiceLen = parseLengthToken(`${l.unit || ""} ${pdfDescription || ""}`);
       const masterLen = parseBundleLengthM(item.description);
       if (invoiceLen != null && masterLen != null && invoiceLen !== masterLen) {
         rows.push({
@@ -2277,10 +2282,11 @@
         return;
       }
       // Roll/bundle auto-conversion. Master Inventory states this item's
-      // own roll length in its description ("...(300m Roll)") and the
-      // invoice does NOT restate that length itself -- meaning the
-      // invoice's quantity number is a roll/bundle COUNT ("1", "4"), not a
-      // metre count. Master Inventory already tracks stock and unit cost
+      // own roll length in its description ("...(300m Roll)"). The invoice
+      // quantity is a roll/bundle COUNT ("1", "4"), whether the invoice's
+      // Unit column is blank/"Units" or repeats the same length ("300m").
+      // A different stated length was already stopped for review above.
+      // Master Inventory tracks stock and unit cost
       // for these items in metres (confirmed against real records: e.g.
       // 30003R's current_qty and unit_cost are both metre-based, not
       // roll-based), so the roll count is expanded to metres and the roll
@@ -2290,11 +2296,11 @@
       // purely so the Qty column can still show "+1 (300 m)" instead of
       // the less readable "+300 m", and so the original per-roll price is
       // preserved for the audit trail at Confirm.
-      if (masterLen != null && invoiceLen == null) {
+      if (masterLen != null && (invoiceLen == null || invoiceLen === masterLen)) {
         const rollCount = l.qty;
         const qtyMetres = rollCount * masterLen;
         const perMetreCost = l.unitCost != null ? l.unitCost / masterLen : null;
-        const bundleType = /roll|coil|reel/i.test(item.description) ? "Roll" : "Length";
+        const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${pdfDescription || ""} ${l.unit || ""}`) ? "Roll" : "Length";
         rows.push({
           code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: qtyMetres,
           invoiceUnitCost: perMetreCost,
@@ -2382,12 +2388,13 @@
     // coded row on the same document already gets, checking in "+1" (a
     // roll) instead of the roll's real length in metres.
     const bundleLenM = parseBundleLengthM(item.description);
-    if (bundleLenM != null && parseLengthToken(newUnit) == null) {
+    const editedInvoiceLen = parseLengthToken(`${newUnit || ""} ${newDescription || ""}`);
+    if (bundleLenM != null && (editedInvoiceLen == null || editedInvoiceLen === bundleLenM)) {
       const rollCount = invoiceQty;
       const qtyMetres = rollCount * bundleLenM;
       const rollUnitCost = row.invoiceUnitCost; // original per-roll price, before conversion
       const perMetreCost = rollUnitCost != null ? rollUnitCost / bundleLenM : null;
-      const bundleType = /roll|coil|reel/i.test(item.description) ? "Roll" : "Length";
+      const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${newDescription || ""} ${newUnit || ""}`) ? "Roll" : "Length";
       row.qty = qtyMetres;
       row.invoiceUnitCost = perMetreCost;
       row.current = item.current_qty;
@@ -2908,7 +2915,7 @@
           <div class="fp-exactdiff-h">Exact Item Code found in Master Inventory</div>
           <div><span class="lbl">Master Inventory:</span> <span class="code">${esc(r.exactMatchItem.code)}</span> — ${esc(r.exactMatchItem.description)} · Unit: <b>${esc(r.exactMatchItem.unit || "—")}</b></div>
           <div><span class="lbl">Supplier Invoice:</span> <span class="code">${esc(r.code)}</span> — ${esc(r.description || "—")} · Unit: <b>${esc(r.unit || "—")}</b></div>
-          <div class="fp-exactdiff-warn">⚠ Unit/pack size differs — review before using. No conversion is applied automatically.</div>
+          <div class="fp-exactdiff-warn">⚠ Package length differs: supplier document ${esc(r.exactMatchItem.invoicePackSize)}, Master Inventory ${esc(r.exactMatchItem.packSize)}. Review before using. No conversion is applied automatically.</div>
         </div>` : "";
       const usedDiffNote = r.usedDespiteDifference ? `<div class="small muted" style="margin-top:2px">
           Used despite a pack-size difference (invoice: ${esc(r.usedDespiteDifference.invoicePackSize || "—")}, Master Inventory: ${esc(r.usedDespiteDifference.masterPackSize || "—")}) — confirmed by the user.
@@ -2953,15 +2960,24 @@
         : pkgForDisplay
         ? `${fmt(r.qty)} ${esc(pkgForDisplay.type)}${r.qty === 1 ? "" : "s"} × ${esc(pkgForDisplay.qtyPerPackage)}${esc(pkgForDisplay.unit)}`
         : `+${fmt(r.qty)} ${esc(r.unit)}`;
+      const expandedPackage = pkgForDisplay && pkgForDisplay.rollCount != null && pkgForDisplay.unit === "m";
+      const unitCostDisplay = expandedPackage
+        ? `${genericUnitMoney(r.invoiceUnitCost, cur, "m")}<div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, cur)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>`
+        : genericMoney(r.invoiceUnitCost, cur);
+      const landedUnitCostDisplay = landedUnitCost == null
+        ? "—"
+        : expandedPackage
+        ? genericUnitMoney(landedUnitCost, cur, "m")
+        : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}${reviewFlag}${lowConfBadge}</td>
         <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
-        <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+        <td class="num">${unitCostDisplay}</td>
         <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, cur) : "—"}</td>
-        <td class="num">${landedUnitCost != null ? genericMoney(landedUnitCost, cur) : "—"}</td>
+        <td class="num">${landedUnitCostDisplay}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${ciStatusChip(r, displayStatus)}</td>
         <td>${ciRenderRowActionButtons(i, r)}</td>
