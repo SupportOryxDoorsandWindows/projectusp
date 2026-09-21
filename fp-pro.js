@@ -801,8 +801,8 @@
     // than risk feeding garbage into a format's regex.
     ocrStillUnreadablePages: [],
     // Set when no known document layout matched at all and this document
-    // was instead read via the last-resort greedy token matcher (see
-    // parseGreedyTokenDocument below) -- same reasoning as usedOcr.
+    // was instead read via a last-resort low-confidence normaliser (see
+    // parseGreedyTokenDocument / parseLayoutlessStandardizedRows below).
     lowConfidenceFallback: false,
     lowConfidenceAcknowledged: false,
   };
@@ -1686,6 +1686,108 @@
     return entries;
   }
 
+  // Layoutless standardiser: a final, cautious fallback for supplier PDFs
+  // whose rows survive text/OCR extraction but do not match a known table
+  // shape. It looks for a product-code-like token followed by description
+  // text and enough numbers to prove a quantity × unit-cost ≈ line total.
+  // Every row it creates is low-confidence and therefore review-gated.
+  function parseLayoutlessStandardizedRows(text) {
+    const entries = [];
+    const rawLines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const codeStartRe = /^(\[?)([A-Za-z0-9][A-Za-z0-9-]{2,19}R?)\]?\s+(.+)$/i;
+    const badCodeRe = /^(date|page|total|subtotal|invoice|purchase|shipment|supplier|buyer|ship|bill|bank|swift|contact)$/i;
+    const currencyRe = new RegExp(`^(${SUPPORTED_CURRENCIES.join("|")})$`, "i");
+    const unitWordRe = /^(units?|pcs?|pieces?|each|box(?:es)?|set|sheets?|rolls?|meters?|metres?|m|kgs?)$/i;
+
+    function tokenise(line) {
+      const raw = line.split(/\s+/).filter(Boolean);
+      const out = [];
+      for (let i = 0; i < raw.length; i++) {
+        const cur = raw[i];
+        const next = raw[i + 1] || "";
+        if (/^\d{1,3}$/.test(cur) && /^,\d{3}(?:\.\d+)?$/.test(next)) {
+          out.push(cur + next);
+          i++;
+        } else {
+          out.push(cur);
+        }
+      }
+      return out;
+    }
+
+    function numericTokens(tokens) {
+      return tokens
+        .map((raw, idx) => {
+          const cleaned = raw.replace(/,/g, "");
+          if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return null;
+          const value = parseFloat(cleaned);
+          return isFinite(value) ? { raw, idx, value, decimal: /\./.test(cleaned) } : null;
+        })
+        .filter(Boolean);
+    }
+
+    function bestQuantityCost(nums) {
+      if (nums.length < 3) return null;
+      const total = [...nums].reverse().find((n) => n.decimal);
+      if (!total || total.value <= 0) return null;
+      let best = null;
+      for (const qty of nums) {
+        if (qty.idx >= total.idx || qty.value <= 0) continue;
+        for (const cost of nums) {
+          if (cost.idx >= total.idx || cost.idx === qty.idx || cost.value <= 0) continue;
+          const expected = qty.value * cost.value;
+          const rel = Math.abs(expected - total.value) / Math.max(total.value, 1);
+          if (rel > 0.04) continue;
+          const score = rel + (cost.decimal ? 0 : 0.02) + (qty.idx > cost.idx ? 0.01 : 0);
+          if (!best || score < best.score) best = { qty, cost, total, score };
+        }
+      }
+      return best;
+    }
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      if (BLOCK_SKIP_LINE_RE.test(line) || BLOCK_HS_LINE_RE.test(line)) continue;
+      const m = line.match(codeStartRe);
+      if (!m) continue;
+      const code = m[2];
+      if (badCodeRe.test(code) || !/\d/.test(code)) continue;
+
+      let candidate = `${code} ${m[3]}`;
+      // Pull in one or two short continuation lines until the next row
+      // starts. This catches OCR/text-layer wraps without letting a whole
+      // page paragraph leak into one item.
+      for (let j = i + 1; j < Math.min(i + 3, rawLines.length); j++) {
+        const next = rawLines[j];
+        if (codeStartRe.test(next) || BLOCK_SKIP_LINE_RE.test(next) || BLOCK_HS_LINE_RE.test(next)) break;
+        if (next.length <= 80) candidate += " " + next;
+      }
+
+      const tokens = tokenise(candidate);
+      const nums = numericTokens(tokens);
+      const picked = bestQuantityCost(nums);
+      if (!picked) continue;
+
+      const firstDataIdx = Math.min(picked.qty.idx, picked.cost.idx);
+      const descTokens = tokens.slice(1, firstDataIdx)
+        .filter((t) => !currencyRe.test(t) && !unitWordRe.test(t));
+      const description = descTokens.join(" ").replace(/\s+/g, " ").trim();
+      if (!description || !/[A-Za-z]/.test(description)) continue;
+
+      const unitToken = tokens[picked.qty.idx + 1] || tokens[picked.qty.idx - 1] || "";
+      entries.push({
+        code,
+        description,
+        qty: picked.qty.value,
+        unit: unitWordRe.test(unitToken) ? unitToken : "",
+        unitCost: picked.cost.value,
+        lowConfidence: true,
+      });
+    }
+
+    return entries;
+  }
+
   // Recovers rows whose description wrapped across multiple physical lines,
   // splitting "<numbers> <description> <code> <ln>" into a numbers-only line
   // followed by one or more description lines and a final "<code> <ln>"
@@ -1873,6 +1975,16 @@
       const greedyEntries = parseGreedyTokenDocument(text);
       if (greedyEntries.length) {
         best = { formatId: "greedy-tokens", formatLabel: "Greedy token matching (low-confidence fallback)", entries: greedyEntries };
+      }
+    }
+    if (!best.entries.length) {
+      const layoutlessEntries = parseLayoutlessStandardizedRows(text);
+      if (layoutlessEntries.length) {
+        best = {
+          formatId: "layoutless-standardized",
+          formatLabel: "Auto-standardised line items (low-confidence fallback)",
+          entries: layoutlessEntries,
+        };
       }
     }
     if (!best.entries.length) return best;
@@ -2607,7 +2719,7 @@
       // to applyCiRowAction(i, act) via data-i/data-act, which this badge
       // doesn't set.
       const lowConfBadge = r.lowConfidence
-        ? `<span title="Read via the greedy token-matching fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
+        ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
         : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
@@ -2735,7 +2847,7 @@
     const lowConfBox = ciState.lowConfidenceFallback ? `<div class="fp-warn">
       <h4>This document was read with a low-confidence fallback</h4>
       <p class="small" style="margin:0 0 var(--space-2)">No known document layout matched this file, so it was read with a
-        best-effort matcher that pieces scattered fields back together. This is more likely to misread a code, quantity or
+        best-effort normaliser that pieces scattered fields back into the standard preview table. This is more likely to misread a code, quantity or
         price than the reader's normal formats — check every row below (marked ⚠ low-confidence) against the original
         document before confirming.</p>
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px">
@@ -3155,7 +3267,7 @@
       }
       ciState.missingLnNumbers = doc.missingLnNumbers || [];
       ciState.missingLnAcknowledged = false;
-      ciState.lowConfidenceFallback = doc.formatId === "greedy-tokens";
+      ciState.lowConfidenceFallback = doc.formatId === "greedy-tokens" || doc.formatId === "layoutless-standardized";
 
       // Landed Cost: a convenience prefill only -- always shown editable in
       // the preview (see ciRender's shippingCard) before Confirm is ever
