@@ -91,6 +91,21 @@ Total No of Rolls 2 Gross Weight(in Kg) 74
 `;
 assert.equal(parseCheckinDocument(packingList).entries.length, 0);
 
+const layoutlessSupplierRows = `
+Random supplier export
+A100 Nylon Cord White 12 4.50 54.00
+B200 Heavy Bracket 8 pcs 3.25 26.00
+`;
+const layoutlessDoc = parseCheckinDocument(layoutlessSupplierRows);
+assert.equal(layoutlessDoc.formatId, "layoutless-standardized");
+assert.deepEqual(
+  layoutlessDoc.entries.map((e) => [e.code, e.description, e.qty, e.unitCost, e.lowConfidence]),
+  [
+    ["A100", "Nylon Cord White", 12, 4.5, true],
+    ["B200", "Heavy Bracket", 8, 3.25, true],
+  ]
+);
+
 assert.equal(textLayerLooksUsable(""), false);
 assert.equal(textLayerLooksUsable("(cid:0)(cid:2)(cid:3)(cid:4)(cid:5)(cid:6)(cid:7)"), false);
 
