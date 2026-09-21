@@ -74,6 +74,11 @@ panel count and ranks the systems that fit:
 > *"Will Series 1 work for 3000 x 2600?"*
 > Suitable at 2 panels of 1,500 × 2,600 mm.
 
+The bot keeps the sizing context within the current chat. After a size question,
+follow-ups such as *"make that folding"* or *"what about Series 3?"* reuse the
+last opening dimensions and apply the new product family or system before
+checking suitability again.
+
 It also answers specification questions — thresholds, drainage, sightlines,
 glass, hardware, configurations — and cross-range questions such as
 *"which systems have automation?"* or *"what is the tallest system?"*
@@ -84,9 +89,10 @@ topic) and a note of when it expires. Click one to reopen and continue it; the �
 removes it. History is saved **only in the person's own browser** (localStorage),
 never sent anywhere, so a browser only ever holds its own chats — nothing to leak
 and no write endpoint to abuse. Each conversation is deleted automatically two
-days after its last message, which also frees the space it used. If the browser
-blocks storage (private mode, full quota), the sidebar simply hides and the bot
-still works.
+days after its last message, which also frees the space it used. Recommendation
+context is saved with each chat, so reopening a recent conversation preserves
+the last opening dimensions and selected filters. If the browser blocks storage
+(private mode, full quota), the sidebar simply hides and the bot still works.
 
 **Opening checker.** The same engine as a form, with filters for family,
 threshold, automation and maximum panel count. Shows every system that fits and
