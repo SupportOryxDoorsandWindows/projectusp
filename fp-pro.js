@@ -1538,6 +1538,60 @@
     return { entries, reconciliation };
   }
 
+  // Freedom Screens packing lists contain reliable received quantities but
+  // deliberately omit item codes and prices. pdf.js may either keep each
+  // visible row together or emit the Description column later in the text
+  // stream, so both shapes are supported. Rows always remain unmatched: a
+  // human must map each description to Master Inventory before it can add
+  // stock, and a null unit cost tells the server to retain the item's
+  // existing Master Inventory cost rather than inventing a price.
+  function parsePackingListRows(text) {
+    if (!/\bPACKING LIST\b/i.test(text) || !/Bundle\s*\/\s*Roll NO/i.test(text) || !/Gross+\s*Weight/i.test(text)) {
+      return [];
+    }
+
+    const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
+    const dimension = "\\d+(?:\\.\\d+)?\\s*[xX]\\s*\\d+(?:\\.\\d+)?\\s*[xX]\\s*\\d+(?:\\.\\d+)?";
+    const inlineRe = new RegExp(`^(\\d{1,3})\\s+(?:Roll|Bundle)\\s+\\d+\\s+(.+?)\\s+(\\d+(?:\\.\\d+)?)\\s+${dimension}\\s+\\d+(?:\\.\\d+)?$`, "i");
+    const detachedRe = new RegExp(`^(\\d{1,3})\\s+(?:Roll|Bundle)\\s+\\d+\\s+(\\d+(?:\\.\\d+)?)\\s+${dimension}\\s+\\d+(?:\\.\\d+)?$`, "i");
+    const inline = [];
+    const detached = [];
+
+    for (const line of lines) {
+      const im = line.match(inlineRe);
+      if (im) {
+        inline.push({ ln: parseInt(im[1], 10), description: im[2].trim(), qty: parseFloat(im[3]) });
+        continue;
+      }
+      const dm = line.match(detachedRe);
+      if (dm) detached.push({ ln: parseInt(dm[1], 10), qty: parseFloat(dm[2]) });
+    }
+
+    let rows = inline;
+    if (!rows.length && detached.length) {
+      const descriptions = lines.filter((line) =>
+        /[A-Za-z]/.test(line) && /\b\d+(?:\.\d+)?\s*MM\s*$/i.test(line) && !/^Dimension\b/i.test(line)
+      );
+      if (descriptions.length !== detached.length) return [];
+      rows = detached.map((row, idx) => ({ ...row, description: descriptions[idx] }));
+    }
+
+    if (!rows.length || rows.some((row, idx) => row.ln !== idx + 1 || !(row.qty > 0) || !row.description)) return [];
+    const totalLine = lines.find((line) => /^Total No of Rolls\b/i.test(line));
+    const totalMatch = totalLine && totalLine.match(/^Total No of Rolls\s+(\d+)/i);
+    if (totalMatch && parseInt(totalMatch[1], 10) !== rows.length) return [];
+
+    return rows.map((row) => ({
+      code: "",
+      description: row.description,
+      qty: row.qty,
+      unit: "Nos",
+      unitCost: null,
+      manualMatchRequired: true,
+      ln: row.ln,
+    }));
+  }
+
   // --- General "line-item block" layout -----------------------------------
   // Some suppliers' PDF export tools (seen in Freedom Screens' Pro-Forma
   // Invoice / Quotation templates) group each row's own text by its Y
@@ -2081,6 +2135,15 @@
         reconciliation: freedomCellStream.reconciliation,
       };
     }
+    const packingListEntries = parsePackingListRows(text);
+    if (packingListEntries.length > best.entries.length) {
+      best = {
+        formatId: "packing-list-no-codes",
+        formatLabel: "Packing list (manual inventory mapping required)",
+        entries: packingListEntries,
+        requiresManualMapping: true,
+      };
+    }
     // Absolute last resort: only tried when nothing above -- not even the
     // block-layout reader -- found a single row. Never allowed to outrank a
     // real structured match just by finding more raw entries, since it's
@@ -2490,7 +2553,7 @@
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
-      <button data-act="new-item" data-i="${idx}">+ New item</button>
+      ${row.code ? `<button data-act="new-item" data-i="${idx}">+ New item</button>` : ""}
     </div>`;
   }
 
@@ -2715,6 +2778,8 @@
     const t = ciTally();
     const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
+    const noCodeUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && !r.code).length;
+    const codedUnmatched = unmatched - noCodeUnmatched;
     const cur = ciState.currency;
     const shipAlloc = ciShippingAllocation();
     const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
@@ -2909,12 +2974,14 @@
     const warnBox = needDecisionTotal > 0 ? `<div class="fp-warn">
       <h4>${needDecisionTotal} item${needDecisionTotal === 1 ? "" : "s"} need${needDecisionTotal === 1 ? "s" : ""} a decision</h4>
       <ul>
-        ${unmatched > 0 ? `<li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
+        ${noCodeUnmatched > 0 ? `<li><b>${noCodeUnmatched} packing-list row${noCodeUnmatched === 1 ? " has" : "s have"} no item code or price</b> —
+          click Edit and map ${noCodeUnmatched === 1 ? "it" : "each one"} to the correct Master Inventory item. The supplier quantity is retained,
+          and the existing Master Inventory cost will be used; no price is guessed. Acknowledge only if the row should be skipped.</li>` : ""}
+        ${codedUnmatched > 0 ? `<li><b>${codedUnmatched} unmatched item${codedUnmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
           Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
           to confirm you've seen it. A new Master Inventory item is never created from here.
-          <span class="fp-batch-actions">
-            <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
-          </span></li>` : ""}
+          </li>` : ""}
+        ${unmatched > 0 ? `<li class="fp-batch-actions"><button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button></li>` : ""}
         ${exactDiffCount > 0 ? `<li><b>${exactDiffCount} item${exactDiffCount === 1 ? "" : "s"} with an exact code match, but a detail differs</b> —
           the item code already exists in the Master Inventory, but the invoice's unit doesn't match what's on file.
           Review the comparison shown under each of these rows, then click Use Existing Item once you've confirmed it,
@@ -3450,10 +3517,13 @@
       const lowConfNote = ciState.lowConfidenceFallback
         ? " No known document layout matched this file, so it was read with a low-confidence, best-effort matcher — check every row against the original document before confirming."
         : "";
+      const manualMappingNote = doc.requiresManualMapping
+        ? " This packing list has quantities but no item codes or prices. Map every row to the correct Master Inventory item with Edit; its existing cost will be retained."
+        : "";
       const reconciliationNote = doc.reconciliation && doc.reconciliation.ok
         ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)}.`
         : "";
-      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${reconciliationNote}`);
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${manualMappingNote}${reconciliationNote}`);
     } catch (err) {
       console.error(err);
       if (!isStale()) ciStatus("Could not analyse the document: " + err.message, "err");
