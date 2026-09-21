@@ -64,6 +64,56 @@ assert.deepEqual(
   ]
 );
 
+const freedomCellStream = `
+Part code
+Description
+PRICE AUD
+QTY SUM
+TOTAL
+134002
+ZLS1-Brake Rod-01 1.5m length
+Each
+Metal
+2
+2.48
+USD
+400
+992.00
+USD
+630062
+ZLX-End Cap-100-A-01
+Each
+MILL
+100mm
+1
+11.39
+USD
+20
+20
+227.80
+USD
+Total
+1,219.80
+USD
+`;
+const freedomCellDoc = parseCheckinDocument(freedomCellStream);
+assert.equal(freedomCellDoc.formatId, "freedom-approval-cell-stream");
+assert.deepEqual(
+  freedomCellDoc.entries.map((e) => [e.code, e.description, e.qty, e.unitCost]),
+  [
+    ["134002", "ZLS1-Brake Rod-01 1.5m length", 400, 2.48],
+    ["630062", "ZLX-End Cap-100-A-01", 20, 11.39],
+  ]
+);
+assert.deepEqual(freedomCellDoc.reconciliation, {
+  expectedTotal: 1219.8,
+  parsedTotal: 1219.8,
+  ok: true,
+});
+
+const mismatchedCellDoc = parseCheckinDocument(freedomCellStream.replace("1,219.80", "1,220.80"));
+assert.equal(mismatchedCellDoc.reconciliation.ok, false);
+
 const ziplineOrder = `
 ZIPLINE COMPONENTS - INTERNATIONAL
 Old Part New Part Required

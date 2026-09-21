@@ -1462,6 +1462,82 @@
     return entries;
   }
 
+  // The same Freedom approval/order spreadsheet has a second text-layer
+  // shape in pdf.js: instead of one row per physical line, every table cell
+  // arrives on its own line. A row therefore looks like:
+  //   134002 / description / Each / Metal / 2 / 2.48 / USD / 400 / 992.00 / USD
+  // The first USD closes the unit-price column and the second closes the
+  // line-total column. We recover only rows whose arithmetic reconciles,
+  // then reconcile their combined totals to the document's printed Total.
+  function parseFreedomApprovalCellStream(text) {
+    if (!/(?:PART NUMBER|Part code)/i.test(text) || !/QTY SUM/i.test(text) || !/\bUSD\b/i.test(text)) {
+      return { entries: [], reconciliation: null };
+    }
+
+    const cells = text.split("\n").map((s) => s.trim()).filter(Boolean);
+    const codeRe = /^\d{5,6}R?$/i;
+    const moneyRe = /^[\d,]+(?:\.\d+)?$/;
+    const entries = [];
+    const acceptedLineTotals = [];
+
+    function numberAt(value) {
+      if (!moneyRe.test(value || "")) return null;
+      const n = parseFloat(value.replace(/,/g, ""));
+      return isFinite(n) ? n : null;
+    }
+
+    const codeIndexes = cells
+      .map((cell, idx) => (codeRe.test(cell) ? idx : null))
+      .filter((idx) => idx !== null);
+
+    for (let k = 0; k < codeIndexes.length; k++) {
+      const start = codeIndexes[k];
+      const end = codeIndexes[k + 1] == null ? cells.length : codeIndexes[k + 1];
+      const row = cells.slice(start, end);
+      const usdIndexes = row
+        .map((cell, idx) => (/^USD$/i.test(cell) ? idx : null))
+        .filter((idx) => idx !== null);
+      if (usdIndexes.length < 2) continue;
+
+      const firstUsd = usdIndexes[0];
+      const secondUsd = usdIndexes[1];
+      const unitCost = numberAt(row[firstUsd - 1]);
+      const lineTotal = numberAt(row[secondUsd - 1]);
+      const quantityCells = row.slice(firstUsd + 1, secondUsd - 1)
+        .map(numberAt)
+        .filter((n) => n != null);
+      const qty = quantityCells.length ? quantityCells[quantityCells.length - 1] : null;
+      const description = row.slice(1, firstUsd - 1).find((cell) => /[A-Za-z]/.test(cell)) || "";
+      if (!(unitCost > 0) || !(qty > 0) || !(lineTotal > 0) || !description) continue;
+
+      const tolerance = Math.max(0.02, lineTotal * 0.001);
+      if (Math.abs(qty * unitCost - lineTotal) > tolerance) continue;
+
+      entries.push({ code: row[0], description, qty, unitCost });
+      acceptedLineTotals.push(lineTotal);
+    }
+
+    let documentTotal = null;
+    for (let i = cells.length - 1; i >= 0; i--) {
+      if (!/^Total$/i.test(cells[i])) continue;
+      const possibleTotal = numberAt(cells[i + 1]);
+      if (possibleTotal != null && /^USD$/i.test(cells[i + 2] || "")) {
+        documentTotal = possibleTotal;
+        break;
+      }
+    }
+
+    const parsedTotal = acceptedLineTotals.reduce((sum, n) => sum + n, 0);
+    const reconciliation = documentTotal == null || !entries.length
+      ? null
+      : {
+          expectedTotal: documentTotal,
+          parsedTotal,
+          ok: Math.abs(parsedTotal - documentTotal) <= Math.max(0.05, documentTotal * 0.0001),
+        };
+    return { entries, reconciliation };
+  }
+
   // --- General "line-item block" layout -----------------------------------
   // Some suppliers' PDF export tools (seen in Freedom Screens' Pro-Forma
   // Invoice / Quotation templates) group each row's own text by its Y
@@ -1994,6 +2070,15 @@
         formatId: "freedom-approval-order",
         formatLabel: "Freedom approval/order tables",
         entries: freedomApprovalEntries,
+      };
+    }
+    const freedomCellStream = parseFreedomApprovalCellStream(text);
+    if (freedomCellStream.entries.length > best.entries.length) {
+      best = {
+        formatId: "freedom-approval-cell-stream",
+        formatLabel: "Freedom approval/order table cells",
+        entries: freedomCellStream.entries,
+        reconciliation: freedomCellStream.reconciliation,
       };
     }
     // Absolute last resort: only tried when nothing above -- not even the
@@ -3269,6 +3354,13 @@
       // not spend a network round-trip first.
       if (isStale()) return;
       const doc = parseCheckinDocument(pdfText);
+      if (doc.reconciliation && !doc.reconciliation.ok) {
+        ciState.rows = null;
+        $("#ciConfirmBar").hidden = true;
+        $("#ciDone").innerHTML = "";
+        ciStatus(`The document rows did not reconcile to its printed total (${genericMoney(doc.reconciliation.parsedTotal, ciState.currency)} parsed versus ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)} printed). Check-in has been blocked so incomplete stock cannot be added.`, "err");
+        return;
+      }
       if (!doc.entries.length) {
         // A new file selection already clears any previous preview (see
         // wireCiDrop), but re-analysing the *same* selection after editing
@@ -3358,7 +3450,10 @@
       const lowConfNote = ciState.lowConfidenceFallback
         ? " No known document layout matched this file, so it was read with a low-confidence, best-effort matcher — check every row against the original document before confirming."
         : "";
-      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}`);
+      const reconciliationNote = doc.reconciliation && doc.reconciliation.ok
+        ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)}.`
+        : "";
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${reconciliationNote}`);
     } catch (err) {
       console.error(err);
       if (!isStale()) ciStatus("Could not analyse the document: " + err.message, "err");
@@ -3423,8 +3518,14 @@
       ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
       ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
       ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
+      // A replacement PDF is a new Check-in. Never carry supplier/reference
+      // values auto-filled from the previous document into the new one.
+      $("#ciSupplier").value = ""; $("#ciInvoiceNumber").value = "";
+      $("#ciPoNumber").value = ""; $("#ciDocDate").value = "";
       $("#ciOut").innerHTML = "";
+      $("#ciDone").innerHTML = "";
       $("#ciConfirmBar").hidden = true;
+      ciStatus("");
       $("#ciPdfName").textContent = f.name;
       dropEl.classList.add("ready");
       $("#ciExtract").disabled = false;
