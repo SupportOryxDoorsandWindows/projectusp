@@ -1378,10 +1378,60 @@
       // one-word shipping comment; both are optional so either layout matches.
       id: "single-item-order-form",
       label: "Single-item order form (Code / Description / Price / Qty / Sub Total)",
-      lineRe: new RegExp(`^(\\d{3,7}[A-Z]?)\\s+(${QUOTE_DESC_RE})\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+[\\d,]+\\.\\d{1,2}(?:\\s+[\\d,]+\\.\\d{1,2})?(?:\\s+[A-Za-z]+)?\\s*$`),
+      lineRe: new RegExp(`^(\\d{3,7}[A-Z]?)\\s+(${QUOTE_DESC_RE})\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(?:[\\d,]+\\s+)?[\\d,]+\\.\\d{1,2}(?:\\s+(?:[\\d,]+\\s+)?[\\d,]+\\.\\d{1,2})?(?:\\s+[A-Za-z]+)?\\s*$`),
       extract: (m) => ({ code: m[1], description: m[2].trim(), unitCost: parseFloat(m[3].replace(/,/g, "")), qty: parseFloat(m[4]) }),
     },
   ];
+
+  // Freedom Retractable Screens approval/order tables. These supplier PDFs
+  // render several product sections with similar right-hand quantity columns:
+  // "<code> <description...> USD <unit price> <section qty...> USD <line total>".
+  // The PDF text layer sometimes splits large numbers across tokens
+  // ("9 85.74", "2 ,957.22"), so this parser reads only the fields needed
+  // for stock: code, description, unit price and the final quantity before
+  // the line-total currency. It deliberately ignores subtotal/total rows.
+  function parseFreedomApprovalOrder(text) {
+    const entries = [];
+    const moneyToken = /^[\d,]+(?:\.\d+)?$/;
+    const codeRe = /^\d{5,6}R?$/i;
+
+    function num(token) {
+      const n = parseFloat(String(token || "").replace(/,/g, ""));
+      return isFinite(n) ? n : null;
+    }
+
+    function priceFrom(tokens) {
+      if (!tokens.length) return null;
+      if (/^\d{1,3}$/.test(tokens[0] || "") && /^\d{1,3}\.\d{1,2}$/.test(tokens[1] || "")) {
+        return num(tokens[0] + tokens[1]);
+      }
+      return num(tokens[0]);
+    }
+
+    for (const raw of text.split("\n")) {
+      const tokens = raw.trim().split(/\s+/).filter(Boolean);
+      if (!tokens.length || !codeRe.test(tokens[0])) continue;
+
+      const firstUsd = tokens.findIndex((t, i) => i > 0 && /^USD$/i.test(t));
+      if (firstUsd < 2) continue;
+      const secondUsd = tokens.findIndex((t, i) => i > firstUsd && /^USD$/i.test(t));
+      if (secondUsd === -1) continue;
+
+      const mid = tokens.slice(firstUsd + 1, secondUsd).filter((t) => moneyToken.test(t));
+      if (mid.length < 2) continue;
+      const unitCost = priceFrom(mid);
+      const qty = num(mid[mid.length - 1]);
+      if (!(unitCost > 0) || !(qty > 0)) continue;
+
+      entries.push({
+        code: tokens[0],
+        description: tokens.slice(1, firstUsd).join(" ").replace(/\s+/g, " ").trim(),
+        qty,
+        unitCost,
+      });
+    }
+    return entries;
+  }
 
   // --- General "line-item block" layout -----------------------------------
   // Some suppliers' PDF export tools (seen in Freedom Screens' Pro-Forma
@@ -1690,6 +1740,7 @@
       if (usedIdx.has(i)) continue;
       const first = rawLines[i].trim();
       if (!startRe.test(first)) continue;
+      if (first.match(format.lineRe)) continue;
       let joined = first;
       for (let j = i + 1; j < Math.min(i + 9, rawLines.length); j++) {
         const next = rawLines[j].trim();
@@ -1805,6 +1856,14 @@
     const blockEntries = parseBlockDocument(text);
     if (blockEntries.length > best.entries.length) {
       best = { formatId: "block-lines", formatLabel: "Line-item blocks (one field per line)", entries: blockEntries };
+    }
+    const freedomApprovalEntries = parseFreedomApprovalOrder(text);
+    if (freedomApprovalEntries.length > best.entries.length) {
+      best = {
+        formatId: "freedom-approval-order",
+        formatLabel: "Freedom approval/order tables",
+        entries: freedomApprovalEntries,
+      };
     }
     // Absolute last resort: only tried when nothing above -- not even the
     // block-layout reader -- found a single row. Never allowed to outrank a
