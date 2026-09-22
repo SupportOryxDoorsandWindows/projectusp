@@ -3027,8 +3027,8 @@
         ? genericUnitMoney(landedUnitCost, cur, "m")
         : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
-        <td class="code">${esc(r.code)}${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</td>
-        <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
+        <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
+        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>

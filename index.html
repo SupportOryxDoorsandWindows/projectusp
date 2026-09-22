@@ -138,6 +138,15 @@ main{max-width:1180px; margin:0 auto; padding:var(--space-8) var(--space-max) 64
   padding:var(--space-7); box-shadow:var(--sh-card); margin-bottom:var(--space-6);
 }
 
+/* Check-in carries eleven operational columns. Use the available browser
+   width here without changing the narrower, reading-focused product views. */
+main:has(#v-checkin.on){max-width:none}
+#v-checkin{width:100%; max-width:100%; margin-left:0}
+#v-checkin .card{
+  width:100%; max-width:100%; box-sizing:border-box;
+  padding-left:clamp(16px,2vw,28px); padding-right:clamp(16px,2vw,28px);
+}
+
 /* ---------- Type scale (§4) ---------- */
 h2{font-family:var(--font-display); font-weight:600; font-size:22px; line-height:1.3;
   color:var(--brand); margin:0 0 var(--space-5)}
@@ -538,22 +547,52 @@ tbody tr:hover{background:var(--line-soft)}
 .fp-table td.code{font-family:var(--font-mono); font-size:12px; white-space:nowrap}
 .fp-scroll{max-height:640px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-md)}
 .fp-scroll table{min-width:820px}
-.fp-scroll.fp-checkin-scroll{max-height:none; overflow:visible}
+.fp-scroll.fp-checkin-scroll{
+  max-height:min(62vh,640px); overflow-x:hidden; overflow-y:auto;
+  overscroll-behavior:contain; scrollbar-width:thin;
+  border-color:#eef2f6; background:var(--white);
+}
 .fp-checkin-scroll table{min-width:0}
-.fp-table.fp-checkin-table{min-width:0; table-layout:fixed}
-.fp-checkin-table th,.fp-checkin-table td{padding-left:7px; padding-right:7px}
-.fp-checkin-table th:nth-child(1){width:7%}
-.fp-checkin-table th:nth-child(2){width:16%}
-.fp-checkin-table th:nth-child(3){width:7%}
+.fp-table.fp-checkin-table{
+  width:100%; min-width:0; table-layout:fixed;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+.fp-checkin-table th,.fp-checkin-table td{
+  min-width:0; padding:11px 7px; border-bottom:1px solid #eef2f6;
+  line-height:1.4; overflow-wrap:anywhere;
+}
+.fp-checkin-table th{
+  position:sticky; top:0; z-index:3; background:#f8fafc;
+  box-shadow:0 1px 0 #eef2f6;
+}
+.fp-checkin-table th:nth-child(1){width:8%}
+.fp-checkin-table th:nth-child(2){width:21%}
+.fp-checkin-table th:nth-child(3){width:6%}
 .fp-checkin-table th:nth-child(4){width:8%}
-.fp-checkin-table th:nth-child(5){width:7%}
-.fp-checkin-table th:nth-child(6){width:11%}
-.fp-checkin-table th:nth-child(7){width:9%}
-.fp-checkin-table th:nth-child(8){width:12%}
+.fp-checkin-table th:nth-child(5){width:6%}
+.fp-checkin-table th:nth-child(6){width:10%}
+.fp-checkin-table th:nth-child(7){width:8%}
+.fp-checkin-table th:nth-child(8){width:11%}
 .fp-checkin-table th:nth-child(9){width:9%}
 .fp-checkin-table th:nth-child(10){width:6%}
-.fp-checkin-table th:nth-child(11){width:8%}
-.fp-checkin-table td:nth-child(2){overflow-wrap:anywhere}
+.fp-checkin-table th:nth-child(11){width:7%}
+.fp-checkin-table td.num{white-space:normal}
+.fp-checkin-code-cell,.fp-checkin-description-cell{
+  display:flex; align-items:center; gap:8px; min-width:0;
+}
+.fp-checkin-code-cell{flex-wrap:wrap}
+.fp-checkin-code-cell > :first-child,.fp-checkin-description-cell > :first-child{min-width:0}
+.fp-checkin-table th:nth-child(1),.fp-checkin-table th:nth-child(2),
+.fp-checkin-table td:nth-child(1),.fp-checkin-table td:nth-child(2){text-align:left}
+.fp-checkin-table th:nth-child(n+3):nth-child(-n+9),
+.fp-checkin-table td:nth-child(n+3):nth-child(-n+9){text-align:right}
+.fp-checkin-table th:nth-child(10),.fp-checkin-table th:nth-child(11),
+.fp-checkin-table td:nth-child(10),.fp-checkin-table td:nth-child(11){text-align:center}
+.fp-checkin-table td:nth-child(10) > *{justify-content:center}
+.fp-checkin-table td:nth-child(11) .fp-row-actions{
+  flex-direction:column; align-items:center; flex-wrap:nowrap;
+}
+.fp-checkin-table td:nth-child(11) .fp-row-actions button{min-width:52px}
 .fp-auto-match-note{
   display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px;
   border:1px solid var(--line);
