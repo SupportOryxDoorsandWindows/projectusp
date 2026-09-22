@@ -234,6 +234,35 @@
     return [];
   }
 
+  function normaliseInventoryDescription(description) {
+    return String(description || "")
+      // Master Inventory descriptions commonly start with their own code
+      // ("30003R-Bug Fur..."); supplier rows normally do not.
+      .replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "")
+      .toLowerCase()
+      .replace(/\bmetres?\b/g, "m")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .replace(/\s+/g, " ");
+  }
+
+  // A truncated/blank supplier code may still be resolved when its complete
+  // description (including the roll size) equals exactly one Master
+  // Inventory description. Any ambiguity returns null: this fallback must
+  // never guess between similar products or different package lengths.
+  function findUniqueDescriptionItem(itemsByCode, description) {
+    const target = normaliseInventoryDescription(description);
+    if (target.length < 8) return null;
+    const matches = [];
+    for (const candidates of itemsByCode.values()) {
+      for (const candidate of candidates) {
+        if (normaliseInventoryDescription(candidate.description) === target) matches.push(candidate);
+      }
+    }
+    const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
+    return unique.length === 1 ? unique[0] : null;
+  }
+
   // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
   // -- the only place either an invoice line or a Master Inventory
   // description ever states a roll/length size. Returns null when there's
@@ -2228,11 +2257,16 @@
     const rows = [];
     lines.forEach((l, i) => {
       const candidates = lookupExactCode(itemsByCode, l.code);
-      const item = pickInventoryRow({ kind: "checkin" }, candidates);
       // Description comes straight from the row parser when that format
       // captures it inline (every non-Commercial-Invoice format); only the
       // Commercial Invoice reader relies on the separate description block.
       const pdfDescription = l.description || (descriptions.length === lines.length ? descriptions[i] : "");
+      let item = pickInventoryRow({ kind: "checkin" }, candidates);
+      const matchedByDescription = !item && (!l.code || l.code.length <= 4)
+        ? findUniqueDescriptionItem(itemsByCode, pdfDescription)
+        : null;
+      if (matchedByDescription) item = matchedByDescription;
+      const resolvedCode = item ? (item.item_code || l.code) : l.code;
       // A very short code (<=4 chars) that still didn't match anything is
       // worth calling out explicitly -- real Master Inventory codes are
       // 5-6 digits, so this is a strong hint the source document truncated
@@ -2266,12 +2300,13 @@
       const masterLen = parseBundleLengthM(item.description);
       if (invoiceLen != null && masterLen != null && invoiceLen !== masterLen) {
         rows.push({
-          code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
+          code: resolvedCode, description: pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
           current: item.current_qty, newQty: null,
           status: "exact-diff", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint: false,
           lowConfidence: !!l.lowConfidence,
+          matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
           exactMatchItem: {
             id: item.id, code: item.item_code, description: item.description,
             unit: item.unit_of_measure || "",
@@ -2302,12 +2337,13 @@
         const perMetreCost = l.unitCost != null ? l.unitCost / masterLen : null;
         const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${pdfDescription || ""} ${l.unit || ""}`) ? "Roll" : "Length";
         rows.push({
-          code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: qtyMetres,
+          code: resolvedCode, description: item.description || pdfDescription, unit: l.unit || "", qty: qtyMetres,
           invoiceUnitCost: perMetreCost,
           current: item.current_qty, newQty: item.current_qty + qtyMetres,
           status: "ok", action: "add", decided: true,
           itemId: item.id, editing: false, truncatedHint: false,
           lowConfidence: !!l.lowConfidence,
+          matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
           packageInfo: { type: bundleType, qtyPerPackage: masterLen, unit: "m", rollCount, rollUnitCost: l.unitCost },
         });
         return;
@@ -2329,12 +2365,13 @@
       const masterPkg = parsePackaging(item.description);
       if (invoicePkg && masterPkg && masterPkg.type !== invoicePkg.type) {
         rows.push({
-          code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
+          code: resolvedCode, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
           current: item.current_qty, newQty: null,
           status: "pack-review", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint: false,
           lowConfidence: !!l.lowConfidence,
+          matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
           packMismatch: {
             itemId: item.id, itemDescription: item.description, itemCurrentQty: item.current_qty,
             itemUnit: item.unit_of_measure || "",
@@ -2344,12 +2381,13 @@
         return;
       }
       rows.push({
-        code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
+        code: resolvedCode, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
         invoiceUnitCost: l.unitCost,
         current: item.current_qty, newQty: item.current_qty + l.qty,
         status: "ok", action: "add", decided: true,
         itemId: item.id, editing: false, truncatedHint: false,
         lowConfidence: !!l.lowConfidence,
+        matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
         packageInfo: invoicePkg ? { type: invoicePkg.type, qtyPerPackage: invoicePkg.qtyPerPackage, unit: invoicePkg.unit } : null,
       });
     });
@@ -2920,6 +2958,9 @@
       const lowConfBadge = r.lowConfidence
         ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
         : "";
+      const descriptionMatchNote = r.matchedByDescription
+        ? `<div class="small muted" style="margin-top:2px">Matched automatically from the unique full description; supplier code was <code>${esc(r.matchedByDescription.sourceCode)}</code>.</div>`
+        : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
       // side so the difference is visible before anyone decides anything,
@@ -2987,7 +3028,7 @@
         : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
         <td class="code">${esc(r.code)}${reviewFlag}${lowConfBadge}</td>
-        <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
+        <td>${esc(r.description)}${descriptionMatchNote}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
