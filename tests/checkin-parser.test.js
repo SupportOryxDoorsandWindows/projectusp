@@ -99,6 +99,29 @@ assert.equal(storedInventoryUnitCostAed(packagedRows[1], 499.94 / 300, 1), 1.66)
 assert.equal(storedInventoryUnitCostAed(packagedRows[0], 331.65 / 200, 1), 1.65);
 assert.equal(storedInventoryUnitCostAed({ packageInfo: null }, 1.6665, 1), 1.6665);
 
+const truncatedBugFur = buildCheckinRows([
+  { code: "3000", description: "Bug Fur 16mm (300m Roll)", unit: "", qty: 1, unitCost: 499.94 },
+], [], packagedInventory)[0];
+assert.equal(truncatedBugFur.code, "30003R");
+assert.equal(truncatedBugFur.itemId, "bug-fur");
+assert.equal(truncatedBugFur.qty, 300);
+assert.equal(truncatedBugFur.invoiceUnitCost, 499.94 / 300);
+assert.equal(truncatedBugFur.matchedByDescription.sourceCode, "3000");
+assert.equal(storedInventoryUnitCostAed(truncatedBugFur, truncatedBugFur.invoiceUnitCost, 1), 1.66);
+
+const ambiguousInventory = new Map([
+  ["30003R", packagedInventory.get("30003R")],
+  ["39999R", [{
+    id: "other-bug-fur", item_code: "39999R", description: "39999R-Bug Fur 16mm (300m Roll)",
+    unit_of_measure: "m", current_qty: 0, unit_cost: 0,
+  }]],
+]);
+const ambiguousBugFur = buildCheckinRows([
+  { code: "3000", description: "Bug Fur 16mm (300m Roll)", unit: "", qty: 1, unitCost: 499.94 },
+], [], ambiguousInventory)[0];
+assert.equal(ambiguousBugFur.status, "unmatched");
+assert.equal(ambiguousBugFur.itemId, null);
+
 const mismatchedRoll = buildCheckinRows([
   { code: "30003R", description: "Bug Fur", unit: "200m", qty: 1, unitCost: 499.94 },
 ], [], packagedInventory)[0];
