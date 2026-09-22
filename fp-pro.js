@@ -2471,6 +2471,19 @@
     return r.invoiceUnitCost + shipForRow;
   }
 
+  // Master Inventory stores AED unit costs. For roll-based items whose
+  // stock is expanded into metres, the agreed business rule is to keep two
+  // decimal places without rounding up (499.94 / 300 = 1.6664... -> 1.66).
+  // The exact source-currency calculation and original per-roll price stay
+  // in the transaction audit fields; only the Master Inventory unit cost is
+  // cut off to two AED decimals.
+  function storedInventoryUnitCostAed(row, landedUnitCost, rate) {
+    if (landedUnitCost == null || !(rate > 0)) return null;
+    const converted = landedUnitCost * rate;
+    const isMetreRoll = row.packageInfo && row.packageInfo.unit === "m" && row.packageInfo.rollCount != null;
+    return isMetreRoll ? Math.floor((converted + 1e-9) * 100) / 100 : converted;
+  }
+
   function ciTally() {
     // A confirmed new-item row ("create-new") checks in and adds value just
     // like a matched row -- it counts alongside "add" in every total below.
@@ -2961,8 +2974,11 @@
         ? `${fmt(r.qty)} ${esc(pkgForDisplay.type)}${r.qty === 1 ? "" : "s"} × ${esc(pkgForDisplay.qtyPerPackage)}${esc(pkgForDisplay.unit)}`
         : `+${fmt(r.qty)} ${esc(r.unit)}`;
       const expandedPackage = pkgForDisplay && pkgForDisplay.rollCount != null && pkgForDisplay.unit === "m";
+      const storedUnitCostAed = storedInventoryUnitCostAed(r, landedUnitCost, rate);
       const unitCostDisplay = expandedPackage
-        ? `${genericUnitMoney(r.invoiceUnitCost, cur, "m")}<div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, cur)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>`
+        ? `${genericUnitMoney(r.invoiceUnitCost, cur, "m")}
+           <div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, cur)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>
+           <div class="small muted">Stored: ${money(storedUnitCostAed)} / m</div>`
         : genericMoney(r.invoiceUnitCost, cur);
       const landedUnitCostDisplay = landedUnitCost == null
         ? "—"
@@ -3255,6 +3271,7 @@
         // metres exactly as shown on screen -- what was previewed is what
         // gets saved.
         const landedUnitCost = ciLandedUnitCost(i, shipAlloc);
+        const storedUnitCostAed = storedInventoryUnitCostAed(r, landedUnitCost, rate);
         // A roll/bundle row's package_cost is the original PER-ROLL
         // invoice price, not r.invoiceUnitCost (which is per-metre for
         // these rows) -- rollUnitCost preserves that for audit; every
@@ -3267,7 +3284,7 @@
           // No document price (e.g. an Order Approval) -- send null, not a
           // fabricated 0, so checkin_transaction() falls back to the Master
           // Inventory's own unit_cost instead of recording a false free cost.
-          unit_cost: landedUnitCost != null ? landedUnitCost * rate : null,
+          unit_cost: storedUnitCostAed,
           original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
           shipping_cost_total: shippingCostTotal,
           shipping_allocated: shipAllocForRow > 0 ? shipAllocForRow : null,
