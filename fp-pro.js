@@ -2958,8 +2958,8 @@
       const lowConfBadge = r.lowConfidence
         ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
         : "";
-      const descriptionMatchNote = r.matchedByDescription
-        ? `<div class="small muted" style="margin-top:2px">Matched automatically from the unique full description; supplier code was <code>${esc(r.matchedByDescription.sourceCode)}</code>.</div>`
+      const descriptionMatchBadge = r.matchedByDescription
+        ? `<span class="fp-auto-match-note" title="Matched automatically from the unique full description; supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
         : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
@@ -3027,8 +3027,8 @@
         ? genericUnitMoney(landedUnitCost, cur, "m")
         : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
-        <td class="code">${esc(r.code)}${reviewFlag}${lowConfBadge}</td>
-        <td>${esc(r.description)}${descriptionMatchNote}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
+        <td class="code">${esc(r.code)}${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</td>
+        <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
@@ -3172,7 +3172,7 @@
       ${lowConfBox}
       <div class="fp-section-h">Check-in preview</div>
       <div class="fp-scroll">
-        <table class="fp-table">
+        <table class="fp-table fp-checkin-table">
           <thead><tr>
             <th>Code</th><th>Description</th>
             <th class="num">Current stock</th>
