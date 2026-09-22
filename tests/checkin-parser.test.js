@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows };\n})();`
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed } = context.window.__ciTest;
 
 const freedomApproval = `
 COMMON PARTS
@@ -95,6 +95,9 @@ assert.equal(packagedRows[0].packageInfo.qtyPerPackage, 200);
 assert.equal(packagedRows[1].packageInfo.qtyPerPackage, 300);
 assert.equal(packagedRows[0].packageInfo.type, "Roll");
 assert.equal(packagedRows[1].packageInfo.type, "Roll");
+assert.equal(storedInventoryUnitCostAed(packagedRows[1], 499.94 / 300, 1), 1.66);
+assert.equal(storedInventoryUnitCostAed(packagedRows[0], 331.65 / 200, 1), 1.65);
+assert.equal(storedInventoryUnitCostAed({ packageInfo: null }, 1.6665, 1), 1.6665);
 
 const mismatchedRoll = buildCheckinRows([
   { code: "30003R", description: "Bug Fur", unit: "200m", qty: 1, unitCost: 499.94 },
