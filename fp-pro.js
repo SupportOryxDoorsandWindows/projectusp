@@ -3171,7 +3171,7 @@
       ${ocrBox}
       ${lowConfBox}
       <div class="fp-section-h">Check-in preview</div>
-      <div class="fp-scroll">
+      <div class="fp-scroll fp-checkin-scroll">
         <table class="fp-table fp-checkin-table">
           <thead><tr>
             <th>Code</th><th>Description</th>
