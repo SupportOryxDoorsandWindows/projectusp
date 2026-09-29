@@ -2262,16 +2262,40 @@
       // Commercial Invoice reader relies on the separate description block.
       const pdfDescription = l.description || (descriptions.length === lines.length ? descriptions[i] : "");
       let item = pickInventoryRow({ kind: "checkin" }, candidates);
-      const matchedByDescription = !item && (!l.code || l.code.length <= 4)
+      // The invoice's own code didn't resolve to anything (missing,
+      // truncated, or simply wrong) -- fall back to an exact, UNIQUE
+      // description match against Master Inventory (never fires once a code
+      // has already matched; that path goes through the conflict check
+      // below instead). findUniqueDescriptionItem never guesses between
+      // duplicate descriptions -- it returns null for those, same as no
+      // match at all.
+      const matchedByDescription = !item
         ? findUniqueDescriptionItem(itemsByCode, pdfDescription)
         : null;
       if (matchedByDescription) item = matchedByDescription;
+      // The invoice stated BOTH a code and a description, and the code
+      // resolved to a real Master Inventory item -- but the description, if
+      // it independently and uniquely identifies a DIFFERENT item, is a
+      // genuine data conflict (wrong code typed for this line, or the code
+      // and description got swapped on the source document). Never trust
+      // one field over the other here; flag for manual review instead of
+      // silently picking the code's item.
+      let codeDescConflict = null;
+      if (item && !matchedByDescription && l.code && pdfDescription) {
+        const descItem = findUniqueDescriptionItem(itemsByCode, pdfDescription);
+        if (descItem && descItem.id !== item.id) {
+          codeDescConflict = { codeItemCode: item.item_code, descItemCode: descItem.item_code };
+          item = null;
+        }
+      }
       const resolvedCode = item ? (item.item_code || l.code) : l.code;
       // A very short code (<=4 chars) that still didn't match anything is
       // worth calling out explicitly -- real Master Inventory codes are
       // 5-6 digits, so this is a strong hint the source document truncated
-      // its own Code column rather than this reader mis-parsing it.
-      const truncatedHint = !item && l.code && l.code.length <= 4;
+      // its own Code column rather than this reader mis-parsing it. Not
+      // shown for a code/description conflict -- that already has its own,
+      // more specific explanation.
+      const truncatedHint = !item && !codeDescConflict && l.code && l.code.length <= 4;
       if (!item) {
         rows.push({
           code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
@@ -2280,6 +2304,7 @@
           status: "unmatched", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint,
           lowConfidence: !!l.lowConfidence,
+          codeDescConflict,
         });
         return;
       }
@@ -2836,8 +2861,9 @@
     const t = ciTally();
     const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
-    const noCodeUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && !r.code).length;
-    const codedUnmatched = unmatched - noCodeUnmatched;
+    const conflictUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && r.codeDescConflict).length;
+    const noCodeUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && !r.code && !r.codeDescConflict).length;
+    const codedUnmatched = unmatched - noCodeUnmatched - conflictUnmatched;
     const cur = ciState.currency;
     const shipAlloc = ciShippingAllocation();
     const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
@@ -2961,6 +2987,16 @@
       const descriptionMatchBadge = r.matchedByDescription
         ? `<span class="fp-auto-match-note" title="Matched automatically from the unique full description; supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
         : "";
+      // The invoice's code and description each exactly match a different
+      // Master Inventory record -- shown side by side so it's clear this
+      // isn't an ordinary "not found" case but a genuine conflict, neither
+      // side silently trusted over the other.
+      const codeDescConflictNote = r.codeDescConflict ? `<div class="fp-exactdiff">
+          <div class="fp-exactdiff-h">Code and description point to different Master Inventory items</div>
+          <div><span class="lbl">Invoice code</span> <span class="code">${esc(r.code)}</span> matches Master Inventory item <span class="code">${esc(r.codeDescConflict.codeItemCode)}</span>.</div>
+          <div><span class="lbl">Invoice description</span> "${esc(r.description)}" matches Master Inventory item <span class="code">${esc(r.codeDescConflict.descItemCode)}</span>.</div>
+          <div class="fp-exactdiff-warn">⚠ Not auto-matched — pick the correct item via Edit.</div>
+        </div>` : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
       // side so the difference is visible before anyone decides anything,
@@ -3028,7 +3064,7 @@
         : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
-        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}</div></td>
+        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
@@ -3054,6 +3090,9 @@
           Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
           to confirm you've seen it. A new Master Inventory item is never created from here.
           </li>` : ""}
+        ${conflictUnmatched > 0 ? `<li><b>${conflictUnmatched} item${conflictUnmatched === 1 ? "" : "s"} with a code/description conflict</b> —
+          the invoice's code and description each exactly match a <i>different</i> Master Inventory item. Neither is trusted
+          automatically; click Edit to review both and pick the correct one, or Acknowledge to confirm you've seen it.</li>` : ""}
         ${unmatched > 0 ? `<li class="fp-batch-actions"><button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button></li>` : ""}
         ${exactDiffCount > 0 ? `<li><b>${exactDiffCount} item${exactDiffCount === 1 ? "" : "s"} with an exact code match, but a detail differs</b> —
           the item code already exists in the Master Inventory, but the invoice's unit doesn't match what's on file.
