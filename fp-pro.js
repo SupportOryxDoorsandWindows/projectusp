@@ -234,29 +234,63 @@
     return [];
   }
 
-  function normaliseInventoryDescription(description) {
-    return String(description || "")
-      // Master Inventory descriptions commonly start with their own code
-      // ("30003R-Bug Fur..."); supplier rows normally do not.
-      .replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "")
-      .toLowerCase()
-      .replace(/\bmetres?\b/g, "m")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim()
-      .replace(/\s+/g, " ");
+  // OCR-tolerant, punctuation/casing-insensitive tokens. Digits that are
+  // commonly misread for a look-alike letter (0/O, 1/I, 5/S, 8/B) are
+  // canonicalised within each token -- this only ever remaps characters
+  // inside a token, never merges or splits tokens, so it can't turn two
+  // genuinely different words into the same one; it only forgives the exact
+  // handful of OCR mix-ups it's meant to.
+  const OCR_DIGIT_TO_LETTER = { 0: "O", 1: "I", 5: "S", 8: "B" };
+  function tokenizeForMatch(text) {
+    return String(text || "")
+      .toUpperCase()
+      .replace(/\bMETRES?\b/g, "M")
+      .split(/[^A-Z0-9]+/)
+      .filter(Boolean)
+      .map((tok) => tok.replace(/[0158]/g, (c) => OCR_DIGIT_TO_LETTER[c]));
   }
 
-  // A truncated/blank supplier code may still be resolved when its complete
-  // description (including the roll size) equals exactly one Master
-  // Inventory description. Any ambiguity returns null: this fallback must
-  // never guess between similar products or different package lengths.
+  // Master's own product-name words -- the ones that must all be present
+  // somewhere in the invoice's description for this to be the same product.
+  // Two things are stripped here, and ONLY here (never from the invoice's
+  // side): Master Inventory's own leading code ("39999R-Bug Fur...",
+  // "230052: ...") -- a real item code, not a product word -- and a
+  // trailing "AB", Master's own "both sides, one record" convention (e.g.
+  // "ZLS1 Brake Arm AB") that a supplier line rarely repeats. The dash-code
+  // strip must never run on invoice text: a supplier line like "ZLS1-Brake
+  // Arm" uses that same dash to join a genuine product-family word (ZLS1) to
+  // the rest of the name, not to prefix a database id. Nothing else is
+  // dropped from Master's words: a bare size number (the "60"/"70"/"80"/
+  // "100" that distinguishes otherwise-identical End Cap variants) or a
+  // side/colour word (A/B, BLK/WHT, Left/Right) stays required, so two
+  // genuinely different Master Inventory records can never collapse onto
+  // each other.
+  function masterCoreTokens(description) {
+    const withoutOwnCode = String(description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
+    const tokens = tokenizeForMatch(withoutOwnCode);
+    if (tokens.length && tokens[tokens.length - 1] === "AB") tokens.pop();
+    return tokens;
+  }
+
+  // A code that's missing, truncated, or simply wrong can still be resolved
+  // from the description alone -- but only when Master's own core words are
+  // ALL present somewhere in the invoice's description. The invoice is
+  // allowed extra words on top (a supplier's own line number, "01"/"02", a
+  // colour note, its own reference code) -- those never block a match, the
+  // same way a human skimming the line would ignore them. What's never
+  // allowed is the reverse: a Master word that simply isn't there is never
+  // assumed. Requires at least 2 core words (a single generic word like
+  // "Screw" is too broad to trust alone) and, same as before, never guesses
+  // between more than one equally-good candidate.
   function findUniqueDescriptionItem(itemsByCode, description) {
-    const target = normaliseInventoryDescription(description);
-    if (target.length < 8) return null;
+    const invoiceTokens = new Set(tokenizeForMatch(description));
+    if (!invoiceTokens.size) return null;
     const matches = [];
     for (const candidates of itemsByCode.values()) {
       for (const candidate of candidates) {
-        if (normaliseInventoryDescription(candidate.description) === target) matches.push(candidate);
+        const core = masterCoreTokens(candidate.description);
+        if (core.length < 2) continue;
+        if (core.every((tok) => invoiceTokens.has(tok))) matches.push(candidate);
       }
     }
     const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
@@ -2985,7 +3019,7 @@
         ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
         : "";
       const descriptionMatchBadge = r.matchedByDescription
-        ? `<span class="fp-auto-match-note" title="Matched automatically from the unique full description; supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
+        ? `<span class="fp-auto-match-note" title="Matched automatically from the product description (ignoring extra words like line numbers); supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
         : "";
       // The invoice's code and description each exactly match a different
       // Master Inventory record -- shown side by side so it's clear this
