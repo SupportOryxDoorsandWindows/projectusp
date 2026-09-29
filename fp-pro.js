@@ -3234,7 +3234,7 @@
   /* --------------------------- Master Inventory view ---------- */
 
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="6" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
       const [itemsRes, txRes] = await Promise.all([
@@ -3250,9 +3250,106 @@
       renderMasterInventoryView(itemsRes.data, txRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="6" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
+  }
+
+  // Manual Check-in/Check-out -- a single-item correction typed in directly,
+  // for cases like a physical recount finding one item off with no source
+  // document to drive it through the normal PDF-parsing flow. Goes through
+  // the exact same checkin/checkout Edge Functions and Postgres functions as
+  // every other transaction (so it shows up identically in Transaction
+  // History, via txTypeBadge above) -- the only difference is the line item
+  // is typed by hand instead of parsed from a PDF. Always AED, rate 1: this
+  // is an internal correction, never a supplier document in another currency.
+  function openMiAdjustDialog(item) {
+    const dlg = $("#miAdjustDialog");
+    $("#miAdjustTitle").textContent = `Adjust ${item.item_code}`;
+    $("#miAdjustSubtitle").textContent = `${item.description || ""} — current stock: ${fmt(item.current_qty)}`;
+    $("#miAdjustDirection").value = "check_in";
+    $("#miAdjustQty").value = "";
+    $("#miAdjustCost").value = item.unit_cost != null ? item.unit_cost : "";
+    $("#miAdjustReason").value = "";
+    $("#miAdjustError").style.display = "none";
+    $("#miAdjustCostField").style.display = "";
+
+    $("#miAdjustDirection").onchange = () => {
+      $("#miAdjustCostField").style.display = $("#miAdjustDirection").value === "check_in" ? "" : "none";
+    };
+
+    function showErr(msg) {
+      $("#miAdjustError").textContent = msg;
+      $("#miAdjustError").style.display = "";
+    }
+
+    $("#miAdjustCancel").onclick = () => dlg.close();
+
+    $("#miAdjustSubmit").onclick = async () => {
+      const direction = $("#miAdjustDirection").value;
+      const qty = parseFloat($("#miAdjustQty").value);
+      const reason = $("#miAdjustReason").value.trim();
+      if (!(qty > 0)) return showErr("Enter a quantity greater than 0.");
+      if (!reason) return showErr("A reason is required for every manual adjustment.");
+
+      if (direction === "check_out" && qty > item.current_qty) {
+        const proceed = confirm(
+          `This would take ${item.item_code} to ${fmt(item.current_qty - qty)}, below zero. Continue anyway?`
+        );
+        if (!proceed) return;
+      }
+
+      const btn = $("#miAdjustSubmit");
+      btn.disabled = true;
+      try {
+        if (direction === "check_in") {
+          const unitCost = parseFloat($("#miAdjustCost").value);
+          if (!(unitCost >= 0)) { showErr("Enter a valid unit cost."); return; }
+          const res = await fetch(CHECKIN_FN_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
+              "apikey": window.ORYX_CONFIG.supabaseKey,
+            },
+            body: JSON.stringify({
+              supplier: "Manual correction",
+              invoice_number: reason,
+              currency: "AED",
+              exchange_rate: 1,
+              lines: [{ item_id: item.id, quantity: qty, unit: item.unit_of_measure || "", unit_cost: unitCost }],
+            }),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.detail || data.error || "The manual Check-in was not applied.");
+        } else {
+          const res = await fetch(CHECKOUT_FN_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
+              "apikey": window.ORYX_CONFIG.supabaseKey,
+            },
+            body: JSON.stringify({
+              job_number: reason,
+              client: "Manual correction",
+              lines: [{ item_id: item.id, quantity: qty, unit: item.unit_of_measure || "" }],
+            }),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.detail || data.error || "The manual Check-out was not applied.");
+        }
+        dlg.close();
+        await loadMasterInventoryView();
+      } catch (err) {
+        console.error(err);
+        showErr(err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    dlg.showModal();
   }
 
   function renderMasterInventoryView(items, txs) {
@@ -3290,8 +3387,16 @@
           <td class="num">${money(it.unit_cost)}</td>
           <td class="num">${money(it.current_value)}</td>
           <td>${low ? `<span class="fp-status-short">Low</span>` : it.current_qty <= 0 ? `<span class="fp-status-unmatched">Out</span>` : `<span class="fp-status-ok">OK</span>`}</td>
+          <td><button class="ghost" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="6" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="7" class="small muted">No items match.</td></tr>`;
+
+      for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-adjust]")) {
+        btn.onclick = () => {
+          const item = pageItems.find((it) => String(it.id) === btn.dataset.miAdjust);
+          if (item) openMiAdjustDialog(item);
+        };
+      }
 
       $("#miItemsPagerInfo").textContent = filtered.length
         ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, filtered.length)} of ${filtered.length}`

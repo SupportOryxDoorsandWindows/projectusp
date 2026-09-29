@@ -933,6 +933,43 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
   </div>
 </section>
 
+<dialog id="miAdjustDialog">
+  <div style="padding:var(--space-5); min-width:min(420px,88vw)">
+    <h3 style="margin-top:0" id="miAdjustTitle">Manual adjustment</h3>
+    <p class="small muted" id="miAdjustSubtitle"></p>
+    <div class="fp-jobrow" style="margin-top:var(--space-3)">
+      <div class="fp-jobrow-field" style="flex:1">
+        <label class="field-label">Direction</label>
+        <select id="miAdjustDirection">
+          <option value="check_in">Check-in (add stock)</option>
+          <option value="check_out">Check-out (remove stock)</option>
+        </select>
+      </div>
+    </div>
+    <div class="fp-jobrow">
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="miAdjustQty">Quantity</label>
+        <input id="miAdjustQty" type="number" min="0" step="any" placeholder="0">
+      </div>
+      <div class="fp-jobrow-field" id="miAdjustCostField">
+        <label class="field-label" for="miAdjustCost">Unit cost (AED)</label>
+        <input id="miAdjustCost" type="number" min="0" step="any">
+      </div>
+    </div>
+    <div class="fp-jobrow">
+      <div class="fp-jobrow-field" style="flex:1">
+        <label class="field-label" for="miAdjustReason">Reason (required)</label>
+        <input id="miAdjustReason" type="text" autocomplete="off" placeholder="e.g. Correcting miscount from physical check">
+      </div>
+    </div>
+    <p class="small" id="miAdjustError" style="color:var(--danger); display:none"></p>
+    <div class="bar">
+      <button class="ghost" type="button" id="miAdjustCancel">Cancel</button>
+      <button class="btn-accent" type="button" id="miAdjustSubmit">Confirm</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- =========================== MASTER INVENTORY =========================== -->
 <section id="v-master-inventory" class="view">
   <div class="card">
@@ -960,7 +997,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
       <table class="fp-table" id="miItemsTable">
         <thead><tr>
           <th>Code</th><th>Description</th><th class="num">Qty</th>
-          <th class="num">Unit cost</th><th class="num">Value</th><th>Status</th>
+          <th class="num">Unit cost</th><th class="num">Value</th><th>Status</th><th></th>
         </tr></thead>
         <tbody id="miItemsBody"></tbody>
       </table>
