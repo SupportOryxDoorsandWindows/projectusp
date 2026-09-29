@@ -234,6 +234,35 @@
     return [];
   }
 
+  function normaliseInventoryDescription(description) {
+    return String(description || "")
+      // Master Inventory descriptions commonly start with their own code
+      // ("30003R-Bug Fur..."); supplier rows normally do not.
+      .replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "")
+      .toLowerCase()
+      .replace(/\bmetres?\b/g, "m")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .replace(/\s+/g, " ");
+  }
+
+  // A truncated/blank supplier code may still be resolved when its complete
+  // description (including the roll size) equals exactly one Master
+  // Inventory description. Any ambiguity returns null: this fallback must
+  // never guess between similar products or different package lengths.
+  function findUniqueDescriptionItem(itemsByCode, description) {
+    const target = normaliseInventoryDescription(description);
+    if (target.length < 8) return null;
+    const matches = [];
+    for (const candidates of itemsByCode.values()) {
+      for (const candidate of candidates) {
+        if (normaliseInventoryDescription(candidate.description) === target) matches.push(candidate);
+      }
+    }
+    const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
+    return unique.length === 1 ? unique[0] : null;
+  }
+
   // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
   // -- the only place either an invoice line or a Master Inventory
   // description ever states a roll/length size. Returns null when there's
@@ -801,8 +830,8 @@
     // than risk feeding garbage into a format's regex.
     ocrStillUnreadablePages: [],
     // Set when no known document layout matched at all and this document
-    // was instead read via the last-resort greedy token matcher (see
-    // parseGreedyTokenDocument below) -- same reasoning as usedOcr.
+    // was instead read via a last-resort low-confidence normaliser (see
+    // parseGreedyTokenDocument / parseLayoutlessStandardizedRows below).
     lowConfidenceFallback: false,
     lowConfidenceAcknowledged: false,
   };
@@ -1015,6 +1044,10 @@
   // across the shipment's items the same way.
   const SHIPPING_TERM_RE = /\b(shipping(?:\s*(?:&|and)\s*handling)?(?:\s+cost)?|freight(?:\s*(?:&|and)\s*insurance)?(?:\s+charge)?|delivery\s+charge|transport(?:ation)?|handling\s+charge|(?:additional\s+)?packing(?:\s*(?:&|and)\s*crating)?(?:\s+charges?|\s+fee)|crating(?:\s+charges?|\s+fee))\b/i;
   const NOT_SHIPPING_RE = /\b(tax|vat|gst|discount|sub\s*-?\s*total|grand\s*total)\b/i;
+  // Column headings that can contain a shipping word without describing an
+  // actual charge. These are excluded from the wrapped-line OCR fallback
+  // below, where looking ahead for a number would otherwise be too broad.
+  const SHIPPING_HEADER_RE = /\b(qty|quantity|unit|price|rate|tax|amount|total)\b/i;
   // A genuine freight/shipping summary charge is a standalone label+amount
   // near the totals -- not a fully-structured priced row with its own
   // qty/unit/tax columns. A real supplier document had a "Shipping Crate"
@@ -1060,6 +1093,31 @@
         if (amt > 0) candidates.push({ label: line, amount: amt });
         continue;
       }
+      // OCR often splits one visual table row into several lines. The real
+      // Freedom Screens packing-charge sample becomes:
+      //   Additional Packing charges (in
+      //   1
+      //   crate) 998540 1.00 59.00 No 59.00
+      // Join at most the next two non-empty fragments when the first line is
+      // a short charge label. The header guard prevents phrases such as
+      // "Tax Rate Price Freight" from borrowing an unrelated amount below.
+      const labelWordCount = line.split(/\s+/).length;
+      if (labelWordCount <= 8 && !SHIPPING_HEADER_RE.test(line)) {
+        const fragments = [];
+        for (let j = i + 1; j < rawLines.length && fragments.length < 2; j++) {
+          const fragment = rawLines[j].trim();
+          if (fragment) fragments.push(fragment);
+        }
+        const wrapped = [line, ...fragments].join(" ");
+        if (!NOT_SHIPPING_RE.test(wrapped) && !ITEM_ROW_SHAPE_RE.test(wrapped)) {
+          const wm = lastMoneyMatch(stripDates(wrapped));
+          if (wm) {
+            const amt = parseFloat(wm[1].replace(/,/g, ""));
+            if (amt > 0) candidates.push({ label: wrapped, amount: amt });
+            continue;
+          }
+        }
+      }
       // A bare label line (just the word itself, not a multi-column header)
       // -- look at the very next non-blank line for its value only.
       const isBareLabel = line.split(/\s+/).length <= 3 && /^[A-Za-z][A-Za-z\s&]*$/.test(line);
@@ -1096,6 +1154,11 @@
   function genericMoney(n, code) {
     if (n === null || n === undefined || isNaN(n)) return "—";
     return `${code} ` + fmt(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function genericUnitMoney(n, code, unit) {
+    if (n === null || n === undefined || isNaN(n)) return "—";
+    return `${code} ` + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ` / ${unit}`;
   }
 
   // Matches the numbered line-item rows of a Commercial Invoice table, e.g.
@@ -1378,10 +1441,190 @@
       // one-word shipping comment; both are optional so either layout matches.
       id: "single-item-order-form",
       label: "Single-item order form (Code / Description / Price / Qty / Sub Total)",
-      lineRe: new RegExp(`^(\\d{3,7}[A-Z]?)\\s+(${QUOTE_DESC_RE})\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+[\\d,]+\\.\\d{1,2}(?:\\s+[\\d,]+\\.\\d{1,2})?(?:\\s+[A-Za-z]+)?\\s*$`),
+      lineRe: new RegExp(`^(\\d{3,7}[A-Z]?)\\s+(${QUOTE_DESC_RE})\\s+([\\d,]+\\.\\d{1,2})\\s+(\\d{1,6}(?:\\.\\d+)?)\\s+(?:[\\d,]+\\s+)?[\\d,]+\\.\\d{1,2}(?:\\s+(?:[\\d,]+\\s+)?[\\d,]+\\.\\d{1,2})?(?:\\s+[A-Za-z]+)?\\s*$`),
       extract: (m) => ({ code: m[1], description: m[2].trim(), unitCost: parseFloat(m[3].replace(/,/g, "")), qty: parseFloat(m[4]) }),
     },
   ];
+
+  // Freedom Retractable Screens approval/order tables. These supplier PDFs
+  // render several product sections with similar right-hand quantity columns:
+  // "<code> <description...> USD <unit price> <section qty...> USD <line total>".
+  // The PDF text layer sometimes splits large numbers across tokens
+  // ("9 85.74", "2 ,957.22"), so this parser reads only the fields needed
+  // for stock: code, description, unit price and the final quantity before
+  // the line-total currency. It deliberately ignores subtotal/total rows.
+  function parseFreedomApprovalOrder(text) {
+    const entries = [];
+    const moneyToken = /^[\d,]+(?:\.\d+)?$/;
+    const codeRe = /^\d{5,6}R?$/i;
+
+    function num(token) {
+      const n = parseFloat(String(token || "").replace(/,/g, ""));
+      return isFinite(n) ? n : null;
+    }
+
+    function priceFrom(tokens) {
+      if (!tokens.length) return null;
+      if (/^\d{1,3}$/.test(tokens[0] || "") && /^\d{1,3}\.\d{1,2}$/.test(tokens[1] || "")) {
+        return num(tokens[0] + tokens[1]);
+      }
+      return num(tokens[0]);
+    }
+
+    for (const raw of text.split("\n")) {
+      const tokens = raw.trim().split(/\s+/).filter(Boolean);
+      if (!tokens.length || !codeRe.test(tokens[0])) continue;
+
+      const firstUsd = tokens.findIndex((t, i) => i > 0 && /^USD$/i.test(t));
+      if (firstUsd < 2) continue;
+      const secondUsd = tokens.findIndex((t, i) => i > firstUsd && /^USD$/i.test(t));
+      if (secondUsd === -1) continue;
+
+      const mid = tokens.slice(firstUsd + 1, secondUsd).filter((t) => moneyToken.test(t));
+      if (mid.length < 2) continue;
+      const unitCost = priceFrom(mid);
+      const qty = num(mid[mid.length - 1]);
+      if (!(unitCost > 0) || !(qty > 0)) continue;
+
+      entries.push({
+        code: tokens[0],
+        description: tokens.slice(1, firstUsd).join(" ").replace(/\s+/g, " ").trim(),
+        qty,
+        unitCost,
+      });
+    }
+    return entries;
+  }
+
+  // The same Freedom approval/order spreadsheet has a second text-layer
+  // shape in pdf.js: instead of one row per physical line, every table cell
+  // arrives on its own line. A row therefore looks like:
+  //   134002 / description / Each / Metal / 2 / 2.48 / USD / 400 / 992.00 / USD
+  // The first USD closes the unit-price column and the second closes the
+  // line-total column. We recover only rows whose arithmetic reconciles,
+  // then reconcile their combined totals to the document's printed Total.
+  function parseFreedomApprovalCellStream(text) {
+    if (!/(?:PART NUMBER|Part code)/i.test(text) || !/QTY SUM/i.test(text) || !/\bUSD\b/i.test(text)) {
+      return { entries: [], reconciliation: null };
+    }
+
+    const cells = text.split("\n").map((s) => s.trim()).filter(Boolean);
+    const codeRe = /^\d{5,6}R?$/i;
+    const moneyRe = /^[\d,]+(?:\.\d+)?$/;
+    const entries = [];
+    const acceptedLineTotals = [];
+
+    function numberAt(value) {
+      if (!moneyRe.test(value || "")) return null;
+      const n = parseFloat(value.replace(/,/g, ""));
+      return isFinite(n) ? n : null;
+    }
+
+    const codeIndexes = cells
+      .map((cell, idx) => (codeRe.test(cell) ? idx : null))
+      .filter((idx) => idx !== null);
+
+    for (let k = 0; k < codeIndexes.length; k++) {
+      const start = codeIndexes[k];
+      const end = codeIndexes[k + 1] == null ? cells.length : codeIndexes[k + 1];
+      const row = cells.slice(start, end);
+      const usdIndexes = row
+        .map((cell, idx) => (/^USD$/i.test(cell) ? idx : null))
+        .filter((idx) => idx !== null);
+      if (usdIndexes.length < 2) continue;
+
+      const firstUsd = usdIndexes[0];
+      const secondUsd = usdIndexes[1];
+      const unitCost = numberAt(row[firstUsd - 1]);
+      const lineTotal = numberAt(row[secondUsd - 1]);
+      const quantityCells = row.slice(firstUsd + 1, secondUsd - 1)
+        .map(numberAt)
+        .filter((n) => n != null);
+      const qty = quantityCells.length ? quantityCells[quantityCells.length - 1] : null;
+      const description = row.slice(1, firstUsd - 1).find((cell) => /[A-Za-z]/.test(cell)) || "";
+      if (!(unitCost > 0) || !(qty > 0) || !(lineTotal > 0) || !description) continue;
+
+      const tolerance = Math.max(0.02, lineTotal * 0.001);
+      if (Math.abs(qty * unitCost - lineTotal) > tolerance) continue;
+
+      entries.push({ code: row[0], description, qty, unitCost });
+      acceptedLineTotals.push(lineTotal);
+    }
+
+    let documentTotal = null;
+    for (let i = cells.length - 1; i >= 0; i--) {
+      if (!/^Total$/i.test(cells[i])) continue;
+      const possibleTotal = numberAt(cells[i + 1]);
+      if (possibleTotal != null && /^USD$/i.test(cells[i + 2] || "")) {
+        documentTotal = possibleTotal;
+        break;
+      }
+    }
+
+    const parsedTotal = acceptedLineTotals.reduce((sum, n) => sum + n, 0);
+    const reconciliation = documentTotal == null || !entries.length
+      ? null
+      : {
+          expectedTotal: documentTotal,
+          parsedTotal,
+          ok: Math.abs(parsedTotal - documentTotal) <= Math.max(0.05, documentTotal * 0.0001),
+        };
+    return { entries, reconciliation };
+  }
+
+  // Freedom Screens packing lists contain reliable received quantities but
+  // deliberately omit item codes and prices. pdf.js may either keep each
+  // visible row together or emit the Description column later in the text
+  // stream, so both shapes are supported. Rows always remain unmatched: a
+  // human must map each description to Master Inventory before it can add
+  // stock, and a null unit cost tells the server to retain the item's
+  // existing Master Inventory cost rather than inventing a price.
+  function parsePackingListRows(text) {
+    if (!/\bPACKING LIST\b/i.test(text) || !/Bundle\s*\/\s*Roll NO/i.test(text) || !/Gross+\s*Weight/i.test(text)) {
+      return [];
+    }
+
+    const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
+    const dimension = "\\d+(?:\\.\\d+)?\\s*[xX]\\s*\\d+(?:\\.\\d+)?\\s*[xX]\\s*\\d+(?:\\.\\d+)?";
+    const inlineRe = new RegExp(`^(\\d{1,3})\\s+(?:Roll|Bundle)\\s+\\d+\\s+(.+?)\\s+(\\d+(?:\\.\\d+)?)\\s+${dimension}\\s+\\d+(?:\\.\\d+)?$`, "i");
+    const detachedRe = new RegExp(`^(\\d{1,3})\\s+(?:Roll|Bundle)\\s+\\d+\\s+(\\d+(?:\\.\\d+)?)\\s+${dimension}\\s+\\d+(?:\\.\\d+)?$`, "i");
+    const inline = [];
+    const detached = [];
+
+    for (const line of lines) {
+      const im = line.match(inlineRe);
+      if (im) {
+        inline.push({ ln: parseInt(im[1], 10), description: im[2].trim(), qty: parseFloat(im[3]) });
+        continue;
+      }
+      const dm = line.match(detachedRe);
+      if (dm) detached.push({ ln: parseInt(dm[1], 10), qty: parseFloat(dm[2]) });
+    }
+
+    let rows = inline;
+    if (!rows.length && detached.length) {
+      const descriptions = lines.filter((line) =>
+        /[A-Za-z]/.test(line) && /\b\d+(?:\.\d+)?\s*MM\s*$/i.test(line) && !/^Dimension\b/i.test(line)
+      );
+      if (descriptions.length !== detached.length) return [];
+      rows = detached.map((row, idx) => ({ ...row, description: descriptions[idx] }));
+    }
+
+    if (!rows.length || rows.some((row, idx) => row.ln !== idx + 1 || !(row.qty > 0) || !row.description)) return [];
+    const totalLine = lines.find((line) => /^Total No of Rolls\b/i.test(line));
+    const totalMatch = totalLine && totalLine.match(/^Total No of Rolls\s+(\d+)/i);
+    if (totalMatch && parseInt(totalMatch[1], 10) !== rows.length) return [];
+
+    return rows.map((row) => ({
+      code: "",
+      description: row.description,
+      qty: row.qty,
+      unit: "Nos",
+      unitCost: null,
+      manualMatchRequired: true,
+      ln: row.ln,
+    }));
+  }
 
   // --- General "line-item block" layout -----------------------------------
   // Some suppliers' PDF export tools (seen in Freedom Screens' Pro-Forma
@@ -1636,6 +1879,108 @@
     return entries;
   }
 
+  // Layoutless standardiser: a final, cautious fallback for supplier PDFs
+  // whose rows survive text/OCR extraction but do not match a known table
+  // shape. It looks for a product-code-like token followed by description
+  // text and enough numbers to prove a quantity × unit-cost ≈ line total.
+  // Every row it creates is low-confidence and therefore review-gated.
+  function parseLayoutlessStandardizedRows(text) {
+    const entries = [];
+    const rawLines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const codeStartRe = /^(\[?)([A-Za-z0-9][A-Za-z0-9-]{2,19}R?)\]?\s+(.+)$/i;
+    const badCodeRe = /^(date|page|total|subtotal|invoice|purchase|shipment|supplier|buyer|ship|bill|bank|swift|contact)$/i;
+    const currencyRe = new RegExp(`^(${SUPPORTED_CURRENCIES.join("|")})$`, "i");
+    const unitWordRe = /^(units?|pcs?|pieces?|each|box(?:es)?|set|sheets?|rolls?|meters?|metres?|m|kgs?)$/i;
+
+    function tokenise(line) {
+      const raw = line.split(/\s+/).filter(Boolean);
+      const out = [];
+      for (let i = 0; i < raw.length; i++) {
+        const cur = raw[i];
+        const next = raw[i + 1] || "";
+        if (/^\d{1,3}$/.test(cur) && /^,\d{3}(?:\.\d+)?$/.test(next)) {
+          out.push(cur + next);
+          i++;
+        } else {
+          out.push(cur);
+        }
+      }
+      return out;
+    }
+
+    function numericTokens(tokens) {
+      return tokens
+        .map((raw, idx) => {
+          const cleaned = raw.replace(/,/g, "");
+          if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return null;
+          const value = parseFloat(cleaned);
+          return isFinite(value) ? { raw, idx, value, decimal: /\./.test(cleaned) } : null;
+        })
+        .filter(Boolean);
+    }
+
+    function bestQuantityCost(nums) {
+      if (nums.length < 3) return null;
+      const total = [...nums].reverse().find((n) => n.decimal);
+      if (!total || total.value <= 0) return null;
+      let best = null;
+      for (const qty of nums) {
+        if (qty.idx >= total.idx || qty.value <= 0) continue;
+        for (const cost of nums) {
+          if (cost.idx >= total.idx || cost.idx === qty.idx || cost.value <= 0) continue;
+          const expected = qty.value * cost.value;
+          const rel = Math.abs(expected - total.value) / Math.max(total.value, 1);
+          if (rel > 0.04) continue;
+          const score = rel + (cost.decimal ? 0 : 0.02) + (qty.idx > cost.idx ? 0.01 : 0);
+          if (!best || score < best.score) best = { qty, cost, total, score };
+        }
+      }
+      return best;
+    }
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      if (BLOCK_SKIP_LINE_RE.test(line) || BLOCK_HS_LINE_RE.test(line)) continue;
+      const m = line.match(codeStartRe);
+      if (!m) continue;
+      const code = m[2];
+      if (badCodeRe.test(code) || !/\d/.test(code)) continue;
+
+      let candidate = `${code} ${m[3]}`;
+      // Pull in one or two short continuation lines until the next row
+      // starts. This catches OCR/text-layer wraps without letting a whole
+      // page paragraph leak into one item.
+      for (let j = i + 1; j < Math.min(i + 3, rawLines.length); j++) {
+        const next = rawLines[j];
+        if (codeStartRe.test(next) || BLOCK_SKIP_LINE_RE.test(next) || BLOCK_HS_LINE_RE.test(next)) break;
+        if (next.length <= 80) candidate += " " + next;
+      }
+
+      const tokens = tokenise(candidate);
+      const nums = numericTokens(tokens);
+      const picked = bestQuantityCost(nums);
+      if (!picked) continue;
+
+      const firstDataIdx = Math.min(picked.qty.idx, picked.cost.idx);
+      const descTokens = tokens.slice(1, firstDataIdx)
+        .filter((t) => !currencyRe.test(t) && !unitWordRe.test(t));
+      const description = descTokens.join(" ").replace(/\s+/g, " ").trim();
+      if (!description || !/[A-Za-z]/.test(description)) continue;
+
+      const unitToken = tokens[picked.qty.idx + 1] || tokens[picked.qty.idx - 1] || "";
+      entries.push({
+        code,
+        description,
+        qty: picked.qty.value,
+        unit: unitWordRe.test(unitToken) ? unitToken : "",
+        unitCost: picked.cost.value,
+        lowConfidence: true,
+      });
+    }
+
+    return entries;
+  }
+
   // Recovers rows whose description wrapped across multiple physical lines,
   // splitting "<numbers> <description> <code> <ln>" into a numbers-only line
   // followed by one or more description lines and a final "<code> <ln>"
@@ -1690,6 +2035,7 @@
       if (usedIdx.has(i)) continue;
       const first = rawLines[i].trim();
       if (!startRe.test(first)) continue;
+      if (first.match(format.lineRe)) continue;
       let joined = first;
       for (let j = i + 1; j < Math.min(i + 9, rawLines.length); j++) {
         const next = rawLines[j].trim();
@@ -1806,6 +2152,32 @@
     if (blockEntries.length > best.entries.length) {
       best = { formatId: "block-lines", formatLabel: "Line-item blocks (one field per line)", entries: blockEntries };
     }
+    const freedomApprovalEntries = parseFreedomApprovalOrder(text);
+    if (freedomApprovalEntries.length > best.entries.length) {
+      best = {
+        formatId: "freedom-approval-order",
+        formatLabel: "Freedom approval/order tables",
+        entries: freedomApprovalEntries,
+      };
+    }
+    const freedomCellStream = parseFreedomApprovalCellStream(text);
+    if (freedomCellStream.entries.length > best.entries.length) {
+      best = {
+        formatId: "freedom-approval-cell-stream",
+        formatLabel: "Freedom approval/order table cells",
+        entries: freedomCellStream.entries,
+        reconciliation: freedomCellStream.reconciliation,
+      };
+    }
+    const packingListEntries = parsePackingListRows(text);
+    if (packingListEntries.length > best.entries.length) {
+      best = {
+        formatId: "packing-list-no-codes",
+        formatLabel: "Packing list (manual inventory mapping required)",
+        entries: packingListEntries,
+        requiresManualMapping: true,
+      };
+    }
     // Absolute last resort: only tried when nothing above -- not even the
     // block-layout reader -- found a single row. Never allowed to outrank a
     // real structured match just by finding more raw entries, since it's
@@ -1814,6 +2186,16 @@
       const greedyEntries = parseGreedyTokenDocument(text);
       if (greedyEntries.length) {
         best = { formatId: "greedy-tokens", formatLabel: "Greedy token matching (low-confidence fallback)", entries: greedyEntries };
+      }
+    }
+    if (!best.entries.length) {
+      const layoutlessEntries = parseLayoutlessStandardizedRows(text);
+      if (layoutlessEntries.length) {
+        best = {
+          formatId: "layoutless-standardized",
+          formatLabel: "Auto-standardised line items (low-confidence fallback)",
+          entries: layoutlessEntries,
+        };
       }
     }
     if (!best.entries.length) return best;
@@ -1875,11 +2257,16 @@
     const rows = [];
     lines.forEach((l, i) => {
       const candidates = lookupExactCode(itemsByCode, l.code);
-      const item = pickInventoryRow({ kind: "checkin" }, candidates);
       // Description comes straight from the row parser when that format
       // captures it inline (every non-Commercial-Invoice format); only the
       // Commercial Invoice reader relies on the separate description block.
       const pdfDescription = l.description || (descriptions.length === lines.length ? descriptions[i] : "");
+      let item = pickInventoryRow({ kind: "checkin" }, candidates);
+      const matchedByDescription = !item && (!l.code || l.code.length <= 4)
+        ? findUniqueDescriptionItem(itemsByCode, pdfDescription)
+        : null;
+      if (matchedByDescription) item = matchedByDescription;
+      const resolvedCode = item ? (item.item_code || l.code) : l.code;
       // A very short code (<=4 chars) that still didn't match anything is
       // worth calling out explicitly -- real Master Inventory codes are
       // 5-6 digits, so this is a strong hint the source document truncated
@@ -1903,22 +2290,23 @@
       // for-word against the invoice's presentational Unit text ("Each",
       // "Sheet", etc.) -- doing that flagged almost every ordinary row as
       // "different" and was wrong. The only place either side actually
-      // states a pack size is a "<number>m" token: the invoice's Unit
-      // field sometimes carries one ("300m"), and Master Inventory's own
-      // description sometimes carries one in parentheses ("...(200m)").
+      // states a pack size is a "<number>m" token: the invoice's Unit field
+      // or description sometimes carries one ("300m", "(200m roll)"), and
+      // Master Inventory's own description carries one in parentheses.
       // Only flag when BOTH sides state one and they disagree -- this
       // can't misfire on the common case where neither side claims a
       // length at all.
-      const invoiceLen = parseLengthToken(l.unit);
+      const invoiceLen = parseLengthToken(`${l.unit || ""} ${pdfDescription || ""}`);
       const masterLen = parseBundleLengthM(item.description);
       if (invoiceLen != null && masterLen != null && invoiceLen !== masterLen) {
         rows.push({
-          code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
+          code: resolvedCode, description: pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
           current: item.current_qty, newQty: null,
           status: "exact-diff", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint: false,
           lowConfidence: !!l.lowConfidence,
+          matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
           exactMatchItem: {
             id: item.id, code: item.item_code, description: item.description,
             unit: item.unit_of_measure || "",
@@ -1929,10 +2317,11 @@
         return;
       }
       // Roll/bundle auto-conversion. Master Inventory states this item's
-      // own roll length in its description ("...(300m Roll)") and the
-      // invoice does NOT restate that length itself -- meaning the
-      // invoice's quantity number is a roll/bundle COUNT ("1", "4"), not a
-      // metre count. Master Inventory already tracks stock and unit cost
+      // own roll length in its description ("...(300m Roll)"). The invoice
+      // quantity is a roll/bundle COUNT ("1", "4"), whether the invoice's
+      // Unit column is blank/"Units" or repeats the same length ("300m").
+      // A different stated length was already stopped for review above.
+      // Master Inventory tracks stock and unit cost
       // for these items in metres (confirmed against real records: e.g.
       // 30003R's current_qty and unit_cost are both metre-based, not
       // roll-based), so the roll count is expanded to metres and the roll
@@ -1942,18 +2331,19 @@
       // purely so the Qty column can still show "+1 (300 m)" instead of
       // the less readable "+300 m", and so the original per-roll price is
       // preserved for the audit trail at Confirm.
-      if (masterLen != null && invoiceLen == null) {
+      if (masterLen != null && (invoiceLen == null || invoiceLen === masterLen)) {
         const rollCount = l.qty;
         const qtyMetres = rollCount * masterLen;
         const perMetreCost = l.unitCost != null ? l.unitCost / masterLen : null;
-        const bundleType = /roll|coil|reel/i.test(item.description) ? "Roll" : "Length";
+        const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${pdfDescription || ""} ${l.unit || ""}`) ? "Roll" : "Length";
         rows.push({
-          code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: qtyMetres,
+          code: resolvedCode, description: item.description || pdfDescription, unit: l.unit || "", qty: qtyMetres,
           invoiceUnitCost: perMetreCost,
           current: item.current_qty, newQty: item.current_qty + qtyMetres,
           status: "ok", action: "add", decided: true,
           itemId: item.id, editing: false, truncatedHint: false,
           lowConfidence: !!l.lowConfidence,
+          matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
           packageInfo: { type: bundleType, qtyPerPackage: masterLen, unit: "m", rollCount, rollUnitCost: l.unitCost },
         });
         return;
@@ -1975,12 +2365,13 @@
       const masterPkg = parsePackaging(item.description);
       if (invoicePkg && masterPkg && masterPkg.type !== invoicePkg.type) {
         rows.push({
-          code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
+          code: resolvedCode, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
           current: item.current_qty, newQty: null,
           status: "pack-review", action: "pending", decided: false,
           itemId: null, editing: false, truncatedHint: false,
           lowConfidence: !!l.lowConfidence,
+          matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
           packMismatch: {
             itemId: item.id, itemDescription: item.description, itemCurrentQty: item.current_qty,
             itemUnit: item.unit_of_measure || "",
@@ -1990,12 +2381,13 @@
         return;
       }
       rows.push({
-        code: l.code, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
+        code: resolvedCode, description: item.description || pdfDescription, unit: l.unit || "", qty: l.qty,
         invoiceUnitCost: l.unitCost,
         current: item.current_qty, newQty: item.current_qty + l.qty,
         status: "ok", action: "add", decided: true,
         itemId: item.id, editing: false, truncatedHint: false,
         lowConfidence: !!l.lowConfidence,
+        matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
         packageInfo: invoicePkg ? { type: invoicePkg.type, qtyPerPackage: invoicePkg.qtyPerPackage, unit: invoicePkg.unit } : null,
       });
     });
@@ -2034,12 +2426,13 @@
     // coded row on the same document already gets, checking in "+1" (a
     // roll) instead of the roll's real length in metres.
     const bundleLenM = parseBundleLengthM(item.description);
-    if (bundleLenM != null && parseLengthToken(newUnit) == null) {
+    const editedInvoiceLen = parseLengthToken(`${newUnit || ""} ${newDescription || ""}`);
+    if (bundleLenM != null && (editedInvoiceLen == null || editedInvoiceLen === bundleLenM)) {
       const rollCount = invoiceQty;
       const qtyMetres = rollCount * bundleLenM;
       const rollUnitCost = row.invoiceUnitCost; // original per-roll price, before conversion
       const perMetreCost = rollUnitCost != null ? rollUnitCost / bundleLenM : null;
-      const bundleType = /roll|coil|reel/i.test(item.description) ? "Roll" : "Length";
+      const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${newDescription || ""} ${newUnit || ""}`) ? "Roll" : "Length";
       row.qty = qtyMetres;
       row.invoiceUnitCost = perMetreCost;
       row.current = item.current_qty;
@@ -2114,6 +2507,19 @@
       return r.invoiceUnitCost + (shipForRow / r.qty);
     }
     return r.invoiceUnitCost + shipForRow;
+  }
+
+  // Master Inventory stores AED unit costs. For roll-based items whose
+  // stock is expanded into metres, the agreed business rule is to keep two
+  // decimal places without rounding up (499.94 / 300 = 1.6664... -> 1.66).
+  // The exact source-currency calculation and original per-roll price stay
+  // in the transaction audit fields; only the Master Inventory unit cost is
+  // cut off to two AED decimals.
+  function storedInventoryUnitCostAed(row, landedUnitCost, rate) {
+    if (landedUnitCost == null || !(rate > 0)) return null;
+    const converted = landedUnitCost * rate;
+    const isMetreRoll = row.packageInfo && row.packageInfo.unit === "m" && row.packageInfo.rollCount != null;
+    return isMetreRoll ? Math.floor((converted + 1e-9) * 100) / 100 : converted;
   }
 
   function ciTally() {
@@ -2205,7 +2611,7 @@
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
-      <button data-act="new-item" data-i="${idx}">+ New item</button>
+      ${row.code ? `<button data-act="new-item" data-i="${idx}">+ New item</button>` : ""}
     </div>`;
   }
 
@@ -2430,6 +2836,8 @@
     const t = ciTally();
     const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
+    const noCodeUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && !r.code).length;
+    const codedUnmatched = unmatched - noCodeUnmatched;
     const cur = ciState.currency;
     const shipAlloc = ciShippingAllocation();
     const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
@@ -2548,7 +2956,10 @@
       // to applyCiRowAction(i, act) via data-i/data-act, which this badge
       // doesn't set.
       const lowConfBadge = r.lowConfidence
-        ? `<span title="Read via the greedy token-matching fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
+        ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
+        : "";
+      const descriptionMatchBadge = r.matchedByDescription
+        ? `<span class="fp-auto-match-note" title="Matched automatically from the unique full description; supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
         : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
@@ -2558,7 +2969,7 @@
           <div class="fp-exactdiff-h">Exact Item Code found in Master Inventory</div>
           <div><span class="lbl">Master Inventory:</span> <span class="code">${esc(r.exactMatchItem.code)}</span> — ${esc(r.exactMatchItem.description)} · Unit: <b>${esc(r.exactMatchItem.unit || "—")}</b></div>
           <div><span class="lbl">Supplier Invoice:</span> <span class="code">${esc(r.code)}</span> — ${esc(r.description || "—")} · Unit: <b>${esc(r.unit || "—")}</b></div>
-          <div class="fp-exactdiff-warn">⚠ Unit/pack size differs — review before using. No conversion is applied automatically.</div>
+          <div class="fp-exactdiff-warn">⚠ Package length differs: supplier document ${esc(r.exactMatchItem.invoicePackSize)}, Master Inventory ${esc(r.exactMatchItem.packSize)}. Review before using. No conversion is applied automatically.</div>
         </div>` : "";
       const usedDiffNote = r.usedDespiteDifference ? `<div class="small muted" style="margin-top:2px">
           Used despite a pack-size difference (invoice: ${esc(r.usedDespiteDifference.invoicePackSize || "—")}, Master Inventory: ${esc(r.usedDespiteDifference.masterPackSize || "—")}) — confirmed by the user.
@@ -2603,15 +3014,27 @@
         : pkgForDisplay
         ? `${fmt(r.qty)} ${esc(pkgForDisplay.type)}${r.qty === 1 ? "" : "s"} × ${esc(pkgForDisplay.qtyPerPackage)}${esc(pkgForDisplay.unit)}`
         : `+${fmt(r.qty)} ${esc(r.unit)}`;
+      const expandedPackage = pkgForDisplay && pkgForDisplay.rollCount != null && pkgForDisplay.unit === "m";
+      const storedUnitCostAed = storedInventoryUnitCostAed(r, landedUnitCost, rate);
+      const unitCostDisplay = expandedPackage
+        ? `${genericUnitMoney(r.invoiceUnitCost, cur, "m")}
+           <div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, cur)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>
+           <div class="small muted">Stored: ${money(storedUnitCostAed)} / m</div>`
+        : genericMoney(r.invoiceUnitCost, cur);
+      const landedUnitCostDisplay = landedUnitCost == null
+        ? "—"
+        : expandedPackage
+        ? genericUnitMoney(landedUnitCost, cur, "m")
+        : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
-        <td class="code">${esc(r.code)}${reviewFlag}${lowConfBadge}</td>
-        <td>${esc(r.description)}${exactDiffNote}${packReviewNote}${usedDiffNote}</td>
+        <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
+        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
-        <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+        <td class="num">${unitCostDisplay}</td>
         <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, cur) : "—"}</td>
-        <td class="num">${landedUnitCost != null ? genericMoney(landedUnitCost, cur) : "—"}</td>
+        <td class="num">${landedUnitCostDisplay}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${ciStatusChip(r, displayStatus)}</td>
         <td>${ciRenderRowActionButtons(i, r)}</td>
@@ -2624,12 +3047,14 @@
     const warnBox = needDecisionTotal > 0 ? `<div class="fp-warn">
       <h4>${needDecisionTotal} item${needDecisionTotal === 1 ? "" : "s"} need${needDecisionTotal === 1 ? "s" : ""} a decision</h4>
       <ul>
-        ${unmatched > 0 ? `<li><b>${unmatched} unmatched item${unmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
+        ${noCodeUnmatched > 0 ? `<li><b>${noCodeUnmatched} packing-list row${noCodeUnmatched === 1 ? " has" : "s have"} no item code or price</b> —
+          click Edit and map ${noCodeUnmatched === 1 ? "it" : "each one"} to the correct Master Inventory item. The supplier quantity is retained,
+          and the existing Master Inventory cost will be used; no price is guessed. Acknowledge only if the row should be skipped.</li>` : ""}
+        ${codedUnmatched > 0 ? `<li><b>${codedUnmatched} unmatched item${codedUnmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
           Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
           to confirm you've seen it. A new Master Inventory item is never created from here.
-          <span class="fp-batch-actions">
-            <button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button>
-          </span></li>` : ""}
+          </li>` : ""}
+        ${unmatched > 0 ? `<li class="fp-batch-actions"><button data-act="skip-all-unmatched" data-i="-1">Acknowledge all unmatched</button></li>` : ""}
         ${exactDiffCount > 0 ? `<li><b>${exactDiffCount} item${exactDiffCount === 1 ? "" : "s"} with an exact code match, but a detail differs</b> —
           the item code already exists in the Master Inventory, but the invoice's unit doesn't match what's on file.
           Review the comparison shown under each of these rows, then click Use Existing Item once you've confirmed it,
@@ -2676,7 +3101,7 @@
     const lowConfBox = ciState.lowConfidenceFallback ? `<div class="fp-warn">
       <h4>This document was read with a low-confidence fallback</h4>
       <p class="small" style="margin:0 0 var(--space-2)">No known document layout matched this file, so it was read with a
-        best-effort matcher that pieces scattered fields back together. This is more likely to misread a code, quantity or
+        best-effort normaliser that pieces scattered fields back into the standard preview table. This is more likely to misread a code, quantity or
         price than the reader's normal formats — check every row below (marked ⚠ low-confidence) against the original
         document before confirming.</p>
       <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px">
@@ -2746,8 +3171,8 @@
       ${ocrBox}
       ${lowConfBox}
       <div class="fp-section-h">Check-in preview</div>
-      <div class="fp-scroll">
-        <table class="fp-table">
+      <div class="fp-scroll fp-checkin-scroll">
+        <table class="fp-table fp-checkin-table">
           <thead><tr>
             <th>Code</th><th>Description</th>
             <th class="num">Current stock</th>
@@ -2887,6 +3312,7 @@
         // metres exactly as shown on screen -- what was previewed is what
         // gets saved.
         const landedUnitCost = ciLandedUnitCost(i, shipAlloc);
+        const storedUnitCostAed = storedInventoryUnitCostAed(r, landedUnitCost, rate);
         // A roll/bundle row's package_cost is the original PER-ROLL
         // invoice price, not r.invoiceUnitCost (which is per-metre for
         // these rows) -- rollUnitCost preserves that for audit; every
@@ -2899,7 +3325,7 @@
           // No document price (e.g. an Order Approval) -- send null, not a
           // fabricated 0, so checkin_transaction() falls back to the Master
           // Inventory's own unit_cost instead of recording a false free cost.
-          unit_cost: landedUnitCost != null ? landedUnitCost * rate : null,
+          unit_cost: storedUnitCostAed,
           original_unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null,
           shipping_cost_total: shippingCostTotal,
           shipping_allocated: shipAllocForRow > 0 ? shipAllocForRow : null,
@@ -3069,6 +3495,13 @@
       // not spend a network round-trip first.
       if (isStale()) return;
       const doc = parseCheckinDocument(pdfText);
+      if (doc.reconciliation && !doc.reconciliation.ok) {
+        ciState.rows = null;
+        $("#ciConfirmBar").hidden = true;
+        $("#ciDone").innerHTML = "";
+        ciStatus(`The document rows did not reconcile to its printed total (${genericMoney(doc.reconciliation.parsedTotal, ciState.currency)} parsed versus ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)} printed). Check-in has been blocked so incomplete stock cannot be added.`, "err");
+        return;
+      }
       if (!doc.entries.length) {
         // A new file selection already clears any previous preview (see
         // wireCiDrop), but re-analysing the *same* selection after editing
@@ -3088,7 +3521,8 @@
         // reader bug.
         const chargeOnly = detectShippingCharge(pdfText);
         if (chargeOnly.amount != null) {
-          ciStatus(`This document has no goods to receive — it only contains a shipping/freight/packing charge of ${genericMoney(chargeOnly.amount, ciState.currency)} (from "${chargeOnly.label}"). Nothing can be checked in as stock from this document; the Master Inventory has not been changed. This charge still needs to be folded into the items it belongs to on their own invoice — that has to be done by hand for now.`, "err");
+          ciRenderChargeOnly(chargeOnly);
+          ciStatus(`Document read successfully — one non-stock charge found. The Master Inventory has not been changed.`);
         } else {
           ciStatus("This document isn't in a layout this reader recognises yet — no line items were found, so nothing can be checked in. The Master Inventory has not been changed.", "err");
         }
@@ -3096,7 +3530,7 @@
       }
       ciState.missingLnNumbers = doc.missingLnNumbers || [];
       ciState.missingLnAcknowledged = false;
-      ciState.lowConfidenceFallback = doc.formatId === "greedy-tokens";
+      ciState.lowConfidenceFallback = doc.formatId === "greedy-tokens" || doc.formatId === "layoutless-standardized";
 
       // Landed Cost: a convenience prefill only -- always shown editable in
       // the preview (see ciRender's shippingCard) before Confirm is ever
@@ -3158,7 +3592,13 @@
       const lowConfNote = ciState.lowConfidenceFallback
         ? " No known document layout matched this file, so it was read with a low-confidence, best-effort matcher — check every row against the original document before confirming."
         : "";
-      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}`);
+      const manualMappingNote = doc.requiresManualMapping
+        ? " This packing list has quantities but no item codes or prices. Map every row to the correct Master Inventory item with Edit; its existing cost will be retained."
+        : "";
+      const reconciliationNote = doc.reconciliation && doc.reconciliation.ok
+        ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)}.`
+        : "";
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${manualMappingNote}${reconciliationNote}`);
     } catch (err) {
       console.error(err);
       if (!isStale()) ciStatus("Could not analyse the document: " + err.message, "err");
@@ -3194,6 +3634,32 @@
     el.style.color = kind === "err" ? "var(--danger)" : "";
   }
 
+  function ciRenderChargeOnly(charge) {
+    const cur = ciState.currency || "AED";
+    $("#ciOut").innerHTML = `
+      <div class="fp-section-h">Document preview</div>
+      <div class="fp-scroll">
+        <table class="fp-table">
+          <thead><tr>
+            <th>Type</th>
+            <th>Source description</th>
+            <th class="num">Amount</th>
+            <th>Inventory action</th>
+          </tr></thead>
+          <tbody><tr>
+            <td>Shipping / freight / packing charge</td>
+            <td>${esc(charge.label || "Charge")}</td>
+            <td class="num">${esc(genericMoney(charge.amount, cur))}</td>
+            <td><span class="fp-status-review"><span class="fp-dot"></span>Not added to stock</span></td>
+          </tr></tbody>
+        </table>
+      </div>
+      <div class="fp-warn" style="margin-top:var(--space-3)">
+        <h4>Cost only — no goods to receive</h4>
+        <p class="small" style="margin:0">This document contains a separate charge, not an inventory item. Apply the cost to the related goods invoice when its items are checked in. Confirm Check-in stays unavailable, so this preview cannot change stock.</p>
+      </div>`;
+  }
+
   function wireCiDrop(dropEl, inputEl) {
     dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("dragover"); });
     dropEl.addEventListener("dragleave", () => dropEl.classList.remove("dragover"));
@@ -3223,8 +3689,14 @@
       ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
       ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
       ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
+      // A replacement PDF is a new Check-in. Never carry supplier/reference
+      // values auto-filled from the previous document into the new one.
+      $("#ciSupplier").value = ""; $("#ciInvoiceNumber").value = "";
+      $("#ciPoNumber").value = ""; $("#ciDocDate").value = "";
       $("#ciOut").innerHTML = "";
+      $("#ciDone").innerHTML = "";
       $("#ciConfirmBar").hidden = true;
+      ciStatus("");
       $("#ciPdfName").textContent = f.name;
       dropEl.classList.add("ready");
       $("#ciExtract").disabled = false;

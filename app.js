@@ -379,23 +379,155 @@ function askedFamily(text) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Recommendation state
+ * ------------------------------------------------------------------ */
+
+function createRecommendationState(saved) {
+  const s = saved || {};
+  const d = s.dimensions || {};
+  return {
+    dimensions: Number(d.W) > 0 && Number(d.H) > 0
+      ? { W: Number(d.W), H: Number(d.H), order: d.order || "state" }
+      : null,
+    family: ["Sliding", "Folding", "Fixed"].includes(s.family) ? s.family : null,
+    systemIds: Array.isArray(s.systemIds)
+      ? [...new Set(s.systemIds)].filter(id => SYS.some(sys => sys.id === id))
+      : [],
+    panels: Number(s.panels) > 0 ? Number(s.panels) : null,
+    automation: s.automation === "yes" ? "yes" : null,
+  };
+}
+
+function cloneRecommendationState(state) {
+  return createRecommendationState(state);
+}
+
+function hasRecommendationDims(state) {
+  return !!(state && state.dimensions && state.dimensions.W && state.dimensions.H);
+}
+
+function systemsFromState(state) {
+  return (state.systemIds || [])
+    .map(id => SYS.find(s => s.id === id))
+    .filter(Boolean);
+}
+
+function parsePanelPreference(text) {
+  const t = text.toLowerCase();
+  if (/\b(?:any|flexible)\s+(?:panel|pane|leaf|leaves|sash|track|vent)s?\b/.test(t) ||
+      /\b(?:no|without)\s+(?:fixed\s+)?(?:panel|pane|leaf|leaves|sash|track|vent)\s+count\b/.test(t))
+    return null;
+  const n = parsePanels(text);
+  return n || undefined;
+}
+
+function parseAutomationPreference(text) {
+  const t = text.toLowerCase();
+  if (/\b(?:manual|non-?motorised|non-?motorized)\b/.test(t) ||
+      /\b(?:no|without|not)\s+(?:automation|automated|motorised|motorized)\b/.test(t))
+    return null;
+  if (/\bautomat|motoris|motoriz/.test(t)) return "yes";
+  return undefined;
+}
+
+function parseRecommendationTurn(text) {
+  const fam = askedFamily(text);
+  return {
+    dimensions: parseDims(text),
+    family: fam || undefined,
+    systemIds: systemsNamedIn(text).map(s => s.id),
+    panels: parsePanelPreference(text),
+    automation: parseAutomationPreference(text),
+  };
+}
+
+function looksLikeFactQuestion(text) {
+  const t = text.toLowerCase();
+  const hasCategory = CATEGORY_HINTS.some(([re]) => re.test(t));
+  const factLead = /\b(?:what|which|show|list|tell|explain|why|where|any|can|does)\b/.test(t);
+  const sizingLead = /\b(?:fit|fits|work|works|suitable|recommend|opening|size|make that|change|switch|try|instead)\b/.test(t);
+  return hasCategory && factLead && !sizingLead;
+}
+
+function isRecommendationFollowUp(text, turn, state) {
+  if (!hasRecommendationDims(state) || looksLikeFactQuestion(text)) return false;
+  const t = text.toLowerCase();
+  const qualifier = turn.family || turn.systemIds.length || turn.panels !== undefined || turn.automation !== undefined;
+  const followPhrase = /\b(?:what about|how about|make that|change|switch|try|use|same opening|same size|instead)\b/.test(t) ||
+    /\b(?:will|would|does|can)\b.*\b(?:fit|work|suit|suitable)\b/.test(t);
+  const shortQualifier = qualifier && t.split(/\s+/).filter(Boolean).length <= 6;
+  return !!(qualifier && (followPhrase || shortQualifier));
+}
+
+function mergeRecommendationState(state, turn) {
+  if (turn.dimensions)
+    state.dimensions = { W: turn.dimensions.W, H: turn.dimensions.H, order: turn.dimensions.order || "stated" };
+
+  if (turn.systemIds.length) {
+    state.systemIds = [...new Set(turn.systemIds)];
+    if (!turn.family) state.family = null;
+  }
+
+  if (turn.family) {
+    state.family = turn.family;
+    if (!turn.systemIds.length) state.systemIds = [];
+  }
+
+  if (turn.panels !== undefined) state.panels = turn.panels;
+  if (turn.automation !== undefined) state.automation = turn.automation;
+}
+
+function recommendationOptions(state) {
+  const opt = {};
+  if (state.family) opt.family = state.family;
+  if (state.automation) opt.automation = state.automation;
+  if (state.panels) opt.panels = state.panels;
+  return opt;
+}
+
+function stateFromConversation(c) {
+  const stored = createRecommendationState(c && c.recommendationState);
+  if (hasRecommendationDims(stored)) return stored;
+
+  const replay = createRecommendationState();
+  for (const m of (c && c.messages) || []) {
+    if (m.who !== "u") continue;
+    const turn = parseRecommendationTurn(m.text || "");
+    if (turn.dimensions || isRecommendationFollowUp(m.text || "", turn, replay))
+      mergeRecommendationState(replay, turn);
+  }
+  return replay;
+}
+
+let recommendationState = createRecommendationState();
+
+/* ------------------------------------------------------------------ *
  * Answer composition
  * ------------------------------------------------------------------ */
 
 const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const nl = s => esc(s).replace(/\n/g, "<br>");
 
-function answerSizeQuestion(text, dims) {
-  const opt = {};
-  const fam = askedFamily(text);
-  if (fam) opt.family = fam;
-  if (/\bautomat|motoris|motoriz/.test(text.toLowerCase())) opt.automation = "yes";
-  const panels = parsePanels(text);
-  if (panels) opt.panels = panels;
-
-  const asked = systemsNamedIn(text);
+function answerSizeQuestion(text, dims, context) {
+  const ctx = context || {};
+  const opt = ctx.options || (() => {
+    const fallback = parseRecommendationTurn(text);
+    return recommendationOptions({
+      dimensions: dims,
+      family: fallback.family || null,
+      systemIds: fallback.systemIds,
+      panels: fallback.panels || null,
+      automation: fallback.automation || null,
+    });
+  })();
+  const fam = opt.family || null;
+  const panels = opt.panels || null;
+  const asked = ctx.systems || systemsNamedIn(text);
   const r = checkOpening(dims.W, dims.H, opt);
-  let html = `<h4>Opening ${fmt(dims.W)} × ${fmt(dims.H)} mm (width × height)</h4>`;
+  const carried = ctx.inheritedDimensions
+    ? ` <span class="small muted">carried forward from earlier</span>`
+    : "";
+  let html = `<h4>Opening ${fmt(dims.W)} × ${fmt(dims.H)} mm (width × height)${carried}</h4>`;
 
   // Make the requested configuration explicit, so it is clear it was respected.
   if (panels)
@@ -619,8 +751,16 @@ function figures(list) {
 }
 
 function respond(text) {
-  const dims = parseDims(text);
-  if (dims) return answerSizeQuestion(text, dims);
+  const turn = parseRecommendationTurn(text);
+  const inheritedDimensions = !turn.dimensions && hasRecommendationDims(recommendationState);
+  if (turn.dimensions || isRecommendationFollowUp(text, turn, recommendationState)) {
+    mergeRecommendationState(recommendationState, turn);
+    return answerSizeQuestion(text, recommendationState.dimensions, {
+      options: recommendationOptions(recommendationState),
+      systems: systemsFromState(recommendationState),
+      inheritedDimensions,
+    });
+  }
   const cross = crossSystem(text);
   if (cross) return cross;
   if (!systemsNamedIn(text).length &&
@@ -749,6 +889,7 @@ const INTRO = `<h4>Technical assistant</h4><p>Give me an opening size and I will
 
 function startNewChat(focus) {
   currentId = null;
+  recommendationState = createRecommendationState();
   chat.innerHTML = "";
   say(INTRO, "b");
   renderHistory();
@@ -759,6 +900,9 @@ function openChat(id) {
   const c = conversations.find(x => x.id === id);
   if (!c) return;
   currentId = id;
+  recommendationState = stateFromConversation(c);
+  c.recommendationState = cloneRecommendationState(recommendationState);
+  store.write(conversations);
   chat.innerHTML = "";
   if (!c.messages.length) say(INTRO, "b");
   else c.messages.forEach(m => say(m.who === "u" ? m.text : m.html, m.who));
@@ -777,7 +921,8 @@ function recordMessage(who, payload) {
   let c = currentConv();
   if (!c) {
     c = { id: uid(), title: who === "u" ? titleFor(payload) : "New chat",
-          createdAt: clock(), updatedAt: clock(), messages: [] };
+          createdAt: clock(), updatedAt: clock(), messages: [],
+          recommendationState: cloneRecommendationState(recommendationState) };
     conversations.push(c);
     currentId = c.id;
     if (conversations.length > MAX_CONVERSATIONS) {
@@ -786,6 +931,7 @@ function recordMessage(who, payload) {
     }
   }
   c.messages.push(who === "u" ? { who, text: payload } : { who, html: payload });
+  c.recommendationState = cloneRecommendationState(recommendationState);
   c.updatedAt = clock();
   store.write(conversations);
   renderHistory();
@@ -815,10 +961,10 @@ $("#askForm").addEventListener("submit", e => {
   const q = $("#askInput").value.trim();
   if (!q) return;
   say(q, "u");
+  const html = respond(q);
   recordMessage("u", q);
   $("#askInput").value = "";
   setTimeout(() => {
-    const html = respond(q);
     say(html, "b");
     recordMessage("b", html);
   }, 90);
