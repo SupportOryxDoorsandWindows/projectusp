@@ -770,6 +770,91 @@
     }
   }
 
+  /* --------------------------- Manual entry (unreadable PDF) -- */
+
+  // Fallback for a document the PDF/OCR pipeline genuinely can't read: the
+  // same Master Inventory search used everywhere else (wireCodePicker), one
+  // row per item, no PDF involved at all. A row built this way is already a
+  // matched item (picked directly from Master Inventory), so it lands in
+  // state.rows in exactly the shape buildRows() gives a normal "ok" match --
+  // render(), tallyTotals() and confirmAllocation() all work unchanged.
+  let fpManualRowCount = 0;
+  let fpManualItemsByCode = null;
+
+  function fpManualRowHtml(i) {
+    return `<tr data-man-row="${i}">
+      <td class="fp-code-picker">
+        <input class="fp-inline-input" id="fpManCodeSearch${i}" type="text" placeholder="Search code or description" autocomplete="off">
+        <input type="hidden" id="fpManCodeValue${i}" value="">
+        <input type="hidden" id="fpManDesc${i}" value="">
+        <div class="fp-dropdown-results" id="fpManCodeResults${i}" hidden></div>
+      </td>
+      <td class="num"><input class="fp-inline-input fp-inline-input-num" id="fpManQty${i}" type="number" step="any" min="0" placeholder="0"></td>
+      <td><button class="ghost" type="button" data-man-remove="${i}">Remove</button></td>
+    </tr>`;
+  }
+
+  function fpManualAddRow() {
+    const i = fpManualRowCount++;
+    $("#fpManualBody").insertAdjacentHTML("beforeend", fpManualRowHtml(i));
+    if (fpManualItemsByCode) wireCodePicker("fpMan", fpManualItemsByCode, i);
+    $(`[data-man-remove="${i}"]`).addEventListener("click", () => {
+      const row = document.querySelector(`[data-man-row="${i}"]`);
+      if (row) row.remove();
+    });
+  }
+
+  async function fpManualToggle() {
+    const panel = $("#fpManualPanel");
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden && !fpManualItemsByCode) {
+      $("#fpManualStatus").textContent = "Loading Master Inventory…";
+      try {
+        fpManualItemsByCode = await loadInventoryItems();
+        $("#fpManualStatus").textContent = "";
+        if (!fpManualRowCount) fpManualAddRow();
+      } catch (err) {
+        $("#fpManualStatus").textContent = "Could not load the Master Inventory: " + err.message;
+      }
+    }
+  }
+
+  function fpManualUse() {
+    const rowEls = [...document.querySelectorAll("#fpManualBody [data-man-row]")];
+    if (!rowEls.length) { $("#fpManualStatus").textContent = "Add at least one item first."; return; }
+    const rows = [];
+    for (const rowEl of rowEls) {
+      const i = rowEl.dataset.manRow;
+      const code = $(`#fpManCodeValue${i}`).value;
+      const qty = parseFloat($(`#fpManQty${i}`).value);
+      if (!code) { $("#fpManualStatus").textContent = "Every row needs a Master Inventory item selected."; return; }
+      if (!(qty > 0)) { $("#fpManualStatus").textContent = "Every row needs a quantity greater than 0."; return; }
+      const item = pickInventoryRow({ kind: "fitting" }, fpManualItemsByCode.get(code));
+      if (!item) { $("#fpManualStatus").textContent = "One of the selected items could not be found — please re-pick it."; return; }
+      const remaining = item.current_qty - qty;
+      rows.push({
+        kind: "fitting", code: item.item_code, barLenMm: null,
+        description: item.description, pdfDetail: "",
+        requiredQty: qty, unit: item.unit_of_measure || "",
+        available: item.current_qty, remaining,
+        costPerUnit: item.unit_cost || 0,
+        estValue: qty * (item.unit_cost || 0),
+        status: remaining < 0 ? "shortage" : "ok", baseStatus: remaining < 0 ? "shortage" : "ok",
+        action: "deduct", decided: true,
+        itemId: item.id, hasVariants: false, editing: false,
+      });
+    }
+    $("#fpManualStatus").textContent = "";
+    state.pdfFile = null;
+    state.pdfHash = null;
+    state.parsedJob = { ref: "", user: "", description: "", printedAt: "" };
+    state.itemsByCode = fpManualItemsByCode;
+    state.rows = rows;
+    render();
+    const t = tallyTotals();
+    status(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
+  }
+
   /* --------------------------- Reset / status ---------------- */
 
   function resetAll() {
@@ -783,6 +868,10 @@
     $("#fpDone").innerHTML = "";
     $("#fpConfirmBar").hidden = true;
     $("#fpExtract").disabled = true;
+    $("#fpManualPanel").hidden = true;
+    $("#fpManualBody").innerHTML = "";
+    $("#fpManualStatus").textContent = "";
+    fpManualRowCount = 0;
     status("");
   }
 
@@ -3698,7 +3787,100 @@
     $("#ciDone").innerHTML = "";
     $("#ciConfirmBar").hidden = true;
     $("#ciExtract").disabled = true;
+    $("#ciManualPanel").hidden = true;
+    $("#ciManualBody").innerHTML = "";
+    $("#ciManualStatus").textContent = "";
+    ciManualRowCount = 0;
     ciStatus("");
+  }
+
+  /* --------------------------- Manual entry (unreadable PDF) -- */
+
+  // Same fallback as Check-out's manual entry, for the Check-in side. Always
+  // AED, rate 1 -- like the Master Inventory "Adjust" manual correction, this
+  // is a person typing in what a document said, not a re-derivation of its
+  // currency; if the source document was in another currency, the person
+  // entering it converts the unit cost by hand before typing it in.
+  let ciManualRowCount = 0;
+  let ciManualItemsByCode = null;
+
+  function ciManualRowHtml(i) {
+    return `<tr data-man-row="${i}">
+      <td class="fp-code-picker">
+        <input class="fp-inline-input" id="ciManCodeSearch${i}" type="text" placeholder="Search code or description" autocomplete="off">
+        <input type="hidden" id="ciManCodeValue${i}" value="">
+        <input type="hidden" id="ciManDesc${i}" value="">
+        <div class="fp-dropdown-results" id="ciManCodeResults${i}" hidden></div>
+      </td>
+      <td class="num"><input class="fp-inline-input fp-inline-input-num" id="ciManQty${i}" type="number" step="any" min="0" placeholder="0"></td>
+      <td class="num"><input class="fp-inline-input fp-inline-input-num" id="ciManCost${i}" type="number" step="any" min="0" placeholder="AED"></td>
+      <td><button class="ghost" type="button" data-man-remove="${i}">Remove</button></td>
+    </tr>`;
+  }
+
+  function ciManualAddRow() {
+    const i = ciManualRowCount++;
+    $("#ciManualBody").insertAdjacentHTML("beforeend", ciManualRowHtml(i));
+    if (ciManualItemsByCode) wireCodePicker("ciMan", ciManualItemsByCode, i);
+    $(`[data-man-remove="${i}"]`).addEventListener("click", () => {
+      const row = document.querySelector(`[data-man-row="${i}"]`);
+      if (row) row.remove();
+    });
+  }
+
+  async function ciManualToggle() {
+    const panel = $("#ciManualPanel");
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden && !ciManualItemsByCode) {
+      $("#ciManualStatus").textContent = "Loading Master Inventory…";
+      try {
+        ciManualItemsByCode = await loadInventoryItems();
+        $("#ciManualStatus").textContent = "";
+        if (!ciManualRowCount) ciManualAddRow();
+      } catch (err) {
+        $("#ciManualStatus").textContent = "Could not load the Master Inventory: " + err.message;
+      }
+    }
+  }
+
+  function ciManualUse() {
+    const rowEls = [...document.querySelectorAll("#ciManualBody [data-man-row]")];
+    if (!rowEls.length) { $("#ciManualStatus").textContent = "Add at least one item first."; return; }
+    const rows = [];
+    for (const rowEl of rowEls) {
+      const i = rowEl.dataset.manRow;
+      const code = $(`#ciManCodeValue${i}`).value;
+      const qty = parseFloat($(`#ciManQty${i}`).value);
+      const unitCostInput = $(`#ciManCost${i}`).value;
+      if (!code) { $("#ciManualStatus").textContent = "Every row needs a Master Inventory item selected."; return; }
+      if (!(qty > 0)) { $("#ciManualStatus").textContent = "Every row needs a quantity greater than 0."; return; }
+      const item = pickInventoryRow({ kind: "checkin" }, ciManualItemsByCode.get(code));
+      if (!item) { $("#ciManualStatus").textContent = "One of the selected items could not be found — please re-pick it."; return; }
+      // No document price entered -- send null, not a fabricated 0, so
+      // Confirm falls back to the Master Inventory's own unit_cost instead
+      // of recording a false free cost (same rule buildCheckinRows follows).
+      const unitCost = unitCostInput === "" ? null : parseFloat(unitCostInput);
+      rows.push({
+        code: item.item_code, description: item.description, unit: item.unit_of_measure || "", qty,
+        invoiceUnitCost: unitCost,
+        current: item.current_qty, newQty: item.current_qty + qty,
+        status: "ok", action: "add", decided: true,
+        itemId: item.id, editing: false, truncatedHint: false,
+        lowConfidence: false, matchedByDescription: null, packageInfo: null,
+      });
+    }
+    $("#ciManualStatus").textContent = "";
+    ciState.pdfFile = null;
+    ciState.pdfHash = null;
+    ciState.header = {};
+    ciState.itemsByCode = ciManualItemsByCode;
+    ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+    ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
+    ciState.usedOcr = false; ciState.lowConfidenceFallback = false;
+    ciState.rows = rows;
+    ciRender();
+    const t = ciTally();
+    ciStatus(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
   }
 
   function ciStatus(text, kind) {
@@ -4185,6 +4367,9 @@
     wireDrop($("#fpDrop"), $("#fpPdf"), "pdf");
     $("#fpExtract").addEventListener("click", analyse);
     $("#fpReset").addEventListener("click", resetAll);
+    $("#fpManualToggle").addEventListener("click", fpManualToggle);
+    $("#fpManualAddRow").addEventListener("click", fpManualAddRow);
+    $("#fpManualUse").addEventListener("click", fpManualUse);
     $("#fpConfirm").addEventListener("click", async () => {
       const btn = $("#fpConfirm");
       btn.disabled = true;
@@ -4203,6 +4388,9 @@
     wireCiDrop($("#ciDrop"), $("#ciPdf"));
     $("#ciExtract").addEventListener("click", ciAnalyse);
     $("#ciReset").addEventListener("click", ciResetAll);
+    $("#ciManualToggle").addEventListener("click", ciManualToggle);
+    $("#ciManualAddRow").addEventListener("click", ciManualAddRow);
+    $("#ciManualUse").addEventListener("click", ciManualUse);
     $("#ciConfirm").addEventListener("click", async () => {
       const btn = $("#ciConfirm");
       btn.disabled = true;
