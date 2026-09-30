@@ -794,28 +794,40 @@
     </tr>`;
   }
 
-  function fpManualAddRow() {
+  // Loaded once and cached as a PROMISE (not just the resolved value) --
+  // if "Add another item" is clicked while the first load is still in
+  // flight, this still awaits that same in-flight request instead of
+  // wiring the search box against a not-yet-loaded (null) Master Inventory,
+  // which would otherwise leave that row's search permanently dead (typing
+  // shows nothing, forever, until Reset) with no visible error at all.
+  let fpManualItemsPromise = null;
+  function fpManualLoadItems() {
+    if (!fpManualItemsPromise) fpManualItemsPromise = loadInventoryItems();
+    return fpManualItemsPromise;
+  }
+
+  async function fpManualAddRow() {
     const i = fpManualRowCount++;
     $("#fpManualBody").insertAdjacentHTML("beforeend", fpManualRowHtml(i));
-    if (fpManualItemsByCode) wireCodePicker("fpMan", fpManualItemsByCode, i);
     $(`[data-man-remove="${i}"]`).addEventListener("click", () => {
       const row = document.querySelector(`[data-man-row="${i}"]`);
       if (row) row.remove();
     });
+    try {
+      fpManualItemsByCode = await fpManualLoadItems();
+      wireCodePicker("fpMan", fpManualItemsByCode, i);
+    } catch (err) {
+      $("#fpManualStatus").textContent = "Could not load the Master Inventory: " + err.message;
+    }
   }
 
   async function fpManualToggle() {
     const panel = $("#fpManualPanel");
     panel.hidden = !panel.hidden;
-    if (!panel.hidden && !fpManualItemsByCode) {
+    if (!panel.hidden && !fpManualRowCount) {
       $("#fpManualStatus").textContent = "Loading Master Inventory…";
-      try {
-        fpManualItemsByCode = await loadInventoryItems();
-        $("#fpManualStatus").textContent = "";
-        if (!fpManualRowCount) fpManualAddRow();
-      } catch (err) {
-        $("#fpManualStatus").textContent = "Could not load the Master Inventory: " + err.message;
-      }
+      await fpManualAddRow();
+      $("#fpManualStatus").textContent = "";
     }
   }
 
@@ -3818,28 +3830,37 @@
     </tr>`;
   }
 
-  function ciManualAddRow() {
+  // Same in-flight-promise cache as Check-out's manual entry, and for the
+  // same reason: "Add another item" clicked before the first load finishes
+  // must never wire a row against a still-null Master Inventory.
+  let ciManualItemsPromise = null;
+  function ciManualLoadItems() {
+    if (!ciManualItemsPromise) ciManualItemsPromise = loadInventoryItems();
+    return ciManualItemsPromise;
+  }
+
+  async function ciManualAddRow() {
     const i = ciManualRowCount++;
     $("#ciManualBody").insertAdjacentHTML("beforeend", ciManualRowHtml(i));
-    if (ciManualItemsByCode) wireCodePicker("ciMan", ciManualItemsByCode, i);
     $(`[data-man-remove="${i}"]`).addEventListener("click", () => {
       const row = document.querySelector(`[data-man-row="${i}"]`);
       if (row) row.remove();
     });
+    try {
+      ciManualItemsByCode = await ciManualLoadItems();
+      wireCodePicker("ciMan", ciManualItemsByCode, i);
+    } catch (err) {
+      $("#ciManualStatus").textContent = "Could not load the Master Inventory: " + err.message;
+    }
   }
 
   async function ciManualToggle() {
     const panel = $("#ciManualPanel");
     panel.hidden = !panel.hidden;
-    if (!panel.hidden && !ciManualItemsByCode) {
+    if (!panel.hidden && !ciManualRowCount) {
       $("#ciManualStatus").textContent = "Loading Master Inventory…";
-      try {
-        ciManualItemsByCode = await loadInventoryItems();
-        $("#ciManualStatus").textContent = "";
-        if (!ciManualRowCount) ciManualAddRow();
-      } catch (err) {
-        $("#ciManualStatus").textContent = "Could not load the Master Inventory: " + err.message;
-      }
+      await ciManualAddRow();
+      $("#ciManualStatus").textContent = "";
     }
   }
 
