@@ -241,13 +241,13 @@
   // genuinely different words into the same one; it only forgives the exact
   // handful of OCR mix-ups it's meant to.
   const OCR_DIGIT_TO_LETTER = { 0: "O", 1: "I", 5: "S", 8: "B" };
-  function tokenizeForMatch(text) {
-    return String(text || "")
+  function tokenizeForMatch(text, raw) {
+    const tokens = String(text || "")
       .toUpperCase()
       .replace(/\bMETRES?\b/g, "M")
       .split(/[^A-Z0-9]+/)
-      .filter(Boolean)
-      .map((tok) => tok.replace(/[0158]/g, (c) => OCR_DIGIT_TO_LETTER[c]));
+      .filter(Boolean);
+    return raw ? tokens : tokens.map((tok) => tok.replace(/[0158]/g, (c) => OCR_DIGIT_TO_LETTER[c]));
   }
 
   // Master's own product-name words -- the ones that must all be present
@@ -265,9 +265,9 @@
   // side/colour word (A/B, BLK/WHT, Left/Right) stays required, so two
   // genuinely different Master Inventory records can never collapse onto
   // each other.
-  function masterCoreTokens(description) {
+  function masterCoreTokens(description, raw) {
     const withoutOwnCode = String(description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
-    const tokens = tokenizeForMatch(withoutOwnCode);
+    const tokens = tokenizeForMatch(withoutOwnCode, raw);
     if (tokens.length && tokens[tokens.length - 1] === "AB") tokens.pop();
     return tokens;
   }
@@ -282,19 +282,50 @@
   // assumed. Requires at least 2 core words (a single generic word like
   // "Screw" is too broad to trust alone) and, same as before, never guesses
   // between more than one equally-good candidate.
-  function findUniqueDescriptionItem(itemsByCode, description) {
+  //
+  // If nothing matches strictly, one second, looser pass runs (unless
+  // strictOnly): a product-family word is allowed to appear with or without
+  // its series number on either side -- Master's "ZLS Brake Spring" against
+  // a supplier's "ZLS1-Brake Spring 01", or Master's "ZLS1 Handle Bush"
+  // against "ZLS Handle Bush". Two DIFFERENT series numbers (ZLS1 vs ZLS2,
+  // SMB1 vs SMB2) are never treated as the same word, and every other word,
+  // size and colour still has to be there, with exactly one candidate.
+  function findUniqueDescriptionItem(itemsByCode, description, strictOnly) {
     const invoiceTokens = new Set(tokenizeForMatch(description));
     if (!invoiceTokens.size) return null;
-    const matches = [];
-    for (const candidates of itemsByCode.values()) {
-      for (const candidate of candidates) {
-        const core = masterCoreTokens(candidate.description);
-        if (core.length < 2) continue;
-        if (core.every((tok) => invoiceTokens.has(tok))) matches.push(candidate);
-      }
+    const invoiceRaw = new Set(tokenizeForMatch(description, true));
+    const invoiceSeriesBase = new Set();
+    for (const tok of invoiceRaw) {
+      const m = tok.match(/^([A-Z]{2,})\d{1,2}$/);
+      if (m) invoiceSeriesBase.add(m[1]);
     }
-    const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
-    return unique.length === 1 ? unique[0] : null;
+
+    function seriesTolerant(tok, rawTok) {
+      if (invoiceTokens.has(tok)) return true;
+      // Master has the bare family word, the invoice adds a series number.
+      if (/^[A-Z]{2,}$/.test(rawTok) && invoiceSeriesBase.has(rawTok)) return true;
+      // Master has the series number, the invoice has the bare family word.
+      const m = rawTok.match(/^([A-Z]{2,})\d{1,2}$/);
+      return !!m && invoiceRaw.has(m[1]) && !invoiceSeriesBase.has(m[1]);
+    }
+
+    function uniqueMatch(test) {
+      const matches = [];
+      for (const candidates of itemsByCode.values()) {
+        for (const candidate of candidates) {
+          const core = masterCoreTokens(candidate.description);
+          if (core.length < 2) continue;
+          const coreRaw = masterCoreTokens(candidate.description, true);
+          if (core.every((tok, k) => test(tok, coreRaw[k]))) matches.push(candidate);
+        }
+      }
+      const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
+      return unique.length === 1 ? unique[0] : unique.length ? false : null;
+    }
+
+    const strict = uniqueMatch((tok) => invoiceTokens.has(tok));
+    if (strict || strict === false || strictOnly) return strict || null;
+    return uniqueMatch(seriesTolerant) || null;
   }
 
   // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
@@ -2417,7 +2448,7 @@
       // silently picking the code's item.
       let codeDescConflict = null;
       if (item && !matchedByDescription && l.code && pdfDescription) {
-        const descItem = findUniqueDescriptionItem(itemsByCode, pdfDescription);
+        const descItem = findUniqueDescriptionItem(itemsByCode, pdfDescription, true);
         if (descItem && descItem.id !== item.id) {
           codeDescConflict = { codeItemCode: item.item_code, descItemCode: descItem.item_code };
           item = null;

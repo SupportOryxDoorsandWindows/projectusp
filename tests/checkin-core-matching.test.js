@@ -121,6 +121,43 @@ assert.equal(r.itemId, "drawbar-wht");
 r = matchOne(items, "", "ZLSI Brake Arm 0I"); // "1" read as "I", "01" as "0I"
 assert.equal(r.itemId, "brake-arm");
 
+// TEST: series number on one side only -- Master's bare family word "ZLS"
+// matches a supplier's "ZLS1" (real Freedom invoice line), and vice versa.
+r = matchOne(items, "", "ZLS1-Brake Spring 01");
+assert.equal(r.status, "ok");
+assert.equal(r.itemId, "brake-spring");
+assert.equal(r.code, "191021");
+r = matchOne(items, "", "ZLS Handle Bush 01");
+assert.equal(r.itemId, "handle-bush");
+
+// TEST: two DIFFERENT series numbers are never the same product.
+r = matchOne(items, "", "SMB2 Drawbar Cap A BLK");
+assert.equal(r.status, "unmatched");
+r = matchOne(items, "", "ZLS2 Handle Bush");
+assert.equal(r.status, "unmatched");
+
+// TEST: the looser series pass still needs the colour -- "ZLS Handle Mount"
+// with BLK and WHT variants in Master stays unmatched, never guessed.
+const mountItems = items.concat([
+  { id: "mount-blk", item_code: "330021", description: "ZLS1 Handle Mount AB BLK", current_qty: 10, unit_of_measure: "pcs", unit_cost: 5 },
+  { id: "mount-wht", item_code: "330022", description: "ZLS1 Handle Mount AB WHT", current_qty: 10, unit_of_measure: "pcs", unit_cost: 5 },
+]);
+r = matchOne(mountItems, "", "ZLS Handle Mount 01");
+assert.equal(r.status, "unmatched");
+r = matchOne(mountItems, "", "ZLS Handle Mount AB BLK");
+assert.equal(r.itemId, "mount-blk");
+
+// TEST: a product that isn't in Master at all stays unmatched, even though
+// a different family's item shares most of its words.
+r = matchOne(items, "", "ZLS1 Drawbar Cap 01 Right/ Black");
+assert.equal(r.status, "unmatched");
+
+// TEST: the looser series pass never creates a code/description conflict
+// on a row whose code already matched.
+r = matchOne(items, "330024", "ZLS Handle Bush");
+assert.equal(r.status, "ok");
+assert.equal(r.itemId, "handle-bush");
+
 // TEST: duplicate Master Inventory descriptions -- never auto-pick one.
 r = matchOne(items, "", "Duplicate Bracket Set");
 assert.equal(r.status, "unmatched");
