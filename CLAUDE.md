@@ -20,3 +20,12 @@ product lines — never treat one family's item as a match for another's:
   Use this item" suggestion (`findSeriesSuggestion`), because deciding that
   two names are the same part is the stock team's call, not the system's.
   It never suggests across families or across different series numbers.
+- A second suggestion pass (`findCloseSuggestion`) covers supplier names
+  that use a different product word, e.g. Freedom's "ZLS1-Infinity
+  60mm-IS( 2.9m)Mill" for Master's "ZLS1 Housing 60 IS 01 MILL" (2900 mm).
+  Family, size, side/colour/finish and the stated bar length must all agree;
+  only one product word may differ, and a tie suggests nothing. It is never
+  auto-applied. Known family words live in `PRODUCT_FAMILIES`.
+- ZLS1 profiles have one Master row per bar length (2500 / 2900 / 5100 mm)
+  under the same code, so anything that resolves a Check-in row must pick the
+  exact length row by id, not just the code.

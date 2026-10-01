@@ -332,7 +332,87 @@
   // suggestion. Only consulted once the strict match has found nothing.
   function findSeriesSuggestion(itemsByCode, description) {
     if (!description) return null;
-    return findUniqueDescriptionItem(itemsByCode, description, true);
+    const item = findUniqueDescriptionItem(itemsByCode, description, true);
+    if (item) return { item, note: "Same words, but the series number differs (e.g. ZLS vs ZLS1)." };
+    return findCloseSuggestion(itemsByCode, description);
+  }
+
+  // Second suggestion pass, for supplier names that use a different product
+  // word from Master Inventory -- e.g. Freedom's "ZLS1-Infinity 60mm-IS(
+  // 2.9m)Mill" for Master's "ZLS1 Housing 60 IS 01 MILL" (2900 mm). Like
+  // the series pass it is only ever a suggestion. What must still agree:
+  //   - family (ZLS1/SMB1/...; ZLS = ZLS1, never ZLS1 vs ZLS2), unless the
+  //     invoice names no family at all;
+  //   - every size number and every side/colour/finish word (IS/OS, A/B,
+  //     BLK/WHT, MILL, LEFT/RIGHT);
+  //   - the bar/roll length, when the invoice states one ("2.9m") and the
+  //     Master row has a bar length -- this picks the exact length row.
+  // At most ONE other Master word may be missing (Housing vs Infinity), a
+  // bare version number ("01") is ignored, and the best-scoring candidate
+  // must be unique -- a tie suggests nothing.
+  const CLOSE_REQUIRED_WORDS = new Set(["IS", "OS", "A", "B", "BLK", "WHT", "BLACK", "WHITE", "MILL", "LEFT", "RIGHT", "STR", "CNR"]);
+  const CLOSE_WORD_ALIASES = { BLACK: "BLK", WHITE: "WHT" };
+  // Product-family words, with or without a series number (ZLS / ZLS1).
+  // Two different families are never suggested for each other.
+  const PRODUCT_FAMILIES = new Set(["SMB", "ZLS", "ZLX", "IZLX", "RADC"]);
+  function familyBase(tok) {
+    const base = tok.replace(/\d{1,2}$/, "");
+    return PRODUCT_FAMILIES.has(base) || /^[A-Z]{2,}\d{1,2}$/.test(tok) ? base : null;
+  }
+  function closeTokens(text) {
+    return String(text || "")
+      .toUpperCase()
+      .replace(/\b(\d+)\s*MM\b/g, "$1")
+      .split(/[^A-Z0-9]+/)
+      .filter(Boolean)
+      .map((t) => CLOSE_WORD_ALIASES[t] || t);
+  }
+  function statedLengthMm(text) {
+    const m = String(text || "").match(/(\d+(?:\.\d+)?)\s*m(?![a-z])/i);
+    return m ? Math.round(parseFloat(m[1]) * 1000) : null;
+  }
+  function findCloseSuggestion(itemsByCode, description) {
+    const invLen = statedLengthMm(description);
+    const inv = new Set(closeTokens(String(description).replace(/(\d+(?:\.\d+)?)\s*m(?![a-z])/ig, " ")));
+    const invFamilies = [...inv].filter((t) => familyBase(t) && PRODUCT_FAMILIES.has(familyBase(t)) || /^[A-Z]{2,}\d{1,2}$/.test(t));
+    let best = null, tie = false;
+    for (const candidates of itemsByCode.values()) {
+      for (const c of candidates) {
+        if (invLen != null && c.bar_length_mm != null && Math.abs(c.bar_length_mm - invLen) > 50) continue;
+        // Never guess which length row is meant when the invoice states none.
+        if (invLen == null && candidates.length > 1 && candidates.some((o) => o.bar_length_mm !== c.bar_length_mm)) continue;
+        const own = String(c.description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
+        const master = closeTokens(own.replace(/(\d+(?:\.\d+)?)\s*m(?![a-z])/ig, " ")).filter((t) => !/^0\d$/.test(t) && t !== "AB"); // "AB" = Master's both-sides marker, rarely printed by suppliers
+        let matched = 0, missingWords = 0, ok = true;
+        const masterFamilies = master.filter((t) => familyBase(t) && (PRODUCT_FAMILIES.has(familyBase(t)) || /\d$/.test(t)));
+        // Invoice names a family the Master item doesn't carry -> a different product line.
+        if (invFamilies.length && !invFamilies.every((f) => masterFamilies.some((t) => familyBase(t) === familyBase(f)))) continue;
+        for (const t of master) {
+          if (inv.has(t)) { matched++; continue; }
+          if (masterFamilies.includes(t)) {
+            const base = familyBase(t);
+            // Same series, or one side bare (ZLS = ZLS1) -- never ZLS1 vs ZLS2.
+            const sameSeries = invFamilies.some((f) => familyBase(f) === base && (f === base || t === base || f === t));
+            if (sameSeries) { matched++; continue; }
+            if (invFamilies.length) { ok = false; break; } // a different family on the invoice
+            continue; // invoice names no family at all
+          }
+          if (/\d/.test(t) || CLOSE_REQUIRED_WORDS.has(t)) { ok = false; break; }
+          missingWords++;
+          if (missingWords > 1) { ok = false; break; }
+        }
+        if (!ok || matched < 3) continue;
+        const score = matched - missingWords;
+        if (!best || score > best.score) { best = { item: c, score, missingWords }; tie = false; }
+        else if (score === best.score && best.item.id !== c.id) tie = true;
+      }
+    }
+    if (!best || tie) return null;
+    const lenNote = invLen != null && best.item.bar_length_mm != null ? ` Bar length ${best.item.bar_length_mm} mm matches the invoice.` : "";
+    return {
+      item: best.item,
+      note: (best.missingWords ? "The product name differs from Master Inventory's, but family, size, side and finish agree." : "Close match on family, size, side and finish.") + lenNote,
+    };
   }
 
   // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
@@ -2538,7 +2618,12 @@
           lowConfidence: !!l.lowConfidence,
           codeDescConflict,
           suggestedItem: suggestion
-            ? { code: suggestion.item_code, description: suggestion.description || "" }
+            ? {
+                id: suggestion.item.id, code: suggestion.item.item_code,
+                description: suggestion.item.description || "",
+                barLengthMm: suggestion.item.bar_length_mm != null ? suggestion.item.bar_length_mm : null,
+                note: suggestion.note,
+              }
             : null,
         });
         return;
@@ -2654,7 +2739,7 @@
     return rows;
   }
 
-  function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit) {
+  function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit, exactItemId) {
     // The typed qty is still the invoice's own number (e.g. "1" roll) --
     // captured before row.qty is overwritten below, so the roll/bundle
     // check further down still has the pre-edit invoice quantity to expand,
@@ -2670,7 +2755,9 @@
     // item too.
     row.packageInfo = null;
     const candidates = ciState.itemsByCode.get(newCode) || [];
-    const item = pickInventoryRow({ kind: "checkin" }, candidates);
+    // A suggestion names one exact Master row (e.g. the 2900 mm length of a
+    // code that has 2500/2900/5100 mm rows) -- use that row, never a guess.
+    const item = (exactItemId && candidates.find((c) => c.id === exactItemId)) || pickInventoryRow({ kind: "checkin" }, candidates);
     if (!item) {
       row.current = null; row.newQty = null;
       row.status = "unmatched"; row.action = "pending"; row.decided = false;
@@ -2946,7 +3033,7 @@
       const suggested = r.suggestedItem;
       if (!suggested) return;
       r.suggestedItem = null;
-      recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit);
+      recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit, suggested.id);
     }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
@@ -3266,12 +3353,12 @@
           <div><span class="lbl">Invoice description</span> "${esc(r.description)}" matches Master Inventory item <span class="code">${esc(r.codeDescConflict.descItemCode)}</span>.</div>
           <div class="fp-exactdiff-warn">⚠ Not auto-matched — pick the correct item via Edit.</div>
         </div>` : "";
-      // A series-tolerant description match (e.g. ZLS vs ZLS1) -- offered,
-      // never applied, until the person clicks "Use this item".
+      // A series-tolerant or close description match -- offered, never
+      // applied, until the person clicks "Use this item".
       const suggestionNote = r.status === "unmatched" && !r.decided && r.suggestedItem ? `<div class="fp-exactdiff">
           <div class="fp-exactdiff-h">Possible match in Master Inventory</div>
-          <div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}</div>
-          <div class="small muted">Same words, but the series number differs (e.g. ZLS vs ZLS1). Not added unless you confirm.</div>
+          <div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}${r.suggestedItem.barLengthMm != null ? ` <span class="small muted">(${esc(r.suggestedItem.barLengthMm)} mm)</span>` : ""}</div>
+          <div class="small muted">${esc(r.suggestedItem.note || "")} Not added unless you confirm.</div>
           <div class="fp-row-actions"><button data-act="use-suggestion" data-i="${i}" class="on">Use this item</button></div>
         </div>` : "";
       // The exact code exists in Master Inventory, but the invoice's own

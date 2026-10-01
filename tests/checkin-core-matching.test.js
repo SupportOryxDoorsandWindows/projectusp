@@ -127,7 +127,8 @@ assert.equal(r.itemId, "brake-arm");
 r = matchOne(items, "", "ZLS1-Brake Spring 01");
 assert.equal(r.status, "unmatched");
 assert.equal(r.itemId, null);
-assert.deepEqual(r.suggestedItem, { code: "191021", description: "ZLS Brake Spring" });
+assert.equal(r.suggestedItem.code, "191021");
+assert.equal(r.suggestedItem.id, "brake-spring");
 r = matchOne(items, "", "ZLS Handle Bush 01");
 assert.equal(r.status, "unmatched");
 assert.equal(r.suggestedItem.code, "330024");
@@ -166,6 +167,35 @@ assert.equal(r.suggestedItem, null);
 r = matchOne(items, "330024", "ZLS Handle Bush");
 assert.equal(r.status, "ok");
 assert.equal(r.itemId, "handle-bush");
+
+// TEST: close-match suggestion -- Freedom's "Infinity" name for Master's
+// "Housing" profile, with the bar length in the name. Suggests the EXACT
+// length row, never auto-matches, and never crosses family, size or side.
+const profileItems = [
+  { id: "h60is-2500", item_code: "310004", description: "ZLS1 Housing 60 IS 01 MILL", bar_length_mm: 2500, current_qty: 41, unit_of_measure: "pcs", unit_cost: 29 },
+  { id: "h60is-2900", item_code: "310004", description: "ZLS1 Housing 60 IS 01 MILL", bar_length_mm: 2900, current_qty: 26, unit_of_measure: "pcs", unit_cost: 25 },
+  { id: "h60is-5100", item_code: "310004", description: "ZLS1 Housing 60 IS 01 MILL", bar_length_mm: 5100, current_qty: 0, unit_of_measure: "pcs", unit_cost: 0 },
+  { id: "h60os-2900", item_code: "310007", description: "ZLS1 Housing 60 OS 01 MILL", bar_length_mm: 2900, current_qty: 26, unit_of_measure: "pcs", unit_cost: 24 },
+  { id: "h80is-2900", item_code: "310016", description: "ZLS1 Housing 80 IS 01 MILL", bar_length_mm: 2900, current_qty: 27, unit_of_measure: "pcs", unit_cost: 30 },
+  { id: "recv-2900", item_code: "310025", description: "ZLS1 Receiver 01 MILL", bar_length_mm: 2900, current_qty: 0, unit_of_measure: "pcs", unit_cost: 0 },
+  { id: "izlx-60is", item_code: "630100", description: "IZLX Housing IS (Mill, 60)", bar_length_mm: 2900, current_qty: 34, unit_of_measure: "pcs", unit_cost: 40 },
+  { id: "smb-60is", item_code: "210025", description: "SMB1 Housing 60 IS MILL", bar_length_mm: 2900, current_qty: 54, unit_of_measure: "pcs", unit_cost: 20 },
+];
+r = matchOne(profileItems, "", "ZLS1-Infinity 60mm-IS( 2.9m)Mill");
+assert.equal(r.status, "unmatched");
+assert.equal(r.suggestedItem.id, "h60is-2900");
+r = matchOne(profileItems, "", "ZLS1-Infinity 60mm-IS( 2.5m)Mill");
+assert.equal(r.suggestedItem.id, "h60is-2500");
+r = matchOne(profileItems, "", "ZLS1-Infinity 60mm-OS( 2.9m)Mill");
+assert.equal(r.suggestedItem.id, "h60os-2900");
+// No length stated -> can't tell which length row is meant -> no suggestion.
+assert.equal(matchOne(profileItems, "", "ZLS1-Infinity 60mm-IS Mill").suggestedItem, null);
+// Size, side and family must agree -- never 60 vs 80, IS vs OS, ZLS1 vs SMB1/IZLX/ZLS2.
+assert.equal(matchOne(profileItems, "", "ZLS1-Infinity 70mm-IS( 2.9m)Mill").suggestedItem, null);
+assert.equal(matchOne(profileItems, "", "SMB2-Infinity 60mm-IS( 2.9m)Mill").suggestedItem, null);
+assert.equal(matchOne(profileItems, "", "ZLS2-Infinity 60mm-IS( 2.9m)Mill").suggestedItem, null);
+// No stated length row exists -> nothing suggested.
+assert.equal(matchOne(profileItems, "", "ZLS1-Infinity 60mm-IS( 3.3m)Mill").suggestedItem, null);
 
 // TEST: duplicate Master Inventory descriptions -- never auto-pick one.
 r = matchOne(items, "", "Duplicate Bracket Set");
