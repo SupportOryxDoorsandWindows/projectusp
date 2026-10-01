@@ -241,13 +241,13 @@
   // genuinely different words into the same one; it only forgives the exact
   // handful of OCR mix-ups it's meant to.
   const OCR_DIGIT_TO_LETTER = { 0: "O", 1: "I", 5: "S", 8: "B" };
-  function tokenizeForMatch(text) {
-    return String(text || "")
+  function tokenizeForMatch(text, raw) {
+    const tokens = String(text || "")
       .toUpperCase()
       .replace(/\bMETRES?\b/g, "M")
       .split(/[^A-Z0-9]+/)
-      .filter(Boolean)
-      .map((tok) => tok.replace(/[0158]/g, (c) => OCR_DIGIT_TO_LETTER[c]));
+      .filter(Boolean);
+    return raw ? tokens : tokens.map((tok) => tok.replace(/[0158]/g, (c) => OCR_DIGIT_TO_LETTER[c]));
   }
 
   // Master's own product-name words -- the ones that must all be present
@@ -265,9 +265,9 @@
   // side/colour word (A/B, BLK/WHT, Left/Right) stays required, so two
   // genuinely different Master Inventory records can never collapse onto
   // each other.
-  function masterCoreTokens(description) {
+  function masterCoreTokens(description, raw) {
     const withoutOwnCode = String(description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
-    const tokens = tokenizeForMatch(withoutOwnCode);
+    const tokens = tokenizeForMatch(withoutOwnCode, raw);
     if (tokens.length && tokens[tokens.length - 1] === "AB") tokens.pop();
     return tokens;
   }
@@ -282,19 +282,57 @@
   // assumed. Requires at least 2 core words (a single generic word like
   // "Screw" is too broad to trust alone) and, same as before, never guesses
   // between more than one equally-good candidate.
-  function findUniqueDescriptionItem(itemsByCode, description) {
+  //
+  // seriesTolerantPass is the looser pass behind findSeriesSuggestion(): a
+  // product-family word may appear with or without its series number on
+  // either side -- Master's "ZLS Brake Spring" against a supplier's
+  // "ZLS1-Brake Spring 01", or Master's "ZLS1 Handle Bush" against "ZLS
+  // Handle Bush". Two DIFFERENT series numbers (ZLS1 vs ZLS2, SMB1 vs SMB2)
+  // are never treated as the same word, and every other word, size and
+  // colour still has to be there, with exactly one candidate.
+  function findUniqueDescriptionItem(itemsByCode, description, seriesTolerantPass) {
     const invoiceTokens = new Set(tokenizeForMatch(description));
     if (!invoiceTokens.size) return null;
-    const matches = [];
-    for (const candidates of itemsByCode.values()) {
-      for (const candidate of candidates) {
-        const core = masterCoreTokens(candidate.description);
-        if (core.length < 2) continue;
-        if (core.every((tok) => invoiceTokens.has(tok))) matches.push(candidate);
-      }
+    const invoiceRaw = new Set(tokenizeForMatch(description, true));
+    const invoiceSeriesBase = new Set();
+    for (const tok of invoiceRaw) {
+      const m = tok.match(/^([A-Z]{2,})\d{1,2}$/);
+      if (m) invoiceSeriesBase.add(m[1]);
     }
-    const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
-    return unique.length === 1 ? unique[0] : null;
+
+    function seriesTolerant(tok, rawTok) {
+      if (invoiceTokens.has(tok)) return true;
+      // Master has the bare family word, the invoice adds a series number.
+      if (/^[A-Z]{2,}$/.test(rawTok) && invoiceSeriesBase.has(rawTok)) return true;
+      // Master has the series number, the invoice has the bare family word.
+      const m = rawTok.match(/^([A-Z]{2,})\d{1,2}$/);
+      return !!m && invoiceRaw.has(m[1]) && !invoiceSeriesBase.has(m[1]);
+    }
+
+    function uniqueMatch(test) {
+      const matches = [];
+      for (const candidates of itemsByCode.values()) {
+        for (const candidate of candidates) {
+          const core = masterCoreTokens(candidate.description);
+          if (core.length < 2) continue;
+          const coreRaw = masterCoreTokens(candidate.description, true);
+          if (core.every((tok, k) => test(tok, coreRaw[k]))) matches.push(candidate);
+        }
+      }
+      const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
+      return unique.length === 1 ? unique[0] : unique.length ? false : null;
+    }
+
+    return uniqueMatch(seriesTolerantPass ? seriesTolerant : (tok) => invoiceTokens.has(tok)) || null;
+  }
+
+  // Never auto-applied: whether "ZLS1-Brake Spring 01" really is Master's
+  // "ZLS Brake Spring" is a stock decision, so a series-tolerant match is
+  // only offered to the person doing the Check-in as a one-click
+  // suggestion. Only consulted once the strict match has found nothing.
+  function findSeriesSuggestion(itemsByCode, description) {
+    if (!description) return null;
+    return findUniqueDescriptionItem(itemsByCode, description, true);
   }
 
   // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
@@ -2432,6 +2470,9 @@
       // more specific explanation.
       const truncatedHint = !item && !codeDescConflict && l.code && l.code.length <= 4;
       if (!item) {
+        // Only for a plain "not found" -- a code/description conflict
+        // already has its own, more specific note.
+        const suggestion = !codeDescConflict ? findSeriesSuggestion(itemsByCode, pdfDescription) : null;
         rows.push({
           code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
@@ -2440,6 +2481,9 @@
           itemId: null, editing: false, truncatedHint,
           lowConfidence: !!l.lowConfidence,
           codeDescConflict,
+          suggestedItem: suggestion
+            ? { code: suggestion.item_code, description: suggestion.description || "" }
+            : null,
         });
         return;
       }
@@ -2839,6 +2883,15 @@
       // "3240 of 200m each".
       if (!acceptedDefault) r.unit = m.itemUnit;
     }
+    else if (act === "use-suggestion") {
+      // The person confirmed the suggested Master Inventory item -- resolved
+      // exactly as if they'd picked it via Edit, keeping the invoice's own
+      // description and unit so roll/bundle conversion still applies.
+      const suggested = r.suggestedItem;
+      if (!suggested) return;
+      r.suggestedItem = null;
+      recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit);
+    }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
     else if (act === "save-edit") {
@@ -3132,6 +3185,14 @@
           <div><span class="lbl">Invoice description</span> "${esc(r.description)}" matches Master Inventory item <span class="code">${esc(r.codeDescConflict.descItemCode)}</span>.</div>
           <div class="fp-exactdiff-warn">⚠ Not auto-matched — pick the correct item via Edit.</div>
         </div>` : "";
+      // A series-tolerant description match (e.g. ZLS vs ZLS1) -- offered,
+      // never applied, until the person clicks "Use this item".
+      const suggestionNote = r.status === "unmatched" && !r.decided && r.suggestedItem ? `<div class="fp-exactdiff">
+          <div class="fp-exactdiff-h">Possible match in Master Inventory</div>
+          <div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}</div>
+          <div class="small muted">Same words, but the series number differs (e.g. ZLS vs ZLS1). Not added unless you confirm.</div>
+          <div class="fp-row-actions"><button data-act="use-suggestion" data-i="${i}" class="on">Use this item</button></div>
+        </div>` : "";
       // The exact code exists in Master Inventory, but the invoice's own
       // Unit text doesn't match what's on file for it -- shown side by
       // side so the difference is visible before anyone decides anything,
@@ -3199,7 +3260,7 @@
         : genericMoney(landedUnitCost, cur);
       return `<tr class="${rowClass}">
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
-        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}</div></td>
+        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
