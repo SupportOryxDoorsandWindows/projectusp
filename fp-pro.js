@@ -2815,7 +2815,7 @@
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
-      ${row.code ? `<button data-act="new-item" data-i="${idx}">+ New item</button>` : ""}
+      <button data-act="new-item" data-i="${idx}">+ New item</button>
     </div>`;
   }
 
@@ -2922,6 +2922,9 @@
       // is just clearing the decision, same as any other row reset.
       r.status = "unmatched"; r.action = "pending"; r.decided = false;
       r.current = null; r.newQty = null; r.newItemData = null;
+      // A code typed into the New item form (the document had none) was
+      // never the document's own -- put the row back exactly as it was read.
+      if (r.typedNewCode) { r.code = ""; r.typedNewCode = false; }
     }
     else if (act === "save-new") {
       const descEl = document.getElementById(`ciNewDesc${idx}`);
@@ -2932,6 +2935,11 @@
       const approverEl = document.getElementById(`ciNewApprover${idx}`);
       const ackEl = document.getElementById(`ciNewAck${idx}`);
 
+      // The document's own code when it printed one; otherwise the code the
+      // person typed (e.g. Freedom's part number from their price list).
+      const codeEl = document.getElementById(`ciNewCode${idx}`);
+      const typedCode = !r.code;
+      const code = typedCode ? (codeEl ? codeEl.value.trim().toUpperCase() : "") : r.code;
       const description = descEl.value.trim();
       const category = catEl.value;
       const unit = unitEl.value.trim();
@@ -2939,6 +2947,19 @@
       const buffer = bufferEl.value.trim() ? parseFloat(bufferEl.value) : null;
       const approver = approverEl.value.trim();
 
+      if (!code) { ciStatus("Enter an item code for the new item -- the document didn't print one.", "err"); return; }
+      if (!/^[A-Z0-9][A-Z0-9-]{1,19}$/.test(code)) {
+        ciStatus("Item code can only use letters, numbers and dashes (e.g. 330110).", "err");
+        return;
+      }
+      if (typedCode && lookupExactCode(ciState.itemsByCode, code).length) {
+        ciStatus(`Item code ${code} already exists in the Master Inventory -- use Edit to pick it, or enter a different code.`, "err");
+        return;
+      }
+      if (typedCode && ciState.rows.some((other, j) => j !== idx && other.newItemData && String(other.newItemData.code).toUpperCase() === code)) {
+        ciStatus(`Item code ${code} is already being used for another new item on this Check-in.`, "err");
+        return;
+      }
       if (!description) { ciStatus("Enter a description before adding this item.", "err"); return; }
       if (!unit) { ciStatus("Enter a unit of measure before adding this item.", "err"); return; }
       if (!isFinite(cost) || cost <= 0) {
@@ -2955,6 +2976,7 @@
         return;
       }
 
+      if (typedCode) { r.code = code; r.typedNewCode = true; }
       r.description = description;
       r.unit = unit;
       r.invoiceUnitCost = cost;
@@ -3072,13 +3094,16 @@
           <td colspan="11">
             <div class="fp-newitem-panel">
               <div class="fp-newitem-tag">Will create a new Master Inventory record</div>
-              <h4>${esc(r.code)} — ${esc(r.description)}</h4>
-              <p class="small muted">This code was searched against the Master Inventory and no match was found.
+              <h4>${r.code ? `${esc(r.code)} — ` : ""}${esc(r.description)}</h4>
+              <p class="small muted">${r.code ? "This code was searched against the Master Inventory and no match was found." : "No Master Inventory item matches this line, and the document didn't print an item code."}
                 Fill in the fields below to add it as a new item. Nothing is written until <b>Confirm Check-in</b>.</p>
               ${warn}
               <div class="fp-newitem-grid">
-                <div class="field"><label>Item code</label><input value="${esc(r.code)}" readonly>
-                  <span class="hint">As read from the document — not editable here.</span></div>
+                ${r.code
+                  ? `<div class="field"><label>Item code</label><input value="${esc(r.code)}" readonly>
+                  <span class="hint">As read from the document — not editable here.</span></div>`
+                  : `<div class="field"><label>Item code</label><input id="ciNewCode${i}" placeholder="e.g. 330110" autocomplete="off">
+                  <span class="hint">Required. Use the supplier's part number from their price list or catalogue — must not already exist in the Master Inventory.</span></div>`}
                 <div class="field"><label>Description</label><input id="ciNewDesc${i}" value="${esc(r.description)}"></div>
                 <div class="field"><label>Category</label>
                   <select id="ciNewCategory${i}"><option value="">Select…</option><option>Accessory</option><option>Profile</option><option>Hardware</option></select>
@@ -3279,9 +3304,10 @@
     const warnBox = needDecisionTotal > 0 ? `<div class="fp-warn">
       <h4>${needDecisionTotal} item${needDecisionTotal === 1 ? "" : "s"} need${needDecisionTotal === 1 ? "s" : ""} a decision</h4>
       <ul>
-        ${noCodeUnmatched > 0 ? `<li><b>${noCodeUnmatched} packing-list row${noCodeUnmatched === 1 ? " has" : "s have"} no item code or price</b> —
-          click Edit and map ${noCodeUnmatched === 1 ? "it" : "each one"} to the correct Master Inventory item. The supplier quantity is retained,
-          and the existing Master Inventory cost will be used; no price is guessed. Acknowledge only if the row should be skipped.</li>` : ""}
+        ${noCodeUnmatched > 0 ? `<li><b>${noCodeUnmatched} row${noCodeUnmatched === 1 ? " has" : "s have"} no item code</b> —
+          click Edit and map ${noCodeUnmatched === 1 ? "it" : "each one"} to the correct Master Inventory item, or click + New item
+          (and enter its code) if it isn't in the Master Inventory yet. Where the document has no price, the existing Master Inventory
+          cost is used; no price is guessed. Acknowledge only if the row should be skipped.</li>` : ""}
         ${codedUnmatched > 0 ? `<li><b>${codedUnmatched} unmatched item${codedUnmatched === 1 ? "" : "s"}</b> — code not in the Master Inventory.
           Not checked in; click Edit and pick the correct item from the Master Inventory list, or Acknowledge
           to confirm you've seen it. A new Master Inventory item is never created from here.
