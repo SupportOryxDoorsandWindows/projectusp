@@ -4187,6 +4187,11 @@
     dlg.showModal();
   }
 
+  // What the Items table is currently showing (after search / Show filter,
+  // across every page) -- the Extract button exports exactly this.
+  let miCurrentItems = [];
+  let miFilteredItems = [];
+
   function renderMasterInventoryView(items, txs) {
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
     const lowStock = items.filter((it) => it.buffer_level != null && it.current_qty <= it.buffer_level);
@@ -4198,6 +4203,7 @@
 
     const PAGE_SIZE = 25;
     let page = 0;
+    miCurrentItems = items;
 
     function draw() {
       const q = ($("#miSearch").value || "").trim().toLowerCase();
@@ -4208,6 +4214,7 @@
         return it.item_code.toLowerCase().includes(q) || (it.description || "").toLowerCase().includes(q);
       });
 
+      miFilteredItems = filtered;
       const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
       page = Math.min(page, pageCount - 1);
       const start = page * PAGE_SIZE;
@@ -4440,6 +4447,92 @@
     return ws;
   }
 
+  // "Extract inventory": the Master Inventory item list as an .xlsx, exactly
+  // as the Items table shows it (search and Show filter applied, every
+  // page), with the same Oryx-blue title/header styling as the
+  // transactions report. Read-only -- nothing is written anywhere.
+  const INVENTORY_COLS = ["Code", "Description", "Category", "Bar length (mm)", "Unit", "Qty", "Unit cost (AED)", "Value (AED)", "Buffer level", "Status"];
+
+  function inventoryStatus(it) {
+    if (it.buffer_level != null && it.current_qty <= it.buffer_level) return "Low";
+    return it.current_qty <= 0 ? "Out" : "OK";
+  }
+
+  function buildInventorySheet(items, filterNote) {
+    const n = INVENTORY_COLS.length;
+    const aoa = [
+      ["Oryx Doors & Windows — Master Inventory"],
+      [`Generated ${todayISO()}${filterNote ? " — " + filterNote : ""}`],
+      [],
+      INVENTORY_COLS,
+    ];
+    const firstDataRow = aoa.length;
+    for (const it of items) {
+      aoa.push([
+        it.item_code, it.description || "", it.category || "",
+        it.bar_length_mm != null ? it.bar_length_mm : "",
+        it.unit_of_measure || "", it.current_qty, it.unit_cost, it.current_value,
+        it.buffer_level != null ? it.buffer_level : "", inventoryStatus(it),
+      ]);
+    }
+    const totalRow = aoa.length;
+    aoa.push(["", `${items.length} item${items.length === 1 ? "" : "s"}`, "", "", "", "", "Total",
+      items.reduce((s, it) => s + (it.current_value || 0), 0)]);
+
+    const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: n - 1 } }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 10 }, { wch: 15 }, { wch: 16 }, { wch: 12 }, { wch: 8 }];
+    ws["!rows"] = [{ hpt: 22 }];
+    ws["!autofilter"] = { ref: window.XLSX.utils.encode_range({ s: { r: firstDataRow - 1, c: 0 }, e: { r: totalRow - 1, c: n - 1 } }) };
+    const cell = (r, c) => {
+      const addr = window.XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) ws[addr] = { t: "s", v: "" };
+      return ws[addr];
+    };
+    cell(0, 0).s = STYLE_TITLE;
+    cell(1, 0).s = { font: { italic: true } };
+    for (let c = 0; c < n; c++) cell(firstDataRow - 1, c).s = STYLE_HEADER;
+    for (let r = firstDataRow; r <= totalRow; r++) {
+      for (const c of [6, 7]) if (typeof cell(r, c).v === "number") cell(r, c).z = '"AED" #,##0.00';
+    }
+    cell(totalRow, 6).s = STYLE_LABEL;
+    cell(totalRow, 7).s = STYLE_LABEL;
+    return ws;
+  }
+
+  async function exportInventoryList() {
+    const btn = $("#miExtractBtn");
+    const setStatus = (text, kind) => {
+      const el = $("#miExtractStatus");
+      el.textContent = text || "";
+      el.style.color = kind === "err" ? "var(--danger)" : "";
+    };
+    const items = miFilteredItems;
+    if (!miCurrentItems.length) { setStatus("The Master Inventory hasn't loaded yet — try again in a moment.", "err"); return; }
+    if (!items.length) { setStatus("No items match the current search/filter — nothing to extract.", "err"); return; }
+    btn.disabled = true;
+    setStatus("Preparing the Excel file…");
+    try {
+      await loadXlsxLib();
+      const q = ($("#miSearch").value || "").trim();
+      const onlyLow = $("#miFilter").value === "low";
+      const notes = [];
+      if (onlyLow) notes.push("low stock only");
+      if (q) notes.push(`search "${q}"`);
+      const filterNote = notes.length ? `filtered: ${notes.join(", ")} (${items.length} of ${miCurrentItems.length} items)` : "";
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, buildInventorySheet(items, filterNote), "Master Inventory");
+      const outName = `Oryx Master Inventory - ${todayISO()}${notes.length ? " (filtered)" : ""}.xlsx`;
+      window.XLSX.writeFile(wb, outName);
+      setStatus(`Extracted ${items.length} item${items.length === 1 ? "" : "s"} as ${outName}.`);
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not extract: " + err.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async function exportCheckoutReport() {
     const btn = $("#miExportBtn");
     const setStatus = (text, kind) => {
@@ -4492,6 +4585,8 @@
     if (miNavBtn) miNavBtn.addEventListener("click", loadMasterInventoryView);
     const exportBtn = $("#miExportBtn");
     if (exportBtn) exportBtn.addEventListener("click", exportCheckoutReport);
+    const extractBtn = $("#miExtractBtn");
+    if (extractBtn) extractBtn.addEventListener("click", exportInventoryList);
 
     wireCiDrop($("#ciDrop"), $("#ciPdf"));
     $("#ciExtract").addEventListener("click", ciAnalyse);
