@@ -1745,6 +1745,54 @@
     return { entries, reconciliation };
   }
 
+  // Freedom "Zipline Component Order Form" (e.g. "SUP -5- ORYX ZIPLINE
+  // COMPONENTS 24-04 - FOR APPROVAL.pdf"). pdf.js emits every table cell on
+  // its own line:
+  //   ZIP49 / ZLS1-Brake Adjuster-01 0.005 kgs / 2 / 3.69 / 200 / n/a / $738.00
+  //   (Ref No. / Name / Amt Per Screen / Mill Price / QTY / Colour / Sub Total)
+  // The Ref No. (ZIP49) is Freedom's own order-form reference, not an Oryx
+  // Master Inventory code, so it's never used as the item code -- rows are
+  // matched by description instead. Of the numbers between the name and the
+  // Sub Total, a row is only read when exactly one (price, quantity) pair
+  // multiplies out to that Sub Total -- "Amt Per Screen" and cut-length
+  // notes can never be mistaken for the quantity.
+  function parseZiplineOrderForm(text) {
+    if (!/Order Form/i.test(text) || !/Ref No/i.test(text) || !/Sub Total/i.test(text) || !/Mill Price/i.test(text)) return [];
+    const cells = text.split("\n").map((c) => c.trim()).filter(Boolean);
+    const headerIdx = cells.findIndex((c) => /^Sub Total$/i.test(c));
+    if (headerIdx === -1) return [];
+    const refRe = /^[A-Z]{2,5}\d{1,4}[A-Z]?$/;
+    const subTotalRe = /^\$\s?([\d,]+\.\d{2})$/;
+    const numRe = /^[\d,]+(?:\.\d+)?$/;
+    const starts = [];
+    for (let i = headerIdx + 1; i < cells.length; i++) if (refRe.test(cells[i])) starts.push(i);
+
+    const entries = [];
+    starts.forEach((start, k) => {
+      const end = k + 1 < starts.length ? starts[k + 1] : cells.length;
+      const row = cells.slice(start + 1, end);
+      const subIdx = row.findIndex((c) => subTotalRe.test(c));
+      if (subIdx < 1) return;
+      const subTotal = parseFloat(row[subIdx].match(subTotalRe)[1].replace(/,/g, ""));
+      const nameIdx = row.findIndex((c, i) => i < subIdx && /[A-Za-z]{3,}/.test(c) && !/^n\/a$/i.test(c));
+      if (nameIdx === -1) return;
+      const nums = row.slice(nameIdx + 1, subIdx)
+        .map((c, i) => (numRe.test(c) ? { i, v: parseFloat(c.replace(/,/g, "")), decimal: c.includes(".") } : null))
+        .filter((n) => n && n.v > 0);
+      const pairs = [];
+      for (const price of nums) {
+        for (const qty of nums) {
+          if (qty.i <= price.i) continue;
+          if (Math.abs(price.v * qty.v - subTotal) <= Math.max(0.02, subTotal * 0.0005)) pairs.push({ price, qty });
+        }
+      }
+      if (pairs.length !== 1) return;
+      const description = row[nameIdx].replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "").replace(/\s+/g, " ").trim();
+      entries.push({ code: "", description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
+    });
+    return entries;
+  }
+
   // Freedom Screens packing lists contain reliable received quantities but
   // deliberately omit item codes and prices. pdf.js may either keep each
   // visible row together or emit the Description column later in the text
@@ -2340,6 +2388,14 @@
         formatLabel: "Freedom approval/order table cells",
         entries: freedomCellStream.entries,
         reconciliation: freedomCellStream.reconciliation,
+      };
+    }
+    const ziplineEntries = parseZiplineOrderForm(text);
+    if (ziplineEntries.length > best.entries.length) {
+      best = {
+        formatId: "zipline-order-form",
+        formatLabel: "Zipline Component Order Form",
+        entries: ziplineEntries,
       };
     }
     const packingListEntries = parsePackingListRows(text);

@@ -286,4 +286,30 @@ assert.equal(
   null
 );
 
+// Freedom "Zipline Component Order Form": pdf.js emits one table cell per
+// line. Ref No. (ZIP49) is Freedom's own reference, never the item code;
+// quantity and price are the only pair that multiply out to the Sub Total
+// (never "Amt Per Screen" or the "CUT INTO 2.8 AND 2.3M" note).
+const ziplineForm = [
+  " Ref No.", " ", "Image", " ", "Name", " ", "Amt Per", "Screen", " ", "Mill Price", " ", "QTY",
+  "Powder", "Coat price", "QTY", " ", "Colour", " ", "Sub Total",
+  " ZIP49", " ", "ZLS1-Brake Adjuster-01 0.005 kgs", " ", "2", " ", "3.69", " ", "200", " ", "n/a", " ", "$738.00",
+  "ZIP57", " ", "Magnet Holder-STR (5.1m) 0.304 kgs", "Plastic Extrusion 5.1m Length", "20.03", " ", "50",
+  "CUT INTO", "2.8 AND", "2.3M", "$1,001.50",
+  "ZIP59", " ", "ZLS1-Magnet-01 (200m roll) 25 kgs", " ", "367.82", " ", "2", " ", "n/a", " ", "$735.64",
+  " Order Approved Name Signed Dated", " Zipline Component Order Form", " Page 1 of 1",
+].join("\n");
+const ziplineFormDoc = parseCheckinDocument(ziplineForm);
+assert.equal(ziplineFormDoc.formatId, "zipline-order-form");
+assert.deepEqual(
+  ziplineFormDoc.entries.map(({ code, description, qty, unitCost }) => ({ code, description, qty, unitCost })),
+  [
+    { code: "", description: "ZLS1-Brake Adjuster-01", qty: 200, unitCost: 3.69 },
+    { code: "", description: "Magnet Holder-STR (5.1m)", qty: 50, unitCost: 20.03 },
+    { code: "", description: "ZLS1-Magnet-01 (200m roll)", qty: 2, unitCost: 367.82 },
+  ]
+);
+// A row whose numbers don't multiply out to its Sub Total is never guessed.
+assert.equal(parseCheckinDocument(ziplineForm.replace("$738.00", "$739.00")).entries.length, 2);
+
 console.log("check-in parser tests passed");
