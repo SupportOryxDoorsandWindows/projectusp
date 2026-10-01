@@ -121,38 +121,47 @@ assert.equal(r.itemId, "drawbar-wht");
 r = matchOne(items, "", "ZLSI Brake Arm 0I"); // "1" read as "I", "01" as "0I"
 assert.equal(r.itemId, "brake-arm");
 
-// TEST: series number on one side only -- Master's bare family word "ZLS"
-// matches a supplier's "ZLS1" (real Freedom invoice line), and vice versa.
+// TEST: series number on one side only (Master "ZLS" vs supplier "ZLS1",
+// real Freedom invoice line, and vice versa) is never auto-matched -- it's
+// a stock decision -- but the item is offered as a one-click suggestion.
 r = matchOne(items, "", "ZLS1-Brake Spring 01");
-assert.equal(r.status, "ok");
-assert.equal(r.itemId, "brake-spring");
-assert.equal(r.code, "191021");
+assert.equal(r.status, "unmatched");
+assert.equal(r.itemId, null);
+assert.deepEqual(r.suggestedItem, { code: "191021", description: "ZLS Brake Spring" });
 r = matchOne(items, "", "ZLS Handle Bush 01");
-assert.equal(r.itemId, "handle-bush");
+assert.equal(r.status, "unmatched");
+assert.equal(r.suggestedItem.code, "330024");
 
-// TEST: two DIFFERENT series numbers are never the same product.
+// TEST: exact matches still auto-match with no suggestion attached.
+r = matchOne(items, "", "ZLS1 Brake Arm 01");
+assert.equal(r.status, "ok");
+assert.equal(r.suggestedItem, undefined);
+
+// TEST: two DIFFERENT series numbers are never suggested.
 r = matchOne(items, "", "SMB2 Drawbar Cap A BLK");
 assert.equal(r.status, "unmatched");
+assert.equal(r.suggestedItem, null);
 r = matchOne(items, "", "ZLS2 Handle Bush");
-assert.equal(r.status, "unmatched");
+assert.equal(r.suggestedItem, null);
 
-// TEST: the looser series pass still needs the colour -- "ZLS Handle Mount"
-// with BLK and WHT variants in Master stays unmatched, never guessed.
+// TEST: the suggestion still needs the colour -- "ZLS Handle Mount" with
+// BLK and WHT variants in Master gets no suggestion, never a guess.
 const mountItems = items.concat([
   { id: "mount-blk", item_code: "330021", description: "ZLS1 Handle Mount AB BLK", current_qty: 10, unit_of_measure: "pcs", unit_cost: 5 },
   { id: "mount-wht", item_code: "330022", description: "ZLS1 Handle Mount AB WHT", current_qty: 10, unit_of_measure: "pcs", unit_cost: 5 },
 ]);
 r = matchOne(mountItems, "", "ZLS Handle Mount 01");
-assert.equal(r.status, "unmatched");
+assert.equal(r.suggestedItem, null);
 r = matchOne(mountItems, "", "ZLS Handle Mount AB BLK");
-assert.equal(r.itemId, "mount-blk");
+assert.equal(r.suggestedItem.code, "330021");
 
-// TEST: a product that isn't in Master at all stays unmatched, even though
-// a different family's item shares most of its words.
+// TEST: a Flyscreen (ZLS1) part with no ZLS1 record is never suggested as
+// the Smartscreen (SMB1) or ZLX item with a similar name -- it's a new item.
 r = matchOne(items, "", "ZLS1 Drawbar Cap 01 Right/ Black");
 assert.equal(r.status, "unmatched");
+assert.equal(r.suggestedItem, null);
 
-// TEST: the looser series pass never creates a code/description conflict
+// TEST: the series-tolerant pass never creates a code/description conflict
 // on a row whose code already matched.
 r = matchOne(items, "330024", "ZLS Handle Bush");
 assert.equal(r.status, "ok");

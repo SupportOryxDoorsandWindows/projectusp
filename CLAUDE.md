@@ -15,5 +15,8 @@ product lines — never treat one family's item as a match for another's:
   Black" from Freedom invoices) — not a match for the SMB1 or ZLX item with a
   similar name.
 - The Check-in description matcher (`findUniqueDescriptionItem` in
-  `fp-pro.js`) treats "ZLS" and "ZLS1" as the same family word, but never
-  matches across families or across different series numbers.
+  `fp-pro.js`) never auto-matches across a series-number difference
+  ("ZLS" vs "ZLS1"). Such a match is only offered as a "Possible match —
+  Use this item" suggestion (`findSeriesSuggestion`), because deciding that
+  two names are the same part is the stock team's call, not the system's.
+  It never suggests across families or across different series numbers.
