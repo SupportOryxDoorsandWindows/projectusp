@@ -633,6 +633,35 @@
     };
   }
 
+  // "Deleted items" box shared by Check-out and Check-in. Each deleted row is
+  // kept whole ({row, index}) so Restore can put it back exactly as it was,
+  // at its original position -- nothing is written until Confirm, so a
+  // deletion can always be undone before then. The Restore buttons sit in
+  // .fp-row-actions so each page's existing button wiring handles them.
+  function deletedItemsBox(deleted, pageName, consequence, qtyOf) {
+    if (!deleted || !deleted.length) return "";
+    return `<div class="fp-removed-note">
+      <b>${deleted.length} item${deleted.length === 1 ? "" : "s"} deleted from this ${pageName}</b> — ${consequence}
+      Click <b>Restore</b> to put an item back exactly as it was.
+      <ul class="fp-removed-list">${deleted.map((d, k) => `<li>
+        <span>${d.row.code ? `<span class="code">${esc(d.row.code)}</span> — ` : ""}${esc(d.row.description || "")} (${qtyOf(d.row)})</span>
+        <span class="fp-row-actions"><button data-act="restore" data-i="${k}" title="Put this item back in the list">Restore</button></span>
+      </li>`).join("")}</ul>
+    </div>`;
+  }
+  function deleteRowAt(rows, deleted, idx) {
+    const [row] = rows.splice(idx, 1);
+    row.editing = false; row.creatingNew = false;
+    deleted.push({ row, index: idx });
+    return row;
+  }
+  function restoreDeleted(rows, deleted, k) {
+    const entry = deleted.splice(k, 1)[0];
+    if (!entry) return null;
+    rows.splice(Math.min(entry.index, rows.length), 0, entry.row);
+    return entry.row;
+  }
+
   // One line, same order on every row: [Skip / Undo / Acknowledge] · Edit ·
   // Delete -- Delete always last, set slightly apart as the destructive one.
   function renderRowActionButtons(idx, row) {
@@ -661,24 +690,31 @@
       render();
       return;
     }
+    if (act === "restore") {
+      const back = restoreDeleted(state.rows, state.removedRows || [], idx);
+      if (back) {
+        render();
+        status(`Restored ${back.code ? back.code + " — " : ""}${back.description || "item"} to the Check-out.`);
+      }
+      return;
+    }
     const r = state.rows[idx];
     if (!r) return;
     if (act === "delete") {
       // Removed outright, not just skipped: the row leaves the list, so it can
       // no longer be acknowledged, edited or deducted. Nothing has been
       // written yet, so this only changes what Confirm would send.
-      const label = `${r.code ? r.code + " — " : ""}${r.description || "this item"} (${fmt(r.requiredQty)} ${r.unit || ""})`.trim();
+      const label = `${r.code ? r.code + " — " : ""}${r.description || "this item"} (${[fmt(r.requiredQty), r.unit].filter(Boolean).join(" ")})`;
       const ok = window.confirm(
         `Delete ${label} from this Check-out?\n\n` +
         "It will be removed from the list, so it can no longer be acknowledged and will not be deducted from the Master Inventory.\n\n" +
-        "To bring it back, analyse the PDF again (or add the item again by hand)."
+        "You can bring it back with Restore in the \"Deleted items\" box below the table, any time before you confirm."
       );
       if (!ok) return;
-      state.rows.splice(idx, 1);
       state.removedRows = state.removedRows || [];
-      state.removedRows.push({ code: r.code, description: r.description, requiredQty: r.requiredQty, unit: r.unit });
+      deleteRowAt(state.rows, state.removedRows, idx);
       render();
-      status(`Deleted ${label} — it will not be acknowledged or deducted.`);
+      status(`Deleted ${label} — it will not be acknowledged or deducted. Use Restore below the table to bring it back.`);
       return;
     }
     if (act === "skip") { r.action = "skip"; r.decided = true; }
@@ -767,11 +803,8 @@
           </span></li>` : ""}
       </ul>
     </div>` : "";
-    const removed = state.removedRows || [];
-    const removedNote = removed.length ? `<div class="fp-removed-note">
-      <b>${removed.length} item${removed.length === 1 ? "" : "s"} deleted from this Check-out</b> — not acknowledged and not deducted:
-      <ul>${removed.map((d) => `<li>${d.code ? `<span class="code">${esc(d.code)}</span> — ` : ""}${esc(d.description || "")} (${fmt(d.requiredQty)} ${esc(d.unit || "")})</li>`).join("")}</ul>
-    </div>` : "";
+    const removedNote = deletedItemsBox(state.removedRows, "Check-out", "not acknowledged and not deducted.",
+      (row) => esc([fmt(row.requiredQty), row.unit].filter(Boolean).join(" ")));
     const shortageNote = t.shortages > 0 ? `<p class="small muted" style="color:var(--danger)">
       ${t.shortages} item${t.shortages === 1 ? "" : "s"} will go negative — allowed, and shown in red below.
       A future Check-in will correct it.</p>` : "";
@@ -3015,6 +3048,8 @@
   }
 
   function ciRenderRowActionButtons(idx, row) {
+    // Delete is always the last button, whatever the row's status.
+    const deleteBtn = `<button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this line from the Check-in">Delete</button>`;
     const on = (yes) => yes ? "on" : "";
     const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
     if (row.status === "ok") {
@@ -3022,12 +3057,14 @@
         <button data-act="skip" data-i="${idx}" class="${on(row.action === "skip")}">Skip</button>
         ${row.action === "skip" ? `<button data-act="add" data-i="${idx}">Undo</button>` : ""}
         ${editBtn}
+        ${deleteBtn}
       </div>`;
     }
     if (row.status === "new") {
       return `<div class="fp-row-actions">
         <button data-act="undo-new" data-i="${idx}">Undo</button>
         ${editBtn}
+        ${deleteBtn}
       </div>`;
     }
     if (row.status === "exact-diff") {
@@ -3039,6 +3076,7 @@
         <button data-act="use-existing" data-i="${idx}" class="on">Use Existing Item</button>
         ${editBtn}
         <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
+        ${deleteBtn}
       </div>`;
     }
     if (row.status === "pack-review") {
@@ -3049,16 +3087,46 @@
       return `<div class="fp-row-actions">
         ${editBtn}
         <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
+        ${deleteBtn}
       </div>`;
     }
     return `<div class="fp-row-actions">
       <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Acknowledge</button>
       ${editBtn}
       <button data-act="new-item" data-i="${idx}">+ New item</button>
+      ${deleteBtn}
     </div>`;
   }
 
   function applyCiRowAction(idx, act) {
+    if (act === "restore") {
+      const back = restoreDeleted(ciState.rows, ciState.deletedRows || [], idx);
+      if (back) {
+        ciRender();
+        ciStatus(`Restored ${back.code ? back.code + " — " : ""}${back.description || "line"} to the Check-in.`);
+      }
+      return;
+    }
+    if (act === "delete") {
+      const r = ciState.rows[idx];
+      if (!r) return;
+      // Removed outright, not just acknowledged: the line leaves the list, so
+      // it can no longer be acknowledged, matched or checked in, and it drops
+      // out of the shipping split. Nothing is written until Confirm, and
+      // Restore puts it back exactly as it was.
+      const label = `${r.code ? r.code + " — " : ""}${r.description || "this line"} (${[fmt(r.qty), r.unit].filter(Boolean).join(" ")})`;
+      const ok = window.confirm(
+        `Delete ${label} from this Check-in?\n\n` +
+        "It will be removed from the list, so it can no longer be acknowledged and will not be added to the Master Inventory.\n\n" +
+        "You can bring it back with Restore in the \"Deleted items\" box below the table, any time before you confirm."
+      );
+      if (!ok) return;
+      ciState.deletedRows = ciState.deletedRows || [];
+      deleteRowAt(ciState.rows, ciState.deletedRows, idx);
+      ciRender();
+      ciStatus(`Deleted ${label} — it will not be acknowledged or checked in. Use Restore below the table to bring it back.`);
+      return;
+    }
     if (act === "skip-all-unmatched") {
       ciState.rows.forEach((rr) => {
         if (rr.decided) return;
@@ -3706,6 +3774,9 @@
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>
+      ${ciState.rows.length ? "" : `<p class="small muted">Every line has been deleted from this Check-in — there is nothing left to add.</p>`}
+      ${deletedItemsBox(ciState.deletedRows, "Check-in", "not acknowledged and not added to the Master Inventory.",
+        (row) => esc([fmt(row.qty), row.unit].filter(Boolean).join(" ")))}
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been added yet.
       The confirm button unlocks once every unmatched row has been edited or acknowledged${cur !== "AED" ? " and the exchange rate is entered" : ""}.</p>
     `;
@@ -4086,6 +4157,7 @@
         : [];
       if (isStale()) return;
       ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode);
+      ciState.deletedRows = [];
       ciRender();
 
       const t = ciTally();
@@ -4128,6 +4200,7 @@
   function ciResetAll() {
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
+    ciState.deletedRows = [];
     ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
@@ -4243,6 +4316,7 @@
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     ciState.usedOcr = false; ciState.lowConfidenceFallback = false;
     ciState.rows = rows;
+    ciState.deletedRows = [];
     ciRender();
     const t = ciTally();
     ciStatus(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
@@ -4304,6 +4378,7 @@
       // previous file (see ciAnalyse) so its results can never land here.
       ciAnalyseToken++;
       ciState.rows = null;
+      ciState.deletedRows = [];
       ciState.header = null;
       ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
       ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;

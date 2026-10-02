@@ -417,6 +417,8 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
   font-size:13px; color:var(--text-muted);
 }
 .fp-removed-note ul{margin:var(--space-1) 0 0; padding-left:var(--space-5)}
+.fp-removed-list li{display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:2px 0}
+.fp-removed-list .fp-row-actions{flex:none}
 .fp-skipped td{opacity:0.55}
 .fp-editing td{background:var(--accent)}
 .fp-inline-input{
@@ -584,20 +586,23 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
   box-shadow:0 1px 0 #eef2f6;
 }
 .fp-checkin-table th:nth-child(1){width:8%}
-.fp-checkin-table th:nth-child(2){width:21%}
+.fp-checkin-table th:nth-child(2){width:22%}
 .fp-checkin-table th:nth-child(3){width:6%}
-.fp-checkin-table th:nth-child(4){width:8%}
+.fp-checkin-table th:nth-child(4){width:7%}
 .fp-checkin-table th:nth-child(5){width:6%}
-.fp-checkin-table th:nth-child(6){width:10%}
-.fp-checkin-table th:nth-child(7){width:8%}
-.fp-checkin-table th:nth-child(8){width:11%}
+.fp-checkin-table th:nth-child(6){width:9%}
+.fp-checkin-table th:nth-child(7){width:7%}
+.fp-checkin-table th:nth-child(8){width:9%}
 .fp-checkin-table th:nth-child(9){width:9%}
-.fp-checkin-table th:nth-child(10){width:6%}
-.fp-checkin-table th:nth-child(11){width:7%}
+.fp-checkin-table th:nth-child(10){width:8%}
+.fp-checkin-table th:nth-child(11){width:9%}
 .fp-checkin-table td.num{white-space:normal}
 .fp-checkin-code-cell,.fp-checkin-description-cell{
   display:flex; align-items:center; gap:8px; min-width:0;
 }
+/* The description text always keeps the full cell width; notes and the
+   "Possible match" box stack underneath it instead of squeezing it. */
+.fp-checkin-description-cell{flex-direction:column; align-items:stretch; gap:6px}
 .fp-checkin-code-cell{flex-wrap:wrap}
 .fp-checkin-code-cell > :first-child,.fp-checkin-description-cell > :first-child{min-width:0}
 .fp-checkin-table th:nth-child(1),.fp-checkin-table th:nth-child(2),
@@ -610,7 +615,8 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
 .fp-checkin-table td:nth-child(11) .fp-row-actions{
   flex-direction:column; align-items:center; flex-wrap:nowrap;
 }
-.fp-checkin-table td:nth-child(11) .fp-row-actions button{min-width:52px}
+.fp-checkin-table td:nth-child(11) .fp-row-actions button{min-width:52px; white-space:nowrap}
+.fp-checkin-table td:nth-child(10) span{white-space:nowrap}
 .fp-auto-match-note{
   display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px;
   border:1px solid var(--line);
