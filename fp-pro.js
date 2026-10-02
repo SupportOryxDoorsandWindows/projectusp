@@ -1236,10 +1236,11 @@
   //  2. a bare "$" with country details elsewhere on the document -- an ABN,
   //     "Pty Ltd", "Australia" or a .com.au address means AUD; "United
   //     States"/"USA"/"U.S." means USD;
-  //  3. a bare "$" with no such details -> currency: null, needsChoice: true.
-  //     "$" alone can't say which dollar (Freedom bills in both), so the
-  //     Check-in screen asks and Confirm stays locked until it's answered --
-  //     never silently treated as AED.
+  //  3. a bare "$" with no such details -> USD automatically (Freedom's
+  //     priced documents to Oryx are in USD, and "$" on an international
+  //     invoice almost always means US dollars). Shown on screen as
+  //     "assumed USD" with a USD/AUD switch preselected, so it can be
+  //     corrected, but nobody has to act -- and it's never treated as AED.
   //  Nothing at all -> AED.
   const DOLLAR_AMOUNT_RE = /(^|[^A-Za-z])\$\s?\d/;
   // Australia-only markers. GST is deliberately not one (India, Singapore and
@@ -1263,7 +1264,7 @@
       const aud = AUD_CONTEXT_RE.test(text), usd = USD_CONTEXT_RE.test(text);
       if (aud && !usd) return { currency: "AUD", basis: "dollar-australian-details", needsChoice: false };
       if (usd && !aud) return { currency: "USD", basis: "dollar-us-details", needsChoice: false };
-      return { currency: null, basis: "dollar-unknown", needsChoice: true };
+      return { currency: "USD", basis: "dollar-default-usd", needsChoice: false };
     }
     return { currency: "AED", basis: "none", needsChoice: false };
   }
@@ -2895,6 +2896,7 @@
     "dollar-australian-details": "Detected as AUD: prices are in \"$\" and the document carries Australian details (e.g. ABN, Pty Ltd, Australia).",
     "dollar-us-details": "Detected as USD: prices are in \"$\" and the document carries US details.",
     "dollar-chosen": "Prices are in \"$\" — currency chosen on this screen.",
+    "dollar-default-usd": "Prices are in \"$\" with no country details on the document, so USD was used automatically. If this supplier billed in Australian dollars, switch it to AUD above and the rate updates.",
   };
 
   // Landed Cost: splits ciState.shippingAmountOriginal equally across every

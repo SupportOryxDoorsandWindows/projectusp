@@ -35,7 +35,8 @@ product lines — never treat one family's item as a match for another's:
 - `detectDocumentCurrencyInfo` in `fp-pro.js`: a written code or code-marked
   symbol (USD, AUD, US$, A$…) wins; a bare "$" uses Australia-only markers
   (ABN, Pty Ltd, Australia, .com.au — not GST, which India also uses) or US
-  markers; a bare "$" with no markers is never assumed (never AED) — the
-  Check-in screen asks USD or AUD and Confirm stays locked until answered.
+  markers; a bare "$" with no markers is USD automatically (the owner wants
+  this automated; never AED). The screen shows "USD used automatically" with
+  a preselected USD/AUD switch for the rare correction — nobody must act.
 - The AED rate comes from the fawazahmed0 currency-api on jsDelivr, for the
   invoice date first, then latest, then the last rate on file.

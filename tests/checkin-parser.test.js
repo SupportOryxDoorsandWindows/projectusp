@@ -323,9 +323,10 @@ assert.equal(cur("Unit A$ 4.90 Total AU$490.00").currency, "AUD");
 assert.equal(cur("Freedom Screens Pty Ltd ABN 12 345 678 901\nZIP49 Brake Adjuster $738.00").currency, "AUD");
 assert.equal(cur("Shipped from Denver, USA\nZIP49 Brake Adjuster $738.00").currency, "USD");
 const bareDollar = cur(ziplineForm);
-assert.equal(bareDollar.currency, null);
-assert.equal(bareDollar.needsChoice, true);
-assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, null);
+assert.equal(bareDollar.currency, "USD");
+assert.equal(bareDollar.basis, "dollar-default-usd");
+assert.equal(bareDollar.needsChoice, false);
+assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, "USD");
 assert.equal(cur("Nylon Cord 10 4.50 45.00").currency, "AED");
 assert.equal(cur("Price AED 12.00").currency, "AED");
 
