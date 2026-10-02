@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed };\n})();`
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo } = context.window.__ciTest;
 
 const freedomApproval = `
 COMMON PARTS
@@ -311,5 +311,22 @@ assert.deepEqual(
 );
 // A row whose numbers don't multiply out to its Sub Total is never guessed.
 assert.equal(parseCheckinDocument(ziplineForm.replace("$738.00", "$739.00")).entries.length, 2);
+
+// Currency detection: written codes/symbols first; a bare "$" uses the
+// document's own country details; with none, it's left for the person to
+// choose (never silently AED).
+const cur = (t) => detectDocumentCurrencyInfo(t);
+assert.equal(cur("Price USD 3.51 Total USD 351.00").currency, "USD");
+assert.equal(cur("Price AUD 902.50").currency, "AUD");
+assert.equal(cur("Unit US$ 4.90 Sub Total US$490.00").currency, "USD");
+assert.equal(cur("Unit A$ 4.90 Total AU$490.00").currency, "AUD");
+assert.equal(cur("Freedom Screens Pty Ltd ABN 12 345 678 901\nZIP49 Brake Adjuster $738.00").currency, "AUD");
+assert.equal(cur("Shipped from Denver, USA\nZIP49 Brake Adjuster $738.00").currency, "USD");
+const bareDollar = cur(ziplineForm);
+assert.equal(bareDollar.currency, null);
+assert.equal(bareDollar.needsChoice, true);
+assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, null);
+assert.equal(cur("Nylon Cord 10 4.50 45.00").currency, "AED");
+assert.equal(cur("Price AED 12.00").currency, "AED");
 
 console.log("check-in parser tests passed");

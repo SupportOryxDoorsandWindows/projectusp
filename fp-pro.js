@@ -1230,17 +1230,47 @@
   // notice) if it picked the wrong one since it's shown plainly in the
   // preview before anything is confirmed.
   const SUPPORTED_CURRENCIES = ["AED", "AUD", "USD", "EUR", "GBP", "SAR", "QAR", "KWD", "OMR", "BHD"];
-  function detectDocumentCurrency(text) {
-    const re = new RegExp(`\\b(${SUPPORTED_CURRENCIES.join("|")})\\b`, "g");
+  // Detects the document's currency, most certain evidence first:
+  //  1. a written code or a code-marked symbol -- USD, AUD, US$, A$, AU$...
+  //     (most frequent wins, as before);
+  //  2. a bare "$" with country details elsewhere on the document -- an ABN,
+  //     "Pty Ltd", "Australia" or a .com.au address means AUD; "United
+  //     States"/"USA"/"U.S." means USD;
+  //  3. a bare "$" with no such details -> currency: null, needsChoice: true.
+  //     "$" alone can't say which dollar (Freedom bills in both), so the
+  //     Check-in screen asks and Confirm stays locked until it's answered --
+  //     never silently treated as AED.
+  //  Nothing at all -> AED.
+  const DOLLAR_AMOUNT_RE = /(^|[^A-Za-z])\$\s?\d/;
+  // Australia-only markers. GST is deliberately not one (India, Singapore and
+  // NZ charge GST too -- Freedom also ships from India).
+  const AUD_CONTEXT_RE = /\b(Australia|A\.?B\.?N\.?|Pty\.?\s*Ltd|NSW|QLD|Queensland|New South Wales)\b|\.com\.au\b/i;
+  const USD_CONTEXT_RE = /\b(United States|U\.S\.A\.?|USA)\b/;
+  function detectDocumentCurrencyInfo(text) {
     const counts = {};
+    const add = (cur) => { counts[cur] = (counts[cur] || 0) + 1; };
+    const codeRe = new RegExp(`\\b(${SUPPORTED_CURRENCIES.join("|")})\\b`, "g");
     let m;
-    while ((m = re.exec(text)) !== null) counts[m[1]] = (counts[m[1]] || 0) + 1;
-    let best = "AED", bestCount = 0;
+    while ((m = codeRe.exec(text)) !== null) add(m[1]);
+    const symbolRe = /\b(US|AU|A)\$/g;
+    while ((m = symbolRe.exec(text)) !== null) add(m[1] === "US" ? "USD" : "AUD");
+    let best = null, bestCount = 0;
     for (const [cur, n] of Object.entries(counts)) {
       if (n > bestCount) { best = cur; bestCount = n; }
     }
-    return best;
+    if (best) return { currency: best, basis: "stated", needsChoice: false };
+    if (DOLLAR_AMOUNT_RE.test(text)) {
+      const aud = AUD_CONTEXT_RE.test(text), usd = USD_CONTEXT_RE.test(text);
+      if (aud && !usd) return { currency: "AUD", basis: "dollar-australian-details", needsChoice: false };
+      if (usd && !aud) return { currency: "USD", basis: "dollar-us-details", needsChoice: false };
+      return { currency: null, basis: "dollar-unknown", needsChoice: true };
+    }
+    return { currency: "AED", basis: "none", needsChoice: false };
   }
+  function detectDocumentCurrency(text) {
+    return detectDocumentCurrencyInfo(text).currency || "AED";
+  }
+
 
   // exchange_rates is a resilience cache, not the source of truth: it's
   // updated automatically after every successful Check-in (see
@@ -2828,8 +2858,44 @@
   }
 
   function ciRate() {
+    if (!ciState.currency) return null; // "$" whose dollar hasn't been chosen yet
     return ciState.currency === "AED" ? 1 : (ciState.exchangeRate || null);
   }
+
+  // Fetches the ciState.currency -> AED rate for the invoice date: currency
+  // API first, then the last rate on file, else flagged for manual entry.
+  async function ciLoadExchangeRate(isoDocDate) {
+    if (!ciState.currency) {
+      ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "n/a";
+      return;
+    }
+    if (ciState.currency === "AED") {
+      ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+      return;
+    }
+    ciStatus(`Fetching the ${ciState.currency}→AED exchange rate…`);
+    const fetched = await fetchCheckinExchangeRate(ciState.currency, isoDocDate);
+    if (fetched) {
+      ciState.exchangeRate = fetched.rate;
+      ciState.rateDate = fetched.rateDate;
+      ciState.rateSource = fetched.source;
+      return;
+    }
+    const cached = ciState.ratesByCurrency && ciState.ratesByCurrency.get(ciState.currency);
+    if (cached) {
+      ciState.exchangeRate = cached.rate;
+      ciState.rateDate = cached.asOf ? String(cached.asOf).slice(0, 10) : null;
+      ciState.rateSource = "cache-fallback";
+    } else {
+      ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "unavailable";
+    }
+  }
+
+  const CURRENCY_BASIS_NOTE = {
+    "dollar-australian-details": "Detected as AUD: prices are in \"$\" and the document carries Australian details (e.g. ABN, Pty Ltd, Australia).",
+    "dollar-us-details": "Detected as USD: prices are in \"$\" and the document carries US details.",
+    "dollar-chosen": "Prices are in \"$\" — currency chosen on this screen.",
+  };
 
   // Landed Cost: splits ciState.shippingAmountOriginal equally across every
   // *inventory line item* currently checking in (action "add" or
@@ -3248,6 +3314,7 @@
     const noCodeUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && !r.code && !r.codeDescConflict).length;
     const codedUnmatched = unmatched - noCodeUnmatched - conflictUnmatched;
     const cur = ciState.currency;
+    const curLabel = cur || "$"; // display only: "$" until the dollar is chosen
     const shipAlloc = ciShippingAllocation();
     const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
     const shippingPerItem = ciState.shippingAmountOriginal > 0 && shippingActiveCount > 0
@@ -3284,7 +3351,7 @@
                 <div class="field"><label>Unit of measure</label><input id="ciNewUnit${i}" value="${esc(r.unit || "pcs")}"></div>
                 <div class="field"><label>Opening quantity</label><input value="${fmt(r.qty)}" readonly>
                   <span class="hint">= the Check-in quantity for this line.</span></div>
-                <div class="field"><label>Unit cost (${esc(cur)})</label>
+                <div class="field"><label>Unit cost (${esc(curLabel)})</label>
                   <input id="ciNewCost${i}" type="number" step="any" min="0" value="${r.invoiceUnitCost != null ? r.invoiceUnitCost : ""}" placeholder="e.g. 4.80">
                   <span class="hint">Required — never guessed for a new item.</span></div>
                 <div class="field full"><label>Buffer / low-stock level <span class="opt">(optional)</span></label>
@@ -3329,7 +3396,7 @@
             <input class="fp-inline-input fp-inline-input-unit" id="ciEditUnit${i}" type="text" value="${esc(r.unit)}">
           </td>
           <td class="num">—</td>
-          <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+          <td class="num">${genericMoney(r.invoiceUnitCost, curLabel)}</td>
           <td class="num">—</td>
           <td class="num">—</td>
           <td class="num">—</td>
@@ -3447,15 +3514,15 @@
       const expandedPackage = pkgForDisplay && pkgForDisplay.rollCount != null && pkgForDisplay.unit === "m";
       const storedUnitCostAed = storedInventoryUnitCostAed(r, landedUnitCost, rate);
       const unitCostDisplay = expandedPackage
-        ? `${genericUnitMoney(r.invoiceUnitCost, cur, "m")}
-           <div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, cur)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>
+        ? `${genericUnitMoney(r.invoiceUnitCost, curLabel, "m")}
+           <div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, curLabel)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>
            <div class="small muted">Stored: ${money(storedUnitCostAed)} / m</div>`
-        : genericMoney(r.invoiceUnitCost, cur);
+        : genericMoney(r.invoiceUnitCost, curLabel);
       const landedUnitCostDisplay = landedUnitCost == null
         ? "—"
         : expandedPackage
-        ? genericUnitMoney(landedUnitCost, cur, "m")
-        : genericMoney(landedUnitCost, cur);
+        ? genericUnitMoney(landedUnitCost, curLabel, "m")
+        : genericMoney(landedUnitCost, curLabel);
       return `<tr class="${rowClass}">
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
         <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
@@ -3463,7 +3530,7 @@
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
         <td class="num">${unitCostDisplay}</td>
-        <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, cur) : "—"}</td>
+        <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, curLabel) : "—"}</td>
         <td class="num">${landedUnitCostDisplay}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${ciStatusChip(r, displayStatus)}</td>
@@ -3546,10 +3613,28 @@
 
     const rateDateNote = ciState.rateDate ? ` (rate date ${esc(ciState.rateDate)})` : "";
     const sourceLabel = RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource;
-    const currencyCard = cur === "AED"
+    // Bare "$": which dollar is asked here (or shown, with how it was
+    // detected, and changeable) -- never assumed silently.
+    const dollarDoc = /^dollar-/.test(ciState.currencyBasis || "");
+    const dollarPicker = dollarDoc ? `<div>
+            <label class="field-label" for="ciDollarCurrency">Which dollar? (document shows "$" only)</label>
+            <select id="ciDollarCurrency">
+              ${cur ? "" : `<option value="" selected>Choose USD or AUD…</option>`}
+              <option value="USD" ${cur === "USD" ? "selected" : ""}>USD — US dollar</option>
+              <option value="AUD" ${cur === "AUD" ? "selected" : ""}>AUD — Australian dollar</option>
+            </select>
+          </div>` : "";
+    const currencyCard = !cur
+      ? `<div class="fp-currency-card">
+          ${dollarPicker}
+          <div class="fp-currency-note" style="color:var(--danger)">This document shows prices as "$" without saying which dollar, and nothing else on it
+            (an ABN, an address, a currency code) tells USD from AUD. Choose the currency above — the exchange rate for the invoice date is then
+            fetched and every price converted to AED automatically. Confirm stays locked until it's chosen.</div>
+        </div>`
+      : cur === "AED"
       ? `<div class="fp-currency-card"><div class="fp-currency-note">Document is already in AED — no conversion needed.</div></div>`
       : `<div class="fp-currency-card">
-          <div><label class="field-label">Original currency</label><strong>${esc(cur)}</strong></div>
+          ${dollarPicker || `<div><label class="field-label">Original currency</label><strong>${esc(cur)}</strong></div>`}
           <div><label class="field-label">Original amount</label><strong>${genericMoney(t.totalValueOriginal, cur)}</strong></div>
           <div>
             <label class="field-label" for="ciRateInput">Exchange rate (1 ${esc(cur)} = ? AED)</label>
@@ -3560,7 +3645,7 @@
             ciState.rateSource === "unavailable"
               ? `Could not retrieve an exchange rate for ${esc(cur)} from the currency API, and none is on file — flagged for review. Enter the current rate to continue.`
               : `Rate source: ${esc(sourceLabel)}${rateDateNote}. ${ciState.rateSource === "cache-fallback" || ciState.rateSource === "api-latest-fallback" ? "Check it's still current before confirming." : ""}`
-          }</div>
+          }${CURRENCY_BASIS_NOTE[ciState.currencyBasis] ? ` ${esc(CURRENCY_BASIS_NOTE[ciState.currencyBasis])}` : ""}</div>
         </div>`;
 
     // Landed Cost: always shown once a document has been read, so shipping
@@ -3583,11 +3668,11 @@
       shippingGuidance = "No shipping/freight/packing charge was found on this document. If the supplier billed shipping, freight or packing separately, type the amount into the box above and it'll be spread evenly across the items below. If not, leave this blank — nothing changes.";
     }
     const shippingCard = `<div class="fp-currency-card" id="fpShippingCard">
-        <div><label class="field-label" for="ciShippingInput">Shipping / freight / packing cost (${esc(cur)})</label>
+        <div><label class="field-label" for="ciShippingInput">Shipping / freight / packing cost (${esc(curLabel)})</label>
           <input id="ciShippingInput" type="number" step="any" min="0"
             value="${ciState.shippingAmountOriginal != null ? ciState.shippingAmountOriginal : ""}" placeholder="0.00"></div>
         <div><label class="field-label">Inventory line items</label><strong>${shippingActiveCount}</strong></div>
-        <div><label class="field-label">Shipping per item</label><strong>${shippingPerItem != null ? genericMoney(shippingPerItem, cur) : "—"}</strong></div>
+        <div><label class="field-label">Shipping per item</label><strong>${shippingPerItem != null ? genericMoney(shippingPerItem, curLabel) : "—"}</strong></div>
         <div class="fp-currency-note">${esc(shippingGuidance)}</div>
       </div>`;
 
@@ -3612,9 +3697,9 @@
             <th class="num">Current stock</th>
             <th class="num">Check-in qty</th>
             <th class="num">New stock</th>
-            <th class="num">Unit cost (${esc(cur)})</th>
-            <th class="num">Shipping alloc. (${esc(cur)})</th>
-            <th class="num">Landed unit cost (${esc(cur)})</th>
+            <th class="num">Unit cost (${esc(curLabel)})</th>
+            <th class="num">Shipping alloc. (${esc(curLabel)})</th>
+            <th class="num">Landed unit cost (${esc(curLabel)})</th>
             <th class="num">Value (AED)${ciState.shippingAmountOriginal > 0 ? " incl. shipping" : ""}</th>
             <th>Status</th><th>Action</th>
           </tr></thead>
@@ -3635,6 +3720,20 @@
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
     ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
+    const dollarSelect = document.getElementById("ciDollarCurrency");
+    if (dollarSelect) {
+      dollarSelect.addEventListener("change", async () => {
+        if (!dollarSelect.value) return;
+        ciState.currency = dollarSelect.value;
+        ciState.currencyBasis = "dollar-chosen";
+        dollarSelect.disabled = true;
+        await ciLoadExchangeRate($("#ciDocDate").value || null);
+        ciStatus(ciState.exchangeRate
+          ? `Currency set to ${ciState.currency}; exchange rate ${ciState.exchangeRate} AED from ${RATE_SOURCE_LABEL[ciState.rateSource]}.`
+          : `Currency set to ${ciState.currency}, but no exchange rate could be fetched — enter it in the box below.`);
+        ciRender();
+      });
+    }
     const rateInput = document.getElementById("ciRateInput");
     if (rateInput) {
       rateInput.addEventListener("change", () => {
@@ -3914,7 +4013,9 @@
       ciState.pdfHash = hash;
       ciState.header = parseCheckinHeader(pdfText);
       ciState.ratesByCurrency = ratesByCurrency;
-      ciState.currency = detectDocumentCurrency(pdfText);
+      const currencyInfo = detectDocumentCurrencyInfo(pdfText);
+      ciState.currency = currencyInfo.currency;
+      ciState.currencyBasis = currencyInfo.basis;
 
       const sEl = $("#ciSupplier"), iEl = $("#ciInvoiceNumber"), pEl = $("#ciPoNumber"), dEl = $("#ciDocDate");
       if (!sEl.value.trim() && ciState.header.supplier) sEl.value = ciState.header.supplier;
@@ -3933,7 +4034,7 @@
         ciState.rows = null;
         $("#ciConfirmBar").hidden = true;
         $("#ciDone").innerHTML = "";
-        ciStatus(`The document rows did not reconcile to its printed total (${genericMoney(doc.reconciliation.parsedTotal, ciState.currency)} parsed versus ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)} printed). Check-in has been blocked so incomplete stock cannot be added.`, "err");
+        ciStatus(`The document rows did not reconcile to its printed total (${genericMoney(doc.reconciliation.parsedTotal, ciState.currency || "$")} parsed versus ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency || "$")} printed). Check-in has been blocked so incomplete stock cannot be added.`, "err");
         return;
       }
       if (!doc.entries.length) {
@@ -3975,26 +4076,7 @@
       ciState.shippingNote = shipping.note;
       ciState.shippingNeedsReview = shipping.needsReview;
 
-      if (ciState.currency === "AED") {
-        ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
-      } else {
-        ciStatus(`Reading the document and fetching the ${ciState.currency}→AED exchange rate…`);
-        const fetched = await fetchCheckinExchangeRate(ciState.currency, dEl.value || null);
-        if (fetched) {
-          ciState.exchangeRate = fetched.rate;
-          ciState.rateDate = fetched.rateDate;
-          ciState.rateSource = fetched.source;
-        } else {
-          const cached = ratesByCurrency.get(ciState.currency);
-          if (cached) {
-            ciState.exchangeRate = cached.rate;
-            ciState.rateDate = cached.asOf ? String(cached.asOf).slice(0, 10) : null;
-            ciState.rateSource = "cache-fallback";
-          } else {
-            ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "unavailable";
-          }
-        }
-      }
+      await ciLoadExchangeRate(dEl.value || null);
 
       // Commercial Invoice descriptions live in a separate block of the PDF
       // (see parseCommercialInvoiceDescriptions above); every other format
@@ -4007,7 +4089,9 @@
       ciRender();
 
       const t = ciTally();
-      const rateNote = ciState.currency !== "AED"
+      const rateNote = !ciState.currency
+        ? " Prices are in \"$\" with nothing on the document saying which dollar — choose USD or AUD in the currency box below; the rate is then fetched automatically."
+        : ciState.currency !== "AED"
         ? (ciState.exchangeRate ? ` Exchange rate sourced from ${RATE_SOURCE_LABEL[ciState.rateSource]}.` : " Exchange rate unavailable — flagged for review.")
         : "";
       // A reconciliation count, not just a note -- "N detected, M created"
@@ -4030,9 +4114,9 @@
         ? " This packing list has quantities but no item codes or prices. Map every row to the correct Master Inventory item with Edit; its existing cost will be retained."
         : "";
       const reconciliationNote = doc.reconciliation && doc.reconciliation.ok
-        ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)}.`
+        ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency || "$")}.`
         : "";
-      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${manualMappingNote}${reconciliationNote}`);
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency || "\"$\" (choose USD or AUD below)"}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${manualMappingNote}${reconciliationNote}`);
     } catch (err) {
       console.error(err);
       if (!isStale()) ciStatus("Could not analyse the document: " + err.message, "err");
@@ -4044,7 +4128,7 @@
   function ciResetAll() {
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
-    ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
@@ -4155,7 +4239,7 @@
     ciState.pdfHash = null;
     ciState.header = {};
     ciState.itemsByCode = ciManualItemsByCode;
-    ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     ciState.usedOcr = false; ciState.lowConfidenceFallback = false;
     ciState.rows = rows;
