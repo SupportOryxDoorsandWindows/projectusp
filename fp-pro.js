@@ -635,7 +635,9 @@
 
   function renderRowActionButtons(idx, row) {
     const on = (yes) => yes ? "on" : "";
-    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
+    // Delete sits next to Edit on every row, whatever its status.
+    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>
+        <button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this item from the Check-out">Delete</button>`;
     if (row.baseStatus === "ok" || row.baseStatus === "shortage") {
       return `<div class="fp-row-actions">
         <button data-act="skip" data-i="${idx}" class="${on(row.action === "skip")}">Skip</button>
@@ -663,6 +665,24 @@
     }
     const r = state.rows[idx];
     if (!r) return;
+    if (act === "delete") {
+      // Removed outright, not just skipped: the row leaves the list, so it can
+      // no longer be acknowledged, edited or deducted. Nothing has been
+      // written yet, so this only changes what Confirm would send.
+      const label = `${r.code ? r.code + " — " : ""}${r.description || "this item"} (${fmt(r.requiredQty)} ${r.unit || ""})`.trim();
+      const ok = window.confirm(
+        `Delete ${label} from this Check-out?\n\n` +
+        "It will be removed from the list, so it can no longer be acknowledged and will not be deducted from the Master Inventory.\n\n" +
+        "To bring it back, analyse the PDF again (or add the item again by hand)."
+      );
+      if (!ok) return;
+      state.rows.splice(idx, 1);
+      state.removedRows = state.removedRows || [];
+      state.removedRows.push({ code: r.code, description: r.description, requiredQty: r.requiredQty, unit: r.unit });
+      render();
+      status(`Deleted ${label} — it will not be acknowledged or deducted.`);
+      return;
+    }
     if (act === "skip") { r.action = "skip"; r.decided = true; }
     else if (act === "deduct") { r.action = "deduct"; r.decided = true; }
     else if (act === "edit") { r.editing = true; }
@@ -749,6 +769,11 @@
           </span></li>` : ""}
       </ul>
     </div>` : "";
+    const removed = state.removedRows || [];
+    const removedNote = removed.length ? `<div class="fp-removed-note">
+      <b>${removed.length} item${removed.length === 1 ? "" : "s"} deleted from this Check-out</b> — not acknowledged and not deducted:
+      <ul>${removed.map((d) => `<li>${d.code ? `<span class="code">${esc(d.code)}</span> — ` : ""}${esc(d.description || "")} (${fmt(d.requiredQty)} ${esc(d.unit || "")})</li>`).join("")}</ul>
+    </div>` : "";
     const shortageNote = t.shortages > 0 ? `<p class="small muted" style="color:var(--danger)">
       ${t.shortages} item${t.shortages === 1 ? "" : "s"} will go negative — allowed, and shown in red below.
       A future Check-in will correct it.</p>` : "";
@@ -783,6 +808,8 @@
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>
+      ${state.rows.length ? "" : `<p class="small muted">Every item has been deleted from this Check-out — there is nothing left to deduct.</p>`}
+      ${removedNote}
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been deducted yet.
       The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
     `;
@@ -876,6 +903,7 @@
 
       const entries = parsePdf(pdfText);
       state.rows = buildRows(entries, state.itemsByCode);
+      state.removedRows = [];
       render();
 
       const t = tallyTotals();
@@ -980,6 +1008,7 @@
     state.parsedJob = { ref: "", user: "", description: "", printedAt: "" };
     state.itemsByCode = fpManualItemsByCode;
     state.rows = rows;
+    state.removedRows = [];
     render();
     const t = tallyTotals();
     status(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
@@ -990,6 +1019,7 @@
   function resetAll() {
     state.pdfFile = null;
     state.pdfHash = state.parsedJob = state.rows = state.itemsByCode = null;
+    state.removedRows = [];
     $("#fpPdf").value = "";
     $("#fpPdfName").textContent = "Click or drop the PDF file here";
     $("#fpDrop").classList.remove("ready");
