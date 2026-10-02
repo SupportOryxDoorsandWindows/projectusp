@@ -633,25 +633,23 @@
     };
   }
 
+  // One line, same order on every row: [Skip / Undo / Acknowledge] · Edit ·
+  // Delete -- Delete always last, set slightly apart as the destructive one.
   function renderRowActionButtons(idx, row) {
     const on = (yes) => yes ? "on" : "";
-    // Delete sits next to Edit on every row, whatever its status.
-    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>
-        <button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this item from the Check-out">Delete</button>`;
+    let first = "";
     if (row.baseStatus === "ok" || row.baseStatus === "shortage") {
-      return `<div class="fp-row-actions">
-        <button data-act="skip" data-i="${idx}" class="${on(row.action === "skip")}">Skip</button>
-        ${row.action === "skip" ? `<button data-act="deduct" data-i="${idx}">Undo</button>` : ""}
-        ${editBtn}
-      </div>`;
+      first = row.action === "skip"
+        ? `<button data-act="deduct" data-i="${idx}" class="on" title="Skipped — click to deduct it again">Undo skip</button>`
+        : `<button data-act="skip" data-i="${idx}">Skip</button>`;
+    } else if (row.baseStatus === "unmatched") {
+      first = `<button data-act="skip" data-i="${idx}" class="${on(row.decided)}" title="Confirm you've seen this unmatched item; it won't be deducted">Acknowledge</button>`;
     }
-    if (row.baseStatus === "unmatched") {
-      return `<div class="fp-row-actions">
-        <button data-act="skip" data-i="${idx}" class="${on(row.decided)}">Skip (acknowledge)</button>
-        ${editBtn}
+    return `<div class="fp-row-actions fp-row-actions-line">
+        ${first}
+        <button data-act="edit" data-i="${idx}">Edit</button>
+        <button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this item from the Check-out">Delete</button>
       </div>`;
-    }
-    return `<div class="fp-row-actions">${editBtn}</div>`;
   }
 
   function applyRowAction(idx, act) {
@@ -796,7 +794,7 @@
       ${shortageNote}
       <div class="fp-section-h">Allocation preview</div>
       <div class="fp-scroll">
-        <table class="fp-table">
+        <table class="fp-table fp-checkout-table">
           <thead><tr>
             <th>Code</th><th>Description</th>
             <th class="num">Required</th>
