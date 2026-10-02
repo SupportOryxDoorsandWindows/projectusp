@@ -332,7 +332,87 @@
   // suggestion. Only consulted once the strict match has found nothing.
   function findSeriesSuggestion(itemsByCode, description) {
     if (!description) return null;
-    return findUniqueDescriptionItem(itemsByCode, description, true);
+    const item = findUniqueDescriptionItem(itemsByCode, description, true);
+    if (item) return { item, note: "Same words, but the series number differs (e.g. ZLS vs ZLS1)." };
+    return findCloseSuggestion(itemsByCode, description);
+  }
+
+  // Second suggestion pass, for supplier names that use a different product
+  // word from Master Inventory -- e.g. Freedom's "ZLS1-Infinity 60mm-IS(
+  // 2.9m)Mill" for Master's "ZLS1 Housing 60 IS 01 MILL" (2900 mm). Like
+  // the series pass it is only ever a suggestion. What must still agree:
+  //   - family (ZLS1/SMB1/...; ZLS = ZLS1, never ZLS1 vs ZLS2), unless the
+  //     invoice names no family at all;
+  //   - every size number and every side/colour/finish word (IS/OS, A/B,
+  //     BLK/WHT, MILL, LEFT/RIGHT);
+  //   - the bar/roll length, when the invoice states one ("2.9m") and the
+  //     Master row has a bar length -- this picks the exact length row.
+  // At most ONE other Master word may be missing (Housing vs Infinity), a
+  // bare version number ("01") is ignored, and the best-scoring candidate
+  // must be unique -- a tie suggests nothing.
+  const CLOSE_REQUIRED_WORDS = new Set(["IS", "OS", "A", "B", "BLK", "WHT", "BLACK", "WHITE", "MILL", "LEFT", "RIGHT", "STR", "CNR"]);
+  const CLOSE_WORD_ALIASES = { BLACK: "BLK", WHITE: "WHT" };
+  // Product-family words, with or without a series number (ZLS / ZLS1).
+  // Two different families are never suggested for each other.
+  const PRODUCT_FAMILIES = new Set(["SMB", "ZLS", "ZLX", "IZLX", "RADC"]);
+  function familyBase(tok) {
+    const base = tok.replace(/\d{1,2}$/, "");
+    return PRODUCT_FAMILIES.has(base) || /^[A-Z]{2,}\d{1,2}$/.test(tok) ? base : null;
+  }
+  function closeTokens(text) {
+    return String(text || "")
+      .toUpperCase()
+      .replace(/\b(\d+)\s*MM\b/g, "$1")
+      .split(/[^A-Z0-9]+/)
+      .filter(Boolean)
+      .map((t) => CLOSE_WORD_ALIASES[t] || t);
+  }
+  function statedLengthMm(text) {
+    const m = String(text || "").match(/(\d+(?:\.\d+)?)\s*m(?![a-z])/i);
+    return m ? Math.round(parseFloat(m[1]) * 1000) : null;
+  }
+  function findCloseSuggestion(itemsByCode, description) {
+    const invLen = statedLengthMm(description);
+    const inv = new Set(closeTokens(String(description).replace(/(\d+(?:\.\d+)?)\s*m(?![a-z])/ig, " ")));
+    const invFamilies = [...inv].filter((t) => familyBase(t) && PRODUCT_FAMILIES.has(familyBase(t)) || /^[A-Z]{2,}\d{1,2}$/.test(t));
+    let best = null, tie = false;
+    for (const candidates of itemsByCode.values()) {
+      for (const c of candidates) {
+        if (invLen != null && c.bar_length_mm != null && Math.abs(c.bar_length_mm - invLen) > 50) continue;
+        // Never guess which length row is meant when the invoice states none.
+        if (invLen == null && candidates.length > 1 && candidates.some((o) => o.bar_length_mm !== c.bar_length_mm)) continue;
+        const own = String(c.description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
+        const master = closeTokens(own.replace(/(\d+(?:\.\d+)?)\s*m(?![a-z])/ig, " ")).filter((t) => !/^0\d$/.test(t) && t !== "AB"); // "AB" = Master's both-sides marker, rarely printed by suppliers
+        let matched = 0, missingWords = 0, ok = true;
+        const masterFamilies = master.filter((t) => familyBase(t) && (PRODUCT_FAMILIES.has(familyBase(t)) || /\d$/.test(t)));
+        // Invoice names a family the Master item doesn't carry -> a different product line.
+        if (invFamilies.length && !invFamilies.every((f) => masterFamilies.some((t) => familyBase(t) === familyBase(f)))) continue;
+        for (const t of master) {
+          if (inv.has(t)) { matched++; continue; }
+          if (masterFamilies.includes(t)) {
+            const base = familyBase(t);
+            // Same series, or one side bare (ZLS = ZLS1) -- never ZLS1 vs ZLS2.
+            const sameSeries = invFamilies.some((f) => familyBase(f) === base && (f === base || t === base || f === t));
+            if (sameSeries) { matched++; continue; }
+            if (invFamilies.length) { ok = false; break; } // a different family on the invoice
+            continue; // invoice names no family at all
+          }
+          if (/\d/.test(t) || CLOSE_REQUIRED_WORDS.has(t)) { ok = false; break; }
+          missingWords++;
+          if (missingWords > 1) { ok = false; break; }
+        }
+        if (!ok || matched < 3) continue;
+        const score = matched - missingWords;
+        if (!best || score > best.score) { best = { item: c, score, missingWords }; tie = false; }
+        else if (score === best.score && best.item.id !== c.id) tie = true;
+      }
+    }
+    if (!best || tie) return null;
+    const lenNote = invLen != null && best.item.bar_length_mm != null ? ` Bar length ${best.item.bar_length_mm} mm matches the invoice.` : "";
+    return {
+      item: best.item,
+      note: (best.missingWords ? "The product name differs from Master Inventory's, but family, size, side and finish agree." : "Close match on family, size, side and finish.") + lenNote,
+    };
   }
 
   // Pulls a "<number>m" pack-size token out of free text ("300m", "(200m)")
@@ -555,7 +635,9 @@
 
   function renderRowActionButtons(idx, row) {
     const on = (yes) => yes ? "on" : "";
-    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
+    // Delete sits next to Edit on every row, whatever its status.
+    const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>
+        <button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this item from the Check-out">Delete</button>`;
     if (row.baseStatus === "ok" || row.baseStatus === "shortage") {
       return `<div class="fp-row-actions">
         <button data-act="skip" data-i="${idx}" class="${on(row.action === "skip")}">Skip</button>
@@ -583,6 +665,24 @@
     }
     const r = state.rows[idx];
     if (!r) return;
+    if (act === "delete") {
+      // Removed outright, not just skipped: the row leaves the list, so it can
+      // no longer be acknowledged, edited or deducted. Nothing has been
+      // written yet, so this only changes what Confirm would send.
+      const label = `${r.code ? r.code + " — " : ""}${r.description || "this item"} (${fmt(r.requiredQty)} ${r.unit || ""})`.trim();
+      const ok = window.confirm(
+        `Delete ${label} from this Check-out?\n\n` +
+        "It will be removed from the list, so it can no longer be acknowledged and will not be deducted from the Master Inventory.\n\n" +
+        "To bring it back, analyse the PDF again (or add the item again by hand)."
+      );
+      if (!ok) return;
+      state.rows.splice(idx, 1);
+      state.removedRows = state.removedRows || [];
+      state.removedRows.push({ code: r.code, description: r.description, requiredQty: r.requiredQty, unit: r.unit });
+      render();
+      status(`Deleted ${label} — it will not be acknowledged or deducted.`);
+      return;
+    }
     if (act === "skip") { r.action = "skip"; r.decided = true; }
     else if (act === "deduct") { r.action = "deduct"; r.decided = true; }
     else if (act === "edit") { r.editing = true; }
@@ -669,6 +769,11 @@
           </span></li>` : ""}
       </ul>
     </div>` : "";
+    const removed = state.removedRows || [];
+    const removedNote = removed.length ? `<div class="fp-removed-note">
+      <b>${removed.length} item${removed.length === 1 ? "" : "s"} deleted from this Check-out</b> — not acknowledged and not deducted:
+      <ul>${removed.map((d) => `<li>${d.code ? `<span class="code">${esc(d.code)}</span> — ` : ""}${esc(d.description || "")} (${fmt(d.requiredQty)} ${esc(d.unit || "")})</li>`).join("")}</ul>
+    </div>` : "";
     const shortageNote = t.shortages > 0 ? `<p class="small muted" style="color:var(--danger)">
       ${t.shortages} item${t.shortages === 1 ? "" : "s"} will go negative — allowed, and shown in red below.
       A future Check-in will correct it.</p>` : "";
@@ -703,6 +808,8 @@
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>
+      ${state.rows.length ? "" : `<p class="small muted">Every item has been deleted from this Check-out — there is nothing left to deduct.</p>`}
+      ${removedNote}
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been deducted yet.
       The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
     `;
@@ -796,6 +903,7 @@
 
       const entries = parsePdf(pdfText);
       state.rows = buildRows(entries, state.itemsByCode);
+      state.removedRows = [];
       render();
 
       const t = tallyTotals();
@@ -900,6 +1008,7 @@
     state.parsedJob = { ref: "", user: "", description: "", printedAt: "" };
     state.itemsByCode = fpManualItemsByCode;
     state.rows = rows;
+    state.removedRows = [];
     render();
     const t = tallyTotals();
     status(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
@@ -910,6 +1019,7 @@
   function resetAll() {
     state.pdfFile = null;
     state.pdfHash = state.parsedJob = state.rows = state.itemsByCode = null;
+    state.removedRows = [];
     $("#fpPdf").value = "";
     $("#fpPdfName").textContent = "Click or drop the PDF file here";
     $("#fpDrop").classList.remove("ready");
@@ -1120,17 +1230,48 @@
   // notice) if it picked the wrong one since it's shown plainly in the
   // preview before anything is confirmed.
   const SUPPORTED_CURRENCIES = ["AED", "AUD", "USD", "EUR", "GBP", "SAR", "QAR", "KWD", "OMR", "BHD"];
-  function detectDocumentCurrency(text) {
-    const re = new RegExp(`\\b(${SUPPORTED_CURRENCIES.join("|")})\\b`, "g");
+  // Detects the document's currency, most certain evidence first:
+  //  1. a written code or a code-marked symbol -- USD, AUD, US$, A$, AU$...
+  //     (most frequent wins, as before);
+  //  2. a bare "$" with country details elsewhere on the document -- an ABN,
+  //     "Pty Ltd", "Australia" or a .com.au address means AUD; "United
+  //     States"/"USA"/"U.S." means USD;
+  //  3. a bare "$" with no such details -> USD automatically (Freedom's
+  //     priced documents to Oryx are in USD, and "$" on an international
+  //     invoice almost always means US dollars). Shown on screen as
+  //     "assumed USD" with a USD/AUD switch preselected, so it can be
+  //     corrected, but nobody has to act -- and it's never treated as AED.
+  //  Nothing at all -> AED.
+  const DOLLAR_AMOUNT_RE = /(^|[^A-Za-z])\$\s?\d/;
+  // Australia-only markers. GST is deliberately not one (India, Singapore and
+  // NZ charge GST too -- Freedom also ships from India).
+  const AUD_CONTEXT_RE = /\b(Australia|A\.?B\.?N\.?|Pty\.?\s*Ltd|NSW|QLD|Queensland|New South Wales)\b|\.com\.au\b/i;
+  const USD_CONTEXT_RE = /\b(United States|U\.S\.A\.?|USA)\b/;
+  function detectDocumentCurrencyInfo(text) {
     const counts = {};
+    const add = (cur) => { counts[cur] = (counts[cur] || 0) + 1; };
+    const codeRe = new RegExp(`\\b(${SUPPORTED_CURRENCIES.join("|")})\\b`, "g");
     let m;
-    while ((m = re.exec(text)) !== null) counts[m[1]] = (counts[m[1]] || 0) + 1;
-    let best = "AED", bestCount = 0;
+    while ((m = codeRe.exec(text)) !== null) add(m[1]);
+    const symbolRe = /\b(US|AU|A)\$/g;
+    while ((m = symbolRe.exec(text)) !== null) add(m[1] === "US" ? "USD" : "AUD");
+    let best = null, bestCount = 0;
     for (const [cur, n] of Object.entries(counts)) {
       if (n > bestCount) { best = cur; bestCount = n; }
     }
-    return best;
+    if (best) return { currency: best, basis: "stated", needsChoice: false };
+    if (DOLLAR_AMOUNT_RE.test(text)) {
+      const aud = AUD_CONTEXT_RE.test(text), usd = USD_CONTEXT_RE.test(text);
+      if (aud && !usd) return { currency: "AUD", basis: "dollar-australian-details", needsChoice: false };
+      if (usd && !aud) return { currency: "USD", basis: "dollar-us-details", needsChoice: false };
+      return { currency: "USD", basis: "dollar-default-usd", needsChoice: false };
+    }
+    return { currency: "AED", basis: "none", needsChoice: false };
   }
+  function detectDocumentCurrency(text) {
+    return detectDocumentCurrencyInfo(text).currency || "AED";
+  }
+
 
   // exchange_rates is a resilience cache, not the source of truth: it's
   // updated automatically after every successful Check-in (see
@@ -1745,6 +1886,54 @@
     return { entries, reconciliation };
   }
 
+  // Freedom "Zipline Component Order Form" (e.g. "SUP -5- ORYX ZIPLINE
+  // COMPONENTS 24-04 - FOR APPROVAL.pdf"). pdf.js emits every table cell on
+  // its own line:
+  //   ZIP49 / ZLS1-Brake Adjuster-01 0.005 kgs / 2 / 3.69 / 200 / n/a / $738.00
+  //   (Ref No. / Name / Amt Per Screen / Mill Price / QTY / Colour / Sub Total)
+  // The Ref No. (ZIP49) is Freedom's own order-form reference, not an Oryx
+  // Master Inventory code, so it's never used as the item code -- rows are
+  // matched by description instead. Of the numbers between the name and the
+  // Sub Total, a row is only read when exactly one (price, quantity) pair
+  // multiplies out to that Sub Total -- "Amt Per Screen" and cut-length
+  // notes can never be mistaken for the quantity.
+  function parseZiplineOrderForm(text) {
+    if (!/Order Form/i.test(text) || !/Ref No/i.test(text) || !/Sub Total/i.test(text) || !/Mill Price/i.test(text)) return [];
+    const cells = text.split("\n").map((c) => c.trim()).filter(Boolean);
+    const headerIdx = cells.findIndex((c) => /^Sub Total$/i.test(c));
+    if (headerIdx === -1) return [];
+    const refRe = /^[A-Z]{2,5}\d{1,4}[A-Z]?$/;
+    const subTotalRe = /^\$\s?([\d,]+\.\d{2})$/;
+    const numRe = /^[\d,]+(?:\.\d+)?$/;
+    const starts = [];
+    for (let i = headerIdx + 1; i < cells.length; i++) if (refRe.test(cells[i])) starts.push(i);
+
+    const entries = [];
+    starts.forEach((start, k) => {
+      const end = k + 1 < starts.length ? starts[k + 1] : cells.length;
+      const row = cells.slice(start + 1, end);
+      const subIdx = row.findIndex((c) => subTotalRe.test(c));
+      if (subIdx < 1) return;
+      const subTotal = parseFloat(row[subIdx].match(subTotalRe)[1].replace(/,/g, ""));
+      const nameIdx = row.findIndex((c, i) => i < subIdx && /[A-Za-z]{3,}/.test(c) && !/^n\/a$/i.test(c));
+      if (nameIdx === -1) return;
+      const nums = row.slice(nameIdx + 1, subIdx)
+        .map((c, i) => (numRe.test(c) ? { i, v: parseFloat(c.replace(/,/g, "")), decimal: c.includes(".") } : null))
+        .filter((n) => n && n.v > 0);
+      const pairs = [];
+      for (const price of nums) {
+        for (const qty of nums) {
+          if (qty.i <= price.i) continue;
+          if (Math.abs(price.v * qty.v - subTotal) <= Math.max(0.02, subTotal * 0.0005)) pairs.push({ price, qty });
+        }
+      }
+      if (pairs.length !== 1) return;
+      const description = row[nameIdx].replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "").replace(/\s+/g, " ").trim();
+      entries.push({ code: "", description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
+    });
+    return entries;
+  }
+
   // Freedom Screens packing lists contain reliable received quantities but
   // deliberately omit item codes and prices. pdf.js may either keep each
   // visible row together or emit the Description column later in the text
@@ -2342,6 +2531,14 @@
         reconciliation: freedomCellStream.reconciliation,
       };
     }
+    const ziplineEntries = parseZiplineOrderForm(text);
+    if (ziplineEntries.length > best.entries.length) {
+      best = {
+        formatId: "zipline-order-form",
+        formatLabel: "Zipline Component Order Form",
+        entries: ziplineEntries,
+      };
+    }
     const packingListEntries = parsePackingListRows(text);
     if (packingListEntries.length > best.entries.length) {
       best = {
@@ -2482,7 +2679,12 @@
           lowConfidence: !!l.lowConfidence,
           codeDescConflict,
           suggestedItem: suggestion
-            ? { code: suggestion.item_code, description: suggestion.description || "" }
+            ? {
+                id: suggestion.item.id, code: suggestion.item.item_code,
+                description: suggestion.item.description || "",
+                barLengthMm: suggestion.item.bar_length_mm != null ? suggestion.item.bar_length_mm : null,
+                note: suggestion.note,
+              }
             : null,
         });
         return;
@@ -2598,7 +2800,7 @@
     return rows;
   }
 
-  function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit) {
+  function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit, exactItemId) {
     // The typed qty is still the invoice's own number (e.g. "1" roll) --
     // captured before row.qty is overwritten below, so the roll/bundle
     // check further down still has the pre-edit invoice quantity to expand,
@@ -2614,7 +2816,9 @@
     // item too.
     row.packageInfo = null;
     const candidates = ciState.itemsByCode.get(newCode) || [];
-    const item = pickInventoryRow({ kind: "checkin" }, candidates);
+    // A suggestion names one exact Master row (e.g. the 2900 mm length of a
+    // code that has 2500/2900/5100 mm rows) -- use that row, never a guess.
+    const item = (exactItemId && candidates.find((c) => c.id === exactItemId)) || pickInventoryRow({ kind: "checkin" }, candidates);
     if (!item) {
       row.current = null; row.newQty = null;
       row.status = "unmatched"; row.action = "pending"; row.decided = false;
@@ -2655,8 +2859,45 @@
   }
 
   function ciRate() {
+    if (!ciState.currency) return null; // "$" whose dollar hasn't been chosen yet
     return ciState.currency === "AED" ? 1 : (ciState.exchangeRate || null);
   }
+
+  // Fetches the ciState.currency -> AED rate for the invoice date: currency
+  // API first, then the last rate on file, else flagged for manual entry.
+  async function ciLoadExchangeRate(isoDocDate) {
+    if (!ciState.currency) {
+      ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "n/a";
+      return;
+    }
+    if (ciState.currency === "AED") {
+      ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+      return;
+    }
+    ciStatus(`Fetching the ${ciState.currency}→AED exchange rate…`);
+    const fetched = await fetchCheckinExchangeRate(ciState.currency, isoDocDate);
+    if (fetched) {
+      ciState.exchangeRate = fetched.rate;
+      ciState.rateDate = fetched.rateDate;
+      ciState.rateSource = fetched.source;
+      return;
+    }
+    const cached = ciState.ratesByCurrency && ciState.ratesByCurrency.get(ciState.currency);
+    if (cached) {
+      ciState.exchangeRate = cached.rate;
+      ciState.rateDate = cached.asOf ? String(cached.asOf).slice(0, 10) : null;
+      ciState.rateSource = "cache-fallback";
+    } else {
+      ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "unavailable";
+    }
+  }
+
+  const CURRENCY_BASIS_NOTE = {
+    "dollar-australian-details": "Detected as AUD: prices are in \"$\" and the document carries Australian details (e.g. ABN, Pty Ltd, Australia).",
+    "dollar-us-details": "Detected as USD: prices are in \"$\" and the document carries US details.",
+    "dollar-chosen": "Prices are in \"$\" — currency chosen on this screen.",
+    "dollar-default-usd": "Prices are in \"$\" with no country details on the document, so USD was used automatically. If this supplier billed in Australian dollars, switch it to AUD above and the rate updates.",
+  };
 
   // Landed Cost: splits ciState.shippingAmountOriginal equally across every
   // *inventory line item* currently checking in (action "add" or
@@ -2890,7 +3131,7 @@
       const suggested = r.suggestedItem;
       if (!suggested) return;
       r.suggestedItem = null;
-      recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit);
+      recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit, suggested.id);
     }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
@@ -3075,6 +3316,7 @@
     const noCodeUnmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched" && !r.code && !r.codeDescConflict).length;
     const codedUnmatched = unmatched - noCodeUnmatched - conflictUnmatched;
     const cur = ciState.currency;
+    const curLabel = cur || "$"; // display only: "$" until the dollar is chosen
     const shipAlloc = ciShippingAllocation();
     const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
     const shippingPerItem = ciState.shippingAmountOriginal > 0 && shippingActiveCount > 0
@@ -3111,7 +3353,7 @@
                 <div class="field"><label>Unit of measure</label><input id="ciNewUnit${i}" value="${esc(r.unit || "pcs")}"></div>
                 <div class="field"><label>Opening quantity</label><input value="${fmt(r.qty)}" readonly>
                   <span class="hint">= the Check-in quantity for this line.</span></div>
-                <div class="field"><label>Unit cost (${esc(cur)})</label>
+                <div class="field"><label>Unit cost (${esc(curLabel)})</label>
                   <input id="ciNewCost${i}" type="number" step="any" min="0" value="${r.invoiceUnitCost != null ? r.invoiceUnitCost : ""}" placeholder="e.g. 4.80">
                   <span class="hint">Required — never guessed for a new item.</span></div>
                 <div class="field full"><label>Buffer / low-stock level <span class="opt">(optional)</span></label>
@@ -3156,7 +3398,7 @@
             <input class="fp-inline-input fp-inline-input-unit" id="ciEditUnit${i}" type="text" value="${esc(r.unit)}">
           </td>
           <td class="num">—</td>
-          <td class="num">${genericMoney(r.invoiceUnitCost, cur)}</td>
+          <td class="num">${genericMoney(r.invoiceUnitCost, curLabel)}</td>
           <td class="num">—</td>
           <td class="num">—</td>
           <td class="num">—</td>
@@ -3210,12 +3452,12 @@
           <div><span class="lbl">Invoice description</span> "${esc(r.description)}" matches Master Inventory item <span class="code">${esc(r.codeDescConflict.descItemCode)}</span>.</div>
           <div class="fp-exactdiff-warn">⚠ Not auto-matched — pick the correct item via Edit.</div>
         </div>` : "";
-      // A series-tolerant description match (e.g. ZLS vs ZLS1) -- offered,
-      // never applied, until the person clicks "Use this item".
+      // A series-tolerant or close description match -- offered, never
+      // applied, until the person clicks "Use this item".
       const suggestionNote = r.status === "unmatched" && !r.decided && r.suggestedItem ? `<div class="fp-exactdiff">
           <div class="fp-exactdiff-h">Possible match in Master Inventory</div>
-          <div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}</div>
-          <div class="small muted">Same words, but the series number differs (e.g. ZLS vs ZLS1). Not added unless you confirm.</div>
+          <div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}${r.suggestedItem.barLengthMm != null ? ` <span class="small muted">(${esc(r.suggestedItem.barLengthMm)} mm)</span>` : ""}</div>
+          <div class="small muted">${esc(r.suggestedItem.note || "")} Not added unless you confirm.</div>
           <div class="fp-row-actions"><button data-act="use-suggestion" data-i="${i}" class="on">Use this item</button></div>
         </div>` : "";
       // The exact code exists in Master Inventory, but the invoice's own
@@ -3274,15 +3516,15 @@
       const expandedPackage = pkgForDisplay && pkgForDisplay.rollCount != null && pkgForDisplay.unit === "m";
       const storedUnitCostAed = storedInventoryUnitCostAed(r, landedUnitCost, rate);
       const unitCostDisplay = expandedPackage
-        ? `${genericUnitMoney(r.invoiceUnitCost, cur, "m")}
-           <div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, cur)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>
+        ? `${genericUnitMoney(r.invoiceUnitCost, curLabel, "m")}
+           <div class="small muted">${genericMoney(pkgForDisplay.rollUnitCost, curLabel)} / ${esc(pkgForDisplay.type.toLowerCase())}</div>
            <div class="small muted">Stored: ${money(storedUnitCostAed)} / m</div>`
-        : genericMoney(r.invoiceUnitCost, cur);
+        : genericMoney(r.invoiceUnitCost, curLabel);
       const landedUnitCostDisplay = landedUnitCost == null
         ? "—"
         : expandedPackage
-        ? genericUnitMoney(landedUnitCost, cur, "m")
-        : genericMoney(landedUnitCost, cur);
+        ? genericUnitMoney(landedUnitCost, curLabel, "m")
+        : genericMoney(landedUnitCost, curLabel);
       return `<tr class="${rowClass}">
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
         <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
@@ -3290,7 +3532,7 @@
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
         <td class="num">${unitCostDisplay}</td>
-        <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, cur) : "—"}</td>
+        <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, curLabel) : "—"}</td>
         <td class="num">${landedUnitCostDisplay}</td>
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${ciStatusChip(r, displayStatus)}</td>
@@ -3373,10 +3615,28 @@
 
     const rateDateNote = ciState.rateDate ? ` (rate date ${esc(ciState.rateDate)})` : "";
     const sourceLabel = RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource;
-    const currencyCard = cur === "AED"
+    // Bare "$": which dollar is asked here (or shown, with how it was
+    // detected, and changeable) -- never assumed silently.
+    const dollarDoc = /^dollar-/.test(ciState.currencyBasis || "");
+    const dollarPicker = dollarDoc ? `<div>
+            <label class="field-label" for="ciDollarCurrency">Which dollar? (document shows "$" only)</label>
+            <select id="ciDollarCurrency">
+              ${cur ? "" : `<option value="" selected>Choose USD or AUD…</option>`}
+              <option value="USD" ${cur === "USD" ? "selected" : ""}>USD — US dollar</option>
+              <option value="AUD" ${cur === "AUD" ? "selected" : ""}>AUD — Australian dollar</option>
+            </select>
+          </div>` : "";
+    const currencyCard = !cur
+      ? `<div class="fp-currency-card">
+          ${dollarPicker}
+          <div class="fp-currency-note" style="color:var(--danger)">This document shows prices as "$" without saying which dollar, and nothing else on it
+            (an ABN, an address, a currency code) tells USD from AUD. Choose the currency above — the exchange rate for the invoice date is then
+            fetched and every price converted to AED automatically. Confirm stays locked until it's chosen.</div>
+        </div>`
+      : cur === "AED"
       ? `<div class="fp-currency-card"><div class="fp-currency-note">Document is already in AED — no conversion needed.</div></div>`
       : `<div class="fp-currency-card">
-          <div><label class="field-label">Original currency</label><strong>${esc(cur)}</strong></div>
+          ${dollarPicker || `<div><label class="field-label">Original currency</label><strong>${esc(cur)}</strong></div>`}
           <div><label class="field-label">Original amount</label><strong>${genericMoney(t.totalValueOriginal, cur)}</strong></div>
           <div>
             <label class="field-label" for="ciRateInput">Exchange rate (1 ${esc(cur)} = ? AED)</label>
@@ -3387,7 +3647,7 @@
             ciState.rateSource === "unavailable"
               ? `Could not retrieve an exchange rate for ${esc(cur)} from the currency API, and none is on file — flagged for review. Enter the current rate to continue.`
               : `Rate source: ${esc(sourceLabel)}${rateDateNote}. ${ciState.rateSource === "cache-fallback" || ciState.rateSource === "api-latest-fallback" ? "Check it's still current before confirming." : ""}`
-          }</div>
+          }${CURRENCY_BASIS_NOTE[ciState.currencyBasis] ? ` ${esc(CURRENCY_BASIS_NOTE[ciState.currencyBasis])}` : ""}</div>
         </div>`;
 
     // Landed Cost: always shown once a document has been read, so shipping
@@ -3410,11 +3670,11 @@
       shippingGuidance = "No shipping/freight/packing charge was found on this document. If the supplier billed shipping, freight or packing separately, type the amount into the box above and it'll be spread evenly across the items below. If not, leave this blank — nothing changes.";
     }
     const shippingCard = `<div class="fp-currency-card" id="fpShippingCard">
-        <div><label class="field-label" for="ciShippingInput">Shipping / freight / packing cost (${esc(cur)})</label>
+        <div><label class="field-label" for="ciShippingInput">Shipping / freight / packing cost (${esc(curLabel)})</label>
           <input id="ciShippingInput" type="number" step="any" min="0"
             value="${ciState.shippingAmountOriginal != null ? ciState.shippingAmountOriginal : ""}" placeholder="0.00"></div>
         <div><label class="field-label">Inventory line items</label><strong>${shippingActiveCount}</strong></div>
-        <div><label class="field-label">Shipping per item</label><strong>${shippingPerItem != null ? genericMoney(shippingPerItem, cur) : "—"}</strong></div>
+        <div><label class="field-label">Shipping per item</label><strong>${shippingPerItem != null ? genericMoney(shippingPerItem, curLabel) : "—"}</strong></div>
         <div class="fp-currency-note">${esc(shippingGuidance)}</div>
       </div>`;
 
@@ -3439,9 +3699,9 @@
             <th class="num">Current stock</th>
             <th class="num">Check-in qty</th>
             <th class="num">New stock</th>
-            <th class="num">Unit cost (${esc(cur)})</th>
-            <th class="num">Shipping alloc. (${esc(cur)})</th>
-            <th class="num">Landed unit cost (${esc(cur)})</th>
+            <th class="num">Unit cost (${esc(curLabel)})</th>
+            <th class="num">Shipping alloc. (${esc(curLabel)})</th>
+            <th class="num">Landed unit cost (${esc(curLabel)})</th>
             <th class="num">Value (AED)${ciState.shippingAmountOriginal > 0 ? " incl. shipping" : ""}</th>
             <th>Status</th><th>Action</th>
           </tr></thead>
@@ -3462,6 +3722,20 @@
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
     ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
+    const dollarSelect = document.getElementById("ciDollarCurrency");
+    if (dollarSelect) {
+      dollarSelect.addEventListener("change", async () => {
+        if (!dollarSelect.value) return;
+        ciState.currency = dollarSelect.value;
+        ciState.currencyBasis = "dollar-chosen";
+        dollarSelect.disabled = true;
+        await ciLoadExchangeRate($("#ciDocDate").value || null);
+        ciStatus(ciState.exchangeRate
+          ? `Currency set to ${ciState.currency}; exchange rate ${ciState.exchangeRate} AED from ${RATE_SOURCE_LABEL[ciState.rateSource]}.`
+          : `Currency set to ${ciState.currency}, but no exchange rate could be fetched — enter it in the box below.`);
+        ciRender();
+      });
+    }
     const rateInput = document.getElementById("ciRateInput");
     if (rateInput) {
       rateInput.addEventListener("change", () => {
@@ -3741,7 +4015,9 @@
       ciState.pdfHash = hash;
       ciState.header = parseCheckinHeader(pdfText);
       ciState.ratesByCurrency = ratesByCurrency;
-      ciState.currency = detectDocumentCurrency(pdfText);
+      const currencyInfo = detectDocumentCurrencyInfo(pdfText);
+      ciState.currency = currencyInfo.currency;
+      ciState.currencyBasis = currencyInfo.basis;
 
       const sEl = $("#ciSupplier"), iEl = $("#ciInvoiceNumber"), pEl = $("#ciPoNumber"), dEl = $("#ciDocDate");
       if (!sEl.value.trim() && ciState.header.supplier) sEl.value = ciState.header.supplier;
@@ -3760,7 +4036,7 @@
         ciState.rows = null;
         $("#ciConfirmBar").hidden = true;
         $("#ciDone").innerHTML = "";
-        ciStatus(`The document rows did not reconcile to its printed total (${genericMoney(doc.reconciliation.parsedTotal, ciState.currency)} parsed versus ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)} printed). Check-in has been blocked so incomplete stock cannot be added.`, "err");
+        ciStatus(`The document rows did not reconcile to its printed total (${genericMoney(doc.reconciliation.parsedTotal, ciState.currency || "$")} parsed versus ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency || "$")} printed). Check-in has been blocked so incomplete stock cannot be added.`, "err");
         return;
       }
       if (!doc.entries.length) {
@@ -3802,26 +4078,7 @@
       ciState.shippingNote = shipping.note;
       ciState.shippingNeedsReview = shipping.needsReview;
 
-      if (ciState.currency === "AED") {
-        ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
-      } else {
-        ciStatus(`Reading the document and fetching the ${ciState.currency}→AED exchange rate…`);
-        const fetched = await fetchCheckinExchangeRate(ciState.currency, dEl.value || null);
-        if (fetched) {
-          ciState.exchangeRate = fetched.rate;
-          ciState.rateDate = fetched.rateDate;
-          ciState.rateSource = fetched.source;
-        } else {
-          const cached = ratesByCurrency.get(ciState.currency);
-          if (cached) {
-            ciState.exchangeRate = cached.rate;
-            ciState.rateDate = cached.asOf ? String(cached.asOf).slice(0, 10) : null;
-            ciState.rateSource = "cache-fallback";
-          } else {
-            ciState.exchangeRate = null; ciState.rateDate = null; ciState.rateSource = "unavailable";
-          }
-        }
-      }
+      await ciLoadExchangeRate(dEl.value || null);
 
       // Commercial Invoice descriptions live in a separate block of the PDF
       // (see parseCommercialInvoiceDescriptions above); every other format
@@ -3834,7 +4091,9 @@
       ciRender();
 
       const t = ciTally();
-      const rateNote = ciState.currency !== "AED"
+      const rateNote = !ciState.currency
+        ? " Prices are in \"$\" with nothing on the document saying which dollar — choose USD or AUD in the currency box below; the rate is then fetched automatically."
+        : ciState.currency !== "AED"
         ? (ciState.exchangeRate ? ` Exchange rate sourced from ${RATE_SOURCE_LABEL[ciState.rateSource]}.` : " Exchange rate unavailable — flagged for review.")
         : "";
       // A reconciliation count, not just a note -- "N detected, M created"
@@ -3857,9 +4116,9 @@
         ? " This packing list has quantities but no item codes or prices. Map every row to the correct Master Inventory item with Edit; its existing cost will be retained."
         : "";
       const reconciliationNote = doc.reconciliation && doc.reconciliation.ok
-        ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency)}.`
+        ? ` Parsed rows reconcile to the printed document total of ${genericMoney(doc.reconciliation.expectedTotal, ciState.currency || "$")}.`
         : "";
-      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${manualMappingNote}${reconciliationNote}`);
+      ciStatus(`Analysis ready — ${ciState.header.docType || "document"} read via ${doc.formatLabel}, ${doc.entries.length} line${doc.entries.length === 1 ? "" : "s"} found in ${ciState.currency || "\"$\" (choose USD or AUD below)"}, ${t.unresolved} need decisions.${rateNote}${gapNote}${ocrNote}${lowConfNote}${manualMappingNote}${reconciliationNote}`);
     } catch (err) {
       console.error(err);
       if (!isStale()) ciStatus("Could not analyse the document: " + err.message, "err");
@@ -3871,7 +4130,7 @@
   function ciResetAll() {
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
-    ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
@@ -3982,7 +4241,7 @@
     ciState.pdfHash = null;
     ciState.header = {};
     ciState.itemsByCode = ciManualItemsByCode;
-    ciState.currency = "AED"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     ciState.usedOcr = false; ciState.lowConfidenceFallback = false;
     ciState.rows = rows;

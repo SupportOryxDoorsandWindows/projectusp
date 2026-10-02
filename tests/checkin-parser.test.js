@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed };\n})();`
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo } = context.window.__ciTest;
 
 const freedomApproval = `
 COMMON PARTS
@@ -285,5 +285,49 @@ assert.equal(
   detectShippingCharge("Tax Rate Price Freight\nA100 Nylon Cord 10 4.50 45.00\nGrand Total 45.00").amount,
   null
 );
+
+// Freedom "Zipline Component Order Form": pdf.js emits one table cell per
+// line. Ref No. (ZIP49) is Freedom's own reference, never the item code;
+// quantity and price are the only pair that multiply out to the Sub Total
+// (never "Amt Per Screen" or the "CUT INTO 2.8 AND 2.3M" note).
+const ziplineForm = [
+  " Ref No.", " ", "Image", " ", "Name", " ", "Amt Per", "Screen", " ", "Mill Price", " ", "QTY",
+  "Powder", "Coat price", "QTY", " ", "Colour", " ", "Sub Total",
+  " ZIP49", " ", "ZLS1-Brake Adjuster-01 0.005 kgs", " ", "2", " ", "3.69", " ", "200", " ", "n/a", " ", "$738.00",
+  "ZIP57", " ", "Magnet Holder-STR (5.1m) 0.304 kgs", "Plastic Extrusion 5.1m Length", "20.03", " ", "50",
+  "CUT INTO", "2.8 AND", "2.3M", "$1,001.50",
+  "ZIP59", " ", "ZLS1-Magnet-01 (200m roll) 25 kgs", " ", "367.82", " ", "2", " ", "n/a", " ", "$735.64",
+  " Order Approved Name Signed Dated", " Zipline Component Order Form", " Page 1 of 1",
+].join("\n");
+const ziplineFormDoc = parseCheckinDocument(ziplineForm);
+assert.equal(ziplineFormDoc.formatId, "zipline-order-form");
+assert.deepEqual(
+  ziplineFormDoc.entries.map(({ code, description, qty, unitCost }) => ({ code, description, qty, unitCost })),
+  [
+    { code: "", description: "ZLS1-Brake Adjuster-01", qty: 200, unitCost: 3.69 },
+    { code: "", description: "Magnet Holder-STR (5.1m)", qty: 50, unitCost: 20.03 },
+    { code: "", description: "ZLS1-Magnet-01 (200m roll)", qty: 2, unitCost: 367.82 },
+  ]
+);
+// A row whose numbers don't multiply out to its Sub Total is never guessed.
+assert.equal(parseCheckinDocument(ziplineForm.replace("$738.00", "$739.00")).entries.length, 2);
+
+// Currency detection: written codes/symbols first; a bare "$" uses the
+// document's own country details; with none, it's left for the person to
+// choose (never silently AED).
+const cur = (t) => detectDocumentCurrencyInfo(t);
+assert.equal(cur("Price USD 3.51 Total USD 351.00").currency, "USD");
+assert.equal(cur("Price AUD 902.50").currency, "AUD");
+assert.equal(cur("Unit US$ 4.90 Sub Total US$490.00").currency, "USD");
+assert.equal(cur("Unit A$ 4.90 Total AU$490.00").currency, "AUD");
+assert.equal(cur("Freedom Screens Pty Ltd ABN 12 345 678 901\nZIP49 Brake Adjuster $738.00").currency, "AUD");
+assert.equal(cur("Shipped from Denver, USA\nZIP49 Brake Adjuster $738.00").currency, "USD");
+const bareDollar = cur(ziplineForm);
+assert.equal(bareDollar.currency, "USD");
+assert.equal(bareDollar.basis, "dollar-default-usd");
+assert.equal(bareDollar.needsChoice, false);
+assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, "USD");
+assert.equal(cur("Nylon Cord 10 4.50 45.00").currency, "AED");
+assert.equal(cur("Price AED 12.00").currency, "AED");
 
 console.log("check-in parser tests passed");
