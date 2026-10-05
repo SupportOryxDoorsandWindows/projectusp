@@ -2018,7 +2018,7 @@
         .replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "")
         .replace(/\s*\(NOTE:[^)]*\)/i, "")
         .replace(/\s+/g, " ").trim();
-      entries.push({ code: "", description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
+      entries.push({ code: "", supplierRef: cells[start].replace(/\s*-$/, "").trim(), description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
     });
     return entries;
   }
@@ -2811,8 +2811,77 @@
     return best;
   }
 
-  function buildCheckinRows(lines, descriptions, itemsByCode) {
+  /* --------------------- Teach once, remember -------------------------- */
+  // A person's confirmed decision that a supplier's own code or wording means
+  // a given Master Inventory item (table supplier_item_aliases, written only
+  // by the `checkin` Edge Function after a successful Check-in). Keys are
+  // normalised the same way the matcher reads text, so trivial differences
+  // ("White" vs "WHT", spacing, dashes) still hit the same link.
+  function supplierKey(name) {
+    return String(name || "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(pty|ltd|llc|l l c|inc|co|company|limited|fzco|fze|fzc|the|of|trading)\b/g, " ")
+      .replace(/\s+/g, " ").trim();
+  }
+  function aliasDescriptionKey(text) {
+    return normaliseForMatch(text).toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean).join(" ");
+  }
+  function aliasCodeKey(code) {
+    return String(code || "").toUpperCase().replace(/\s+/g, " ").trim();
+  }
+
+  async function loadSupplierAliases() {
+    try {
+      const { data, error } = await sb.from("supplier_item_aliases").select("*");
+      if (error) throw error;
+      return data || [];
+    } catch (err) {
+      // Never blocks a Check-in -- it just reads without remembered links.
+      console.warn("Remembered matches unavailable:", err && err.message);
+      return [];
+    }
+  }
+  function buildAliasIndex(aliases) {
+    const index = new Map();
+    for (const a of aliases || []) {
+      const k = `${a.match_kind}|${a.match_key}`;
+      if (!index.has(k)) index.set(k, []);
+      index.get(k).push(a);
+    }
+    return index;
+  }
+  // Supplier's own code first, then its wording. When the same text was
+  // linked to different items for different suppliers, the current
+  // supplier's link decides; if that still isn't one item, nothing is used.
+  function lookupAlias(aliasIndex, itemsByCode, line, description, supplierHint) {
+    if (!aliasIndex || !aliasIndex.size) return null;
+    const byId = new Map();
+    for (const cands of itemsByCode.values()) for (const c of cands) byId.set(c.id, c);
+    const hint = supplierKey(supplierHint);
+    const hintFirst = hint.split(" ")[0];
+    const tries = [];
+    const code = aliasCodeKey(line.supplierRef || line.code);
+    if (code) tries.push(["code", code]);
+    const desc = aliasDescriptionKey(description);
+    if (desc) tries.push(["description", desc]);
+    for (const [kind, key] of tries) {
+      const hits = (aliasIndex.get(`${kind}|${key}`) || []).filter((a) => byId.has(a.item_id));
+      if (!hits.length) continue;
+      let pool = hits;
+      if (new Set(pool.map((a) => a.item_id)).size > 1 && hint) {
+        pool = hits.filter((a) => a.supplier_key === hint || (hintFirst && a.supplier_key.split(" ")[0] === hintFirst));
+      }
+      if (pool.length && new Set(pool.map((a) => a.item_id)).size === 1) {
+        const a = pool.reduce((x, y) => (y.times_confirmed > x.times_confirmed ? y : x));
+        return { item: byId.get(a.item_id), kind, supplier: a.supplier, timesConfirmed: a.times_confirmed };
+      }
+    }
+    return null;
+  }
+
+  function buildCheckinRows(lines, descriptions, itemsByCode, aliasIndex, supplierHint) {
     const rows = [];
+    const aliasHits = [];
     lines.forEach((l, i) => {
       const candidates = lookupExactCode(itemsByCode, l.code);
       // Description comes straight from the row parser when that format
@@ -2820,6 +2889,11 @@
       // Commercial Invoice reader relies on the separate description block.
       const pdfDescription = l.description || (descriptions.length === lines.length ? descriptions[i] : "");
       let item = pickInventoryRow({ kind: "checkin" }, candidates);
+      // Not an exact Master code -> a link a person already confirmed for this
+      // supplier's code or wording wins over every automatic rule below.
+      const matchedByAlias = !item ? lookupAlias(aliasIndex, itemsByCode, l, pdfDescription, supplierHint) : null;
+      if (matchedByAlias) item = matchedByAlias.item;
+      aliasHits[i] = matchedByAlias;
       // The invoice's own code didn't resolve to anything (missing,
       // truncated, or simply wrong) -- fall back to an exact, UNIQUE
       // description match against Master Inventory (never fires once a code
@@ -2839,7 +2913,7 @@
       // one field over the other here; flag for manual review instead of
       // silently picking the code's item.
       let codeDescConflict = null;
-      if (item && !matchedByDescription && l.code && pdfDescription) {
+      if (item && !matchedByDescription && !matchedByAlias && l.code && pdfDescription) {
         const descItem = findUniqueDescriptionItem(itemsByCode, pdfDescription);
         if (descItem && descItem.id !== item.id) {
           codeDescConflict = { codeItemCode: item.item_code, descItemCode: descItem.item_code };
@@ -2984,6 +3058,20 @@
         matchedByDescription: matchedByDescription ? { sourceCode: l.code || "—" } : null,
         packageInfo: invoicePkg ? { type: invoicePkg.type, qtyPerPackage: invoicePkg.qtyPerPackage, unit: invoicePkg.unit } : null,
       });
+    });
+    // Every line pushes exactly one row, so rows[i] is lines[i]. Keep what
+    // the supplier actually printed -- a resolved row's code/description are
+    // replaced by the Master item's, but "teach once, remember" needs the
+    // supplier's own wording and code.
+    rows.forEach((r, i) => {
+      const l = lines[i] || {};
+      r.source = {
+        code: l.code || "",
+        supplierRef: l.supplierRef || "",
+        description: l.description || (descriptions.length === lines.length ? descriptions[i] : "") || "",
+      };
+      const hit = aliasHits[i];
+      r.matchedByAlias = hit && r.itemId === hit.item.id ? { supplier: hit.supplier, timesConfirmed: hit.timesConfirmed } : null;
     });
     return rows;
   }
@@ -3309,6 +3397,7 @@
       r.newQty = item.current_qty + r.qty;
       r.status = "ok"; r.action = "add"; r.decided = true;
       r.usedDespiteDifference = { code: item.code, masterPackSize: item.packSize, invoicePackSize: item.invoicePackSize };
+      r.personResolved = true;
     }
     else if (act === "confirm-pack") {
       // Human-confirmed quantity for a bundled item whose packaging claim
@@ -3346,6 +3435,7 @@
       // fall back to Master Inventory's own unit so the row doesn't imply
       // "3240 of 200m each".
       if (!acceptedDefault) r.unit = m.itemUnit;
+      r.personResolved = true;
     }
     else if (act === "use-suggestion") {
       // The person confirmed the suggested Master Inventory item -- resolved
@@ -3355,6 +3445,7 @@
       if (!suggested) return;
       r.suggestedItem = null;
       recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit, suggested.id);
+      r.personResolved = r.status === "ok";
     }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
@@ -3376,6 +3467,7 @@
         return;
       }
       recomputeCiRowAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
+      r.personResolved = r.status === "ok";
       r.editing = false;
     }
     else if (act === "new-item") { r.creatingNew = true; }
@@ -3451,6 +3543,7 @@
       r.decided = true;
       r.creatingNew = false;
       r.newItemData = { code: r.code, description, category: category || null, unit, bufferLevel: buffer, approvedBy: approver };
+      r.personResolved = true;
     }
     ciRender();
   }
@@ -3662,7 +3755,9 @@
       const lowConfBadge = r.lowConfidence
         ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
         : "";
-      const descriptionMatchBadge = r.matchedByDescription
+      const descriptionMatchBadge = r.matchedByAlias
+        ? `<span class="fp-auto-match-note fp-remembered-note" title="Matched from a previous Check-in: someone confirmed that ${esc(r.matchedByAlias.supplier || "this supplier")}'s wording/code means this item (confirmed ${esc(r.matchedByAlias.timesConfirmed)}×). Use Edit if it's wrong — confirming a different item updates the link.">Remembered</span>`
+        : r.matchedByDescription
         ? `<span class="fp-auto-match-note" title="Matched automatically from the product description (ignoring extra words like line numbers); supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
         : "";
       // The invoice's code and description each exactly match a different
@@ -4103,6 +4198,23 @@
         };
       });
 
+    // Teach once, remember: same rows, same order as `lines` above. Only a
+    // decision a person made (Edit / Use this item / New item / Use existing
+    // / confirmed pack) or a remembered link being re-confirmed is sent --
+    // automatic matches don't need remembering. The server saves these only
+    // after the stock itself was saved.
+    const sentRows = ciState.rows.filter((r) => (r.action === "add" && r.itemId) || (r.action === "create-new" && r.newItemData));
+    const supplierKeyForLinks = supplierKey(supplier);
+    sentRows.forEach((r, k) => {
+      if (!r.source || !(r.personResolved || r.matchedByAlias) || !supplierKeyForLinks) return;
+      const ownCode = r.source.supplierRef || r.source.code;
+      // A code that IS a Master code needs no link -- it already matches.
+      const codeKey = ownCode && !lookupExactCode(ciState.itemsByCode, ownCode).length ? aliasCodeKey(ownCode) : "";
+      const descriptionKey = aliasDescriptionKey(r.source.description);
+      if (!codeKey && !descriptionKey) return;
+      lines[k].remember = { supplier_key: supplierKeyForLinks, code_key: codeKey || null, description_key: descriptionKey || null, example: r.source.description || ownCode };
+    });
+
     const res = await fetch(CHECKIN_FN_URL, {
       method: "POST",
       headers: {
@@ -4145,7 +4257,8 @@
       <div class="fp-done">
         <h3>Check-in confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} added</h3>
         <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
-        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}</p>
+        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}${
+          data.remembered > 0 ? ` ${lines.filter((l) => l.remember).length} line${lines.filter((l) => l.remember).length === 1 ? "" : "s"} you matched by hand will now be recognised automatically next time (see Remembered matches on the Master Inventory tab).` : ""}</p>
         <div class="fp-done-actions">
           <button class="ghost" id="ciNew">Start another Check-in</button>
         </div>
@@ -4166,11 +4279,12 @@
     const isStale = () => myToken !== ciAnalyseToken;
     ciStatus("Reading the document and matching items against the Master Inventory…");
     try {
-      let [pages, itemsByCode, hash, ratesByCurrency] = await Promise.all([
+      let [pages, itemsByCode, hash, ratesByCurrency, aliases] = await Promise.all([
         extractPdfTextPerPage(ciState.pdfFile),
         loadInventoryItems(),
         pdfFingerprint(ciState.pdfFile),
         loadExchangeRates(),
+        loadSupplierAliases(),
       ]);
 
       ciState.usedOcr = false;
@@ -4313,7 +4427,7 @@
         ? parseCommercialInvoiceDescriptions(pdfText, doc.entries.length)
         : [];
       if (isStale()) return;
-      ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode);
+      ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode, buildAliasIndex(aliases), $("#ciSupplier").value || ciState.header.supplier);
       ciState.deletedRows = [];
       ciRender();
 
@@ -4561,21 +4675,74 @@
     $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes] = await Promise.all([
+      const [itemsRes, txRes, aliases] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
         // Fetched at line-item grain, then grouped back into one Check-out
         // per (job, client, timestamp) below -- Postgres's now() returns the
         // same value for every row inserted inside one checkout_transaction()
         // call, so that triple is a reliable grouping key.
         sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(500),
+        loadSupplierAliases(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
       renderMasterInventoryView(itemsRes.data, txRes.data);
+      renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
       $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
+    }
+  }
+
+  // Remembered matches ("teach once, remember"): every saved link, newest
+  // first, with Forget. Forgetting goes through the `checkin` Edge Function
+  // (the table itself is read-only to the site).
+  function renderRememberedMatches(aliases, items) {
+    const body = $("#miAliasBody");
+    if (!body) return;
+    const byId = new Map((items || []).map((it) => [it.id, it]));
+    const list = [...(aliases || [])].sort((a, b) => String(b.last_confirmed_at).localeCompare(String(a.last_confirmed_at)));
+    body.innerHTML = list.length ? list.map((a) => {
+      const it = byId.get(a.item_id);
+      return `<tr>
+        <td>${esc(a.supplier || a.supplier_key)}</td>
+        <td>${a.match_kind === "code" ? `<span class="small muted">Code</span> <span class="code">${esc(a.match_key)}</span>` : esc(a.example_text || a.match_key)}</td>
+        <td>${it ? `<span class="code">${esc(it.item_code)}</span> — ${esc(it.description || "")}${it.bar_length_mm ? ` <span class="small muted">(${esc(it.bar_length_mm)} mm)</span>` : ""}` : `<span class="small muted">item no longer exists</span>`}</td>
+        <td class="num">${esc(a.times_confirmed)}×</td>
+        <td class="small">${esc(String(a.last_confirmed_at || "").slice(0, 10))}</td>
+        <td><button class="ghost" type="button" data-alias-forget="${esc(a.id)}">Forget</button></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="small muted">Nothing remembered yet. Links are saved automatically when a Check-in with hand-matched lines is confirmed.</td></tr>`;
+    for (const btn of body.querySelectorAll("[data-alias-forget]")) {
+      btn.onclick = async () => {
+        const a = list.find((x) => x.id === btn.dataset.aliasForget);
+        if (!a) return;
+        const it = byId.get(a.item_id);
+        const what = a.match_kind === "code" ? `code ${a.match_key}` : `"${a.example_text || a.match_key}"`;
+        if (!window.confirm(`Forget that ${a.supplier || "this supplier"}'s ${what} means ${it ? it.item_code + " — " + (it.description || "") : "this item"}?\n\nNext time, that line will be matched by the normal rules (or left for someone to pick).`)) return;
+        btn.disabled = true;
+        const statusEl = $("#miAliasStatus");
+        try {
+          const res = await fetch(CHECKIN_FN_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
+              "apikey": window.ORYX_CONFIG.supabaseKey,
+            },
+            body: JSON.stringify({ action: "forget_alias", id: a.id }),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.detail || data.error || "The link was not removed.");
+          statusEl.textContent = `Forgotten: ${a.supplier || ""} ${what}.`;
+          renderRememberedMatches(list.filter((x) => x.id !== a.id), items);
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Could not forget: " + err.message;
+          btn.disabled = false;
+        }
+      };
     }
   }
 

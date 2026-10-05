@@ -60,3 +60,22 @@ product lines — never treat one family's item as a match for another's:
   fully fit, the one matching the most of the line's words wins; a tie (e.g.
   BLK vs WHT with no colour on the line) matches nothing. A shared part
   ("ZLS1 ZLS2 Magnet") accepts either family.
+
+## Teach once, remember (Check-in)
+
+- Table `supplier_item_aliases` (Supabase): a person's confirmed link from a
+  supplier's own code (`match_kind = 'code'`, e.g. ZIP49) or wording
+  (`'description'`, normalised by `aliasDescriptionKey`) to a Master item.
+  Read by the site; written only by the `checkin` Edge Function, which calls
+  `remember_supplier_aliases(jsonb)` (service_role only) AFTER
+  `checkin_transaction` succeeds, so the stock logic is untouched. Forget =
+  `{action: "forget_alias", id}` to the same Edge Function.
+- The Edge Function source is kept in `supabase/functions/checkin/index.ts`;
+  redeploy it from there (verify_jwt stays true).
+- Lookup order in `buildCheckinRows`: exact Master code → remembered link
+  (code, then wording; the current supplier decides when suppliers disagree)
+  → matching rules → suggestions. Only person-resolved rows (`personResolved`)
+  or re-confirmed remembered rows send `remember` at Confirm.
+- `checkin_transaction` is executable by service_role only (locked
+  2026-10-05). Two old unused overloads still exist (also locked); the
+  Supabase connector times out on DROP, so remove them from the SQL editor.

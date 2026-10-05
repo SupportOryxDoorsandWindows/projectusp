@@ -617,6 +617,7 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
 }
 .fp-checkin-table td:nth-child(11) .fp-row-actions button{min-width:52px; white-space:nowrap}
 .fp-checkin-table td:nth-child(10) span{white-space:nowrap}
+.fp-remembered-note{border-color:var(--brand); color:var(--brand); font-weight:600}
 .fp-auto-match-note{
   display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px;
   border:1px solid var(--line);
@@ -1136,6 +1137,20 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <span class="small" id="miItemsPageLabel"></span>
         <button class="ghost" id="miItemsNext" type="button">Next</button>
       </div>
+    </div>
+    <div class="fp-section-h">Remembered matches</div>
+    <p class="small muted" style="margin-top:0">When someone matches a supplier's line to an item by hand and confirms the
+    Check-in, the system remembers it and recognises that line automatically next time (shown as <b>Remembered</b>).
+    If a link is wrong, <b>Forget</b> it — that line goes back to normal matching.</p>
+    <span class="small muted" id="miAliasStatus"></span>
+    <div class="fp-scroll">
+      <table class="fp-table" id="miAliasTable">
+        <thead><tr>
+          <th>Supplier</th><th>Supplier's code / wording</th><th>Matched to</th>
+          <th class="num">Confirmed</th><th>Last confirmed</th><th></th>
+        </tr></thead>
+        <tbody id="miAliasBody"></tbody>
+      </table>
     </div>
     <div class="fp-section-h fp-section-h-row">
       <span>Transaction History</span>
