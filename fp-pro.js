@@ -4258,7 +4258,7 @@
         <h3>Check-in confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} added</h3>
         <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
         Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}${
-          data.remembered > 0 ? ` ${lines.filter((l) => l.remember).length} line${lines.filter((l) => l.remember).length === 1 ? "" : "s"} you matched by hand will now be recognised automatically next time (see Remembered matches on the Master Inventory tab).` : ""}</p>
+          data.remembered > 0 ? ` Lines you matched by hand will match automatically next time.` : ""}</p>
         <div class="fp-done-actions">
           <button class="ghost" id="ciNew">Start another Check-in</button>
         </div>
@@ -4700,27 +4700,28 @@
   // (the table itself is read-only to the site).
   function renderRememberedMatches(aliases, items) {
     const body = $("#miAliasBody");
-    if (!body) return;
+    const box = $("#miAliasBox");
+    if (!body || !box) return;
     const byId = new Map((items || []).map((it) => [it.id, it]));
     const list = [...(aliases || [])].sort((a, b) => String(b.last_confirmed_at).localeCompare(String(a.last_confirmed_at)));
-    body.innerHTML = list.length ? list.map((a) => {
+    // Nothing to show -> no section at all.
+    box.hidden = !list.length;
+    $("#miAliasCount").textContent = list.length ? `(${list.length})` : "";
+    body.innerHTML = list.map((a) => {
       const it = byId.get(a.item_id);
+      const wrote = a.match_kind === "code" ? `Code ${a.match_key}` : (a.example_text || a.match_key);
       return `<tr>
-        <td>${esc(a.supplier || a.supplier_key)}</td>
-        <td>${a.match_kind === "code" ? `<span class="small muted">Code</span> <span class="code">${esc(a.match_key)}</span>` : esc(a.example_text || a.match_key)}</td>
+        <td>${esc(wrote)}<div class="small muted">${esc(a.supplier || a.supplier_key)}</div></td>
         <td>${it ? `<span class="code">${esc(it.item_code)}</span> — ${esc(it.description || "")}${it.bar_length_mm ? ` <span class="small muted">(${esc(it.bar_length_mm)} mm)</span>` : ""}` : `<span class="small muted">item no longer exists</span>`}</td>
-        <td class="num">${esc(a.times_confirmed)}×</td>
-        <td class="small">${esc(String(a.last_confirmed_at || "").slice(0, 10))}</td>
         <td><button class="ghost" type="button" data-alias-forget="${esc(a.id)}">Forget</button></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6" class="small muted">Nothing remembered yet. Links are saved automatically when a Check-in with hand-matched lines is confirmed.</td></tr>`;
+    }).join("");
     for (const btn of body.querySelectorAll("[data-alias-forget]")) {
       btn.onclick = async () => {
         const a = list.find((x) => x.id === btn.dataset.aliasForget);
         if (!a) return;
         const it = byId.get(a.item_id);
-        const what = a.match_kind === "code" ? `code ${a.match_key}` : `"${a.example_text || a.match_key}"`;
-        if (!window.confirm(`Forget that ${a.supplier || "this supplier"}'s ${what} means ${it ? it.item_code + " — " + (it.description || "") : "this item"}?\n\nNext time, that line will be matched by the normal rules (or left for someone to pick).`)) return;
+        if (!window.confirm(`Forget this match?\n\n${a.match_kind === "code" ? "Code " + a.match_key : (a.example_text || a.match_key)}  →  ${it ? it.item_code : "this item"}`)) return;
         btn.disabled = true;
         const statusEl = $("#miAliasStatus");
         try {
@@ -4735,7 +4736,7 @@
           });
           const data = await res.json();
           if (!data.ok) throw new Error(data.detail || data.error || "The link was not removed.");
-          statusEl.textContent = `Forgotten: ${a.supplier || ""} ${what}.`;
+          statusEl.textContent = "Forgotten.";
           renderRememberedMatches(list.filter((x) => x.id !== a.id), items);
         } catch (err) {
           console.error(err);
