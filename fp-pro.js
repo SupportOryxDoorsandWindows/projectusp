@@ -4935,11 +4935,51 @@
 
   /* --------------------------- Master Inventory view ---------- */
 
+  // Item photos: one picture per item code (every bar length shares it),
+  // taken from the stock Excel file and kept in assets/items/ with a
+  // code -> file map in index.json. Loaded once; a missing map just means
+  // no photos are shown.
+  let itemPhotosPromise = null;
+  function loadItemPhotos() {
+    if (!itemPhotosPromise) {
+      itemPhotosPromise = fetch("assets/items/index.json")
+        .then((res) => (res.ok ? res.json() : {}))
+        .catch(() => ({}))
+        .then((map) => {
+          const byCode = new Map();
+          for (const [code, file] of Object.entries(map || {})) byCode.set(code.toUpperCase(), "assets/items/" + file);
+          return byCode;
+        });
+    }
+    return itemPhotosPromise;
+  }
+
+  function itemPhotoCell(photos, it) {
+    const src = photos && photos.get(String(it.item_code).toUpperCase());
+    if (!src) return `<td><span class="fp-photo-none" title="No photo yet"></span></td>`;
+    const label = `${it.item_code} — ${it.description || ""}`;
+    return `<td><button class="fp-photo-btn" type="button" data-mi-photo="${esc(src)}" data-mi-photo-cap="${esc(label)}" aria-label="View photo of ${esc(label)}">
+      <img src="${esc(src)}" alt="" loading="lazy"></button></td>`;
+  }
+
+  function openItemPhoto(src, caption) {
+    const box = document.getElementById("lightbox");
+    if (!box) return;
+    const img = $("#lbImg");
+    img.src = src;
+    img.alt = caption;
+    img.classList.add("fp-item-photo");
+    // The same viewer shows drawings, which keep their own size.
+    box.addEventListener("close", () => img.classList.remove("fp-item-photo"), { once: true });
+    $("#lbCap").textContent = caption;
+    box.showModal();
+  }
+
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes, aliases] = await Promise.all([
+      const [itemsRes, txRes, aliases, photos] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
         // Fetched at line-item grain, then grouped back into one Check-out
         // per (job, client, timestamp) below -- Postgres's now() returns the
@@ -4947,14 +4987,15 @@
         // call, so that triple is a reliable grouping key.
         sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(500),
         loadSupplierAliases(),
+        loadItemPhotos(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
-      renderMasterInventoryView(itemsRes.data, txRes.data);
+      renderMasterInventoryView(itemsRes.data, txRes.data, photos);
       renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
   }
@@ -5113,7 +5154,7 @@
   let miCurrentItems = [];
   let miFilteredItems = [];
 
-  function renderMasterInventoryView(items, txs) {
+  function renderMasterInventoryView(items, txs, photos) {
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
     const lowStock = items.filter((it) => it.buffer_level != null && it.current_qty <= it.buffer_level);
     $("#miTally").innerHTML = `
@@ -5144,6 +5185,7 @@
       $("#miItemsBody").innerHTML = pageItems.map((it) => {
         const low = it.buffer_level != null && it.current_qty <= it.buffer_level;
         return `<tr>
+          ${itemPhotoCell(photos, it)}
           <td class="code">${esc(it.item_code)}</td>
           <td>${esc(it.description)}${it.bar_length_mm ? `<div class="small muted">${esc(it.bar_length_mm)} mm</div>` : ""}</td>
           <td class="num">${fmt(it.current_qty)}</td>
@@ -5152,8 +5194,11 @@
           <td>${low ? `<span class="fp-status-short">Low</span>` : it.current_qty <= 0 ? `<span class="fp-status-unmatched">Out</span>` : `<span class="fp-status-ok">OK</span>`}</td>
           <td><button class="ghost" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="7" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="8" class="small muted">No items match.</td></tr>`;
 
+      for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-photo]")) {
+        btn.onclick = () => openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap);
+      }
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-adjust]")) {
         btn.onclick = () => {
           const item = pageItems.find((it) => String(it.id) === btn.dataset.miAdjust);

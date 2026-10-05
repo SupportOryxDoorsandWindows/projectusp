@@ -43,6 +43,14 @@ product lines — never treat one family's item as a match for another's:
   the preview only has to show it. `applyCombinedStock` totals every line of
   the same Master row so duplicates still show the shortage.
 
+## Item photos (Master Inventory)
+
+- One photo per item code (all bar lengths share it), in `assets/items/`
+  with a code → file map in `assets/items/index.json`. The first 178 came
+  from the pictures placed in column F of the STOCK sheet of Renato's Sep 29
+  stock file. Most are small (~80 px), so the viewer shows them at a fixed
+  size. Codes without a photo show an empty box.
+
 ## Currency (Check-in)
 
 - `detectDocumentCurrencyInfo` in `fp-pro.js`: a written code or code-marked
