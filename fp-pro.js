@@ -24,6 +24,16 @@
   const XLSX_SRC = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
   const CHECKOUT_FN_URL = window.ORYX_CONFIG.supabaseUrl + "/functions/v1/checkout";
 
+  // An outage or gateway error returns an HTML page, not JSON -- say so
+  // plainly instead of showing the browser's "Unexpected token" message.
+  async function readFnJson(res) {
+    try {
+      return await res.json();
+    } catch {
+      throw new Error(`The server didn't answer properly (HTTP ${res.status}). Check the Transaction History before trying again.`);
+    }
+  }
+
   const sb = window.supabase.createClient(window.ORYX_CONFIG.supabaseUrl, window.ORYX_CONFIG.supabaseKey);
 
   let libsPromise = null;
@@ -57,6 +67,10 @@
     pdfHash: null,
     parsedJob: null,
     rows: null,
+    // confirming: a Confirm is in flight; done: this preview was saved.
+    // Either one keeps Confirm locked so the same entry can't be sent twice.
+    confirming: false,
+    done: false,
     itemsByCode: null, // Map<item_code, [{id, description, bar_length_mm, unit_cost, current_qty, buffer_level}]>
   };
 
@@ -696,14 +710,14 @@
   // Re-derives a row's match/availability/status after the user edits its
   // Code, Description, Quantity or Unit in the Allocation Preview. Mirrors
   // the single-entry logic in buildRows() above.
-  function recomputeAfterEdit(row, newCode, newDescription, newQty, newUnit) {
+  function recomputeAfterEdit(row, newCode, newDescription, newQty, newUnit, exactItemId) {
     row.code = newCode;
     row.description = newDescription;
     row.requiredQty = newQty;
     row.unit = newUnit;
 
     const candidates = state.itemsByCode.get(newCode) || [];
-    const item = pickInventoryRow({ kind: row.kind, barLenMm: row.barLenMm }, candidates);
+    const item = pickedInventoryRow(state.itemsByCode, newCode, exactItemId, { kind: row.kind, barLenMm: row.barLenMm });
 
     if (!item) {
       row.available = null; row.remaining = null;
@@ -782,6 +796,23 @@
       unmatched: state.rows.filter((r) => !r.decided && r.baseStatus === "unmatched").length,
     };
   }
+
+  // Stock is checked per Master row, not per line: two lines of 6 against 10
+  // in stock is a shortage of 2 on both. Negative stock is still allowed --
+  // this only makes sure the preview says so.
+  function applyCombinedStock(rows) {
+    const totals = new Map();
+    for (const r of rows) {
+      if (r.itemId && r.action === "deduct") totals.set(r.itemId, (totals.get(r.itemId) || 0) + r.requiredQty);
+    }
+    for (const r of rows) {
+      if (!r.itemId || r.available == null || !(r.baseStatus === "ok" || r.baseStatus === "shortage")) continue;
+      const needed = r.action === "deduct" ? totals.get(r.itemId) : r.requiredQty;
+      r.remaining = r.available - needed;
+      r.status = r.baseStatus = r.remaining < 0 ? "shortage" : "ok";
+    }
+  }
+
   function tallyTotals() {
     const active = state.rows.filter((r) => r.action === "deduct");
     return {
@@ -842,6 +873,7 @@
   }
 
   function applyRowAction(idx, act) {
+    if (state.done) return;
     if (act === "skip-all-unmatched") {
       state.rows.forEach((rr) => {
         if (rr.decided) return;
@@ -898,13 +930,15 @@
         status("Enter a quantity greater than zero.", "err");
         return;
       }
-      recomputeAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
+      const idEl = document.getElementById(`fpEditItemId${idx}`);
+      recomputeAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit, idEl ? idEl.value : "");
       r.editing = false;
     }
     render();
   }
 
   function render() {
+    applyCombinedStock(state.rows);
     const job = state.parsedJob;
     const t = tallyTotals();
     const u = unresolvedByStatus();
@@ -917,6 +951,7 @@
             <input class="fp-inline-input" id="fpEditCodeSearch${i}" type="text" value="${codeLabel}"
               placeholder="Type to search Master Inventory" autocomplete="off">
             <input type="hidden" id="fpEditCodeValue${i}" value="${r.itemId ? esc(r.code) : ""}">
+            <input type="hidden" id="fpEditItemId${i}" value="${r.itemId ? esc(r.itemId) : ""}">
             <div class="fp-dropdown-results" id="fpEditCodeResults${i}" hidden></div>
           </td>
           <td><input class="fp-inline-input" id="fpEditDesc${i}" type="text" value="${esc(r.description)}" readonly></td>
@@ -1006,6 +1041,7 @@
     `;
 
     const canConfirm =
+      !state.done && !state.confirming &&
       t.unresolved === 0 &&
       t.totalItems > 0 &&
       !state.rows.some((r) => r.editing) &&
@@ -1014,7 +1050,7 @@
     $("#fpConfirmSummary").textContent =
       `${t.totalItems} items · ${money(t.totalValue)}` +
       (t.skipped ? ` · ${t.skipped} skipped` : "");
-    $("#fpConfirmBar").hidden = false;
+    $("#fpConfirmBar").hidden = state.done;
     $("#fpConfirm").disabled = !canConfirm;
 
     document.querySelectorAll("#fpOut .fp-row-actions button, #fpOut .fp-batch-actions button").forEach((b) => {
@@ -1047,7 +1083,7 @@
         lines,
       }),
     });
-    const data = await res.json();
+    const data = await readFnJson(res);
 
     if (!data.ok) {
       if (data.error === "duplicate_document") {
@@ -1059,7 +1095,9 @@
       throw new Error(data.detail || data.error || "The Check-out was not applied.");
     }
 
+    state.done = true;
     $("#fpConfirmBar").hidden = true;
+    document.querySelectorAll("#fpOut button").forEach((b) => { b.disabled = true; });
     $("#fpDone").innerHTML = `
       <div class="fp-done">
         <h3>Check-out confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} deducted</h3>
@@ -1093,6 +1131,7 @@
       if (!jbox.value.trim() && state.parsedJob.ref) jbox.value = state.parsedJob.ref;
 
       const entries = parsePdf(pdfText);
+      state.done = false;
       state.rows = buildRows(entries, state.itemsByCode);
       state.removedRows = [];
       render();
@@ -1123,6 +1162,7 @@
       <td class="fp-code-picker">
         <input class="fp-inline-input" id="fpManCodeSearch${i}" type="text" placeholder="Search code or description" autocomplete="off">
         <input type="hidden" id="fpManCodeValue${i}" value="">
+        <input type="hidden" id="fpManItemId${i}" value="">
         <input type="hidden" id="fpManDesc${i}" value="">
         <div class="fp-dropdown-results" id="fpManCodeResults${i}" hidden></div>
       </td>
@@ -1139,7 +1179,9 @@
   // shows nothing, forever, until Reset) with no visible error at all.
   let fpManualItemsPromise = null;
   function fpManualLoadItems() {
-    if (!fpManualItemsPromise) fpManualItemsPromise = loadInventoryItems();
+    if (!fpManualItemsPromise) {
+      fpManualItemsPromise = loadInventoryItems().catch((err) => { fpManualItemsPromise = null; throw err; });
+    }
     return fpManualItemsPromise;
   }
 
@@ -1178,7 +1220,7 @@
       const qty = parseFloat($(`#fpManQty${i}`).value);
       if (!code) { $("#fpManualStatus").textContent = "Every row needs a Master Inventory item selected."; return; }
       if (!(qty > 0)) { $("#fpManualStatus").textContent = "Every row needs a quantity greater than 0."; return; }
-      const item = pickInventoryRow({ kind: "fitting" }, fpManualItemsByCode.get(code));
+      const item = pickedInventoryRow(fpManualItemsByCode, code, $(`#fpManItemId${i}`).value, { kind: "fitting" });
       if (!item) { $("#fpManualStatus").textContent = "One of the selected items could not be found — please re-pick it."; return; }
       const remaining = item.current_qty - qty;
       rows.push({
@@ -1198,6 +1240,7 @@
     state.pdfHash = null;
     state.parsedJob = { ref: "", user: "", description: "", printedAt: "" };
     state.itemsByCode = fpManualItemsByCode;
+    state.done = false;
     state.rows = rows;
     state.removedRows = [];
     render();
@@ -1211,6 +1254,8 @@
     state.pdfFile = null;
     state.pdfHash = state.parsedJob = state.rows = state.itemsByCode = null;
     state.removedRows = [];
+    state.done = false;
+    fpManualItemsPromise = null; // next manual entry reloads current stock
     $("#fpPdf").value = "";
     $("#fpPdfName").textContent = "Click or drop the PDF file here";
     $("#fpDrop").classList.remove("ready");
@@ -3513,6 +3558,7 @@
   }
 
   function applyCiRowAction(idx, act) {
+    if (ciState.done) return;
     if (act === "restore") {
       const back = restoreDeleted(ciState.rows, ciState.deletedRows || [], idx);
       if (back) {
@@ -3635,7 +3681,8 @@
         ciStatus("Enter a quantity greater than zero.", "err");
         return;
       }
-      recomputeCiRowAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
+      const idEl = document.getElementById(`ciEditItemId${idx}`);
+      recomputeCiRowAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit, idEl ? idEl.value : "");
       r.personResolved = r.status === "ok";
       r.editing = false;
     }
@@ -3728,43 +3775,78 @@
   // changes via a click on a real Master Inventory entry -- there's no way
   // to save free-typed text -- so an edit can never point at (or implicitly
   // create) anything that isn't an existing item.
+  // One option per code -- except a code with several bar lengths (e.g. a
+  // ZLS1 profile with 2500 / 2900 / 5100 mm rows), which gets one option per
+  // length, so the person picks the exact row instead of the system guessing.
+  function codePickerOptions(itemsByCode) {
+    const options = [];
+    for (const code of [...itemsByCode.keys()].sort()) {
+      const rows = itemsByCode.get(code);
+      const lengths = new Set(rows.map((c) => c.bar_length_mm).filter((n) => typeof n === "number"));
+      if (rows.length > 1 && lengths.size > 1) {
+        [...rows]
+          .sort((a, b) => (a.bar_length_mm ?? Infinity) - (b.bar_length_mm ?? Infinity))
+          .forEach((c) => options.push({
+            code, id: c.id, description: c.description || "",
+            label: c.bar_length_mm != null ? `${Math.round(c.bar_length_mm)} mm` : "",
+            searchText: c.description || "",
+          }));
+      } else {
+        options.push({
+          code, id: rows.length === 1 ? rows[0].id : "", description: rows[0].description || "", label: "",
+          searchText: rows.map((c) => c.description || "").join(" "),
+        });
+      }
+    }
+    return options;
+  }
+
+  // Resolves a picker's choice to one Master row: the exact row picked when
+  // the picker recorded one, else the usual best row for the code.
+  function pickedInventoryRow(itemsByCode, code, itemId, entry) {
+    const candidates = (itemsByCode && itemsByCode.get(code)) || [];
+    return (itemId && candidates.find((c) => c.id === itemId)) || pickInventoryRow(entry, candidates);
+  }
+
   function wireCodePicker(prefix, itemsByCode, i) {
     const searchEl = document.getElementById(`${prefix}CodeSearch${i}`);
     const valueEl = document.getElementById(`${prefix}CodeValue${i}`);
+    const idEl = document.getElementById(`${prefix}ItemId${i}`);
     const resultsEl = document.getElementById(`${prefix}CodeResults${i}`);
     const descEl = document.getElementById(`${prefix}Desc${i}`);
     if (!searchEl) return;
 
-    const allCodes = [...itemsByCode.keys()].sort();
+    const allOptions = codePickerOptions(itemsByCode);
+    const optionText = (o) => `${o.code} — ${o.description}${o.label ? ` · ${o.label}` : ""}`;
     function renderResults(query) {
       const q = query.trim().toLowerCase();
-      const matches = allCodes.filter((code) => {
-        if (!q) return true;
-        if (code.toLowerCase().includes(q)) return true;
-        const cand = itemsByCode.get(code)[0];
-        return (cand.description || "").toLowerCase().includes(q);
-      }).slice(0, 30);
+      const matches = allOptions.filter((o) => !q || o.code.toLowerCase().includes(q) || o.searchText.toLowerCase().includes(q))
+        .slice(0, 30);
       resultsEl.innerHTML = matches.length
-        ? matches.map((code) => {
-            const cand = itemsByCode.get(code)[0];
-            return `<div class="fp-dropdown-option" data-code="${esc(code)}"><span class="code">${esc(code)}</span> — ${esc(cand.description || "")}</div>`;
-          }).join("")
+        ? matches.map((o) =>
+            `<div class="fp-dropdown-option" data-code="${esc(o.code)}" data-id="${esc(o.id)}"><span class="code">${esc(o.code)}</span> — ${esc(o.description)}${o.label ? ` · <b>${esc(o.label)}</b>` : ""}</div>`
+          ).join("")
         : `<div class="fp-dropdown-empty">No matching Master Inventory item.</div>`;
       resultsEl.hidden = false;
     }
 
     searchEl.addEventListener("focus", () => renderResults(searchEl.value));
-    searchEl.addEventListener("input", () => { valueEl.value = ""; renderResults(searchEl.value); });
+    searchEl.addEventListener("input", () => {
+      valueEl.value = "";
+      if (idEl) idEl.value = "";
+      renderResults(searchEl.value);
+    });
     searchEl.addEventListener("blur", () => { setTimeout(() => { resultsEl.hidden = true; }, 150); });
     // mousedown (not click) so it fires before the search box's blur closes the list.
     resultsEl.addEventListener("mousedown", (e) => {
       const opt = e.target.closest(".fp-dropdown-option");
       if (!opt) return;
-      const code = opt.dataset.code;
-      const cand = itemsByCode.get(code)[0];
-      valueEl.value = code;
-      searchEl.value = `${code} — ${cand.description || ""}`;
-      descEl.value = cand.description || "";
+      const o = allOptions.find((x) => x.code === opt.dataset.code && x.id === opt.dataset.id);
+      if (!o) return;
+      valueEl.value = o.code;
+      if (idEl) idEl.value = o.id;
+      searchEl.value = optionText(o);
+      descEl.value = o.description;
       resultsEl.hidden = true;
     });
   }
@@ -3777,6 +3859,7 @@
   // holds, and this is the actual gate on whether anything gets written to
   // Supabase, not just whether the button looked clickable.
   function ciCanConfirm() {
+    if (ciState.done) return false;
     if (!ciState.rows || !ciState.rows.length) return false;
     const t = ciTally();
     const rate = ciRate();
@@ -3873,6 +3956,7 @@
             <input class="fp-inline-input" id="ciEditCodeSearch${i}" type="text" value="${codeLabel}"
               placeholder="Type to search Master Inventory" autocomplete="off">
             <input type="hidden" id="ciEditCodeValue${i}" value="${r.itemId ? esc(r.code) : ""}">
+            <input type="hidden" id="ciEditItemId${i}" value="${r.itemId ? esc(r.itemId) : ""}">
             <div class="fp-dropdown-results" id="ciEditCodeResults${i}" hidden></div>
             ${!r.itemId ? `<div class="small muted" style="margin-top:2px">Extracted code: <code>${esc(r.code)}</code> — search below to find the right Master Inventory item.</div>` : ""}
           </td>
@@ -4205,8 +4289,8 @@
     const canConfirm = ciCanConfirm();
     $("#ciConfirmSummary").textContent =
       `${t.totalItems} items · ${t.totalValueAed != null ? money(t.totalValueAed) : "—"}` + (t.skipped ? ` · ${t.skipped} skipped` : "");
-    $("#ciConfirmBar").hidden = false;
-    $("#ciConfirm").disabled = !canConfirm;
+    $("#ciConfirmBar").hidden = !!ciState.done;
+    $("#ciConfirm").disabled = !canConfirm || !!ciState.confirming;
 
     document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button, #ciOut .fp-code-review-flag").forEach((b) => {
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
@@ -4400,7 +4484,7 @@
         lines,
       }),
     });
-    const data = await res.json();
+    const data = await readFnJson(res);
 
     if (!data.ok) {
       if (data.error === "duplicate_document") {
@@ -4415,7 +4499,9 @@
       throw new Error(data.detail || data.error || "The Check-in was not applied.");
     }
 
+    ciState.done = true;
     $("#ciConfirmBar").hidden = true;
+    document.querySelectorAll("#ciOut button, #ciOut input, #ciOut select").forEach((b) => { b.disabled = true; });
     const currencyNote = ciState.currency !== "AED"
       ? ` Converted from ${esc(ciState.currency)} at a rate of 1 ${esc(ciState.currency)} = ${rate} AED (${esc(RATE_SOURCE_LABEL[ciState.rateSource] || ciState.rateSource)}${ciState.rateDate ? `, rate date ${esc(ciState.rateDate)}` : ""}).`
       : "";
@@ -4641,6 +4727,8 @@
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
     ciState.deletedRows = [];
+    ciState.done = false;
+    ciManualItemsPromise = null; // next manual entry reloads current stock
     ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
@@ -4678,6 +4766,7 @@
       <td class="fp-code-picker">
         <input class="fp-inline-input" id="ciManCodeSearch${i}" type="text" placeholder="Search code or description" autocomplete="off">
         <input type="hidden" id="ciManCodeValue${i}" value="">
+        <input type="hidden" id="ciManItemId${i}" value="">
         <input type="hidden" id="ciManDesc${i}" value="">
         <div class="fp-dropdown-results" id="ciManCodeResults${i}" hidden></div>
       </td>
@@ -4692,7 +4781,9 @@
   // must never wire a row against a still-null Master Inventory.
   let ciManualItemsPromise = null;
   function ciManualLoadItems() {
-    if (!ciManualItemsPromise) ciManualItemsPromise = loadInventoryItems();
+    if (!ciManualItemsPromise) {
+      ciManualItemsPromise = loadInventoryItems().catch((err) => { ciManualItemsPromise = null; throw err; });
+    }
     return ciManualItemsPromise;
   }
 
@@ -4732,12 +4823,13 @@
       const unitCostInput = $(`#ciManCost${i}`).value;
       if (!code) { $("#ciManualStatus").textContent = "Every row needs a Master Inventory item selected."; return; }
       if (!(qty > 0)) { $("#ciManualStatus").textContent = "Every row needs a quantity greater than 0."; return; }
-      const item = pickInventoryRow({ kind: "checkin" }, ciManualItemsByCode.get(code));
+      const item = pickedInventoryRow(ciManualItemsByCode, code, $(`#ciManItemId${i}`).value, { kind: "checkin" });
       if (!item) { $("#ciManualStatus").textContent = "One of the selected items could not be found — please re-pick it."; return; }
       // No document price entered -- send null, not a fabricated 0, so
       // Confirm falls back to the Master Inventory's own unit_cost instead
       // of recording a false free cost (same rule buildCheckinRows follows).
       const unitCost = unitCostInput === "" ? null : parseFloat(unitCostInput);
+      if (unitCost !== null && !(unitCost >= 0)) { $("#ciManualStatus").textContent = "Unit cost can't be negative — leave it blank to use the Master Inventory cost."; return; }
       rows.push({
         code: item.item_code, description: item.description, unit: item.unit_of_measure || "", qty,
         invoiceUnitCost: unitCost,
@@ -4754,7 +4846,10 @@
     ciState.itemsByCode = ciManualItemsByCode;
     ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
-    ciState.usedOcr = false; ciState.lowConfidenceFallback = false;
+    ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
+    ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
+    ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
+    ciState.done = false;
     ciState.rows = rows;
     ciState.deletedRows = [];
     ciRender();
@@ -4903,7 +4998,7 @@
             },
             body: JSON.stringify({ action: "forget_alias", id: a.id }),
           });
-          const data = await res.json();
+          const data = await readFnJson(res);
           if (!data.ok) throw new Error(data.detail || data.error || "The link was not removed.");
           statusEl.textContent = "Forgotten.";
           renderRememberedMatches(list.filter((x) => x.id !== a.id), items);
@@ -4981,7 +5076,7 @@
               lines: [{ item_id: item.id, quantity: qty, unit: item.unit_of_measure || "", unit_cost: unitCost }],
             }),
           });
-          const data = await res.json();
+          const data = await readFnJson(res);
           if (!data.ok) throw new Error(data.detail || data.error || "The manual Check-in was not applied.");
         } else {
           const res = await fetch(CHECKOUT_FN_URL, {
@@ -4997,7 +5092,7 @@
               lines: [{ item_id: item.id, quantity: qty, unit: item.unit_of_measure || "" }],
             }),
           });
-          const data = await res.json();
+          const data = await readFnJson(res);
           if (!data.ok) throw new Error(data.detail || data.error || "The manual Check-out was not applied.");
         }
         dlg.close();
@@ -5398,13 +5493,15 @@
     $("#fpManualAddRow").addEventListener("click", fpManualAddRow);
     $("#fpManualUse").addEventListener("click", fpManualUse);
     $("#fpConfirm").addEventListener("click", async () => {
-      const btn = $("#fpConfirm");
-      btn.disabled = true;
+      if (state.confirming || state.done) return;
+      state.confirming = true;
+      $("#fpConfirm").disabled = true;
       try { await confirmAllocation(); }
-      catch (err) { console.error(err); status("Could not confirm: " + err.message, "err"); btn.disabled = false; }
+      catch (err) { console.error(err); status("Could not confirm: " + err.message, "err"); }
+      finally { state.confirming = false; if (state.rows && !state.done) render(); }
     });
     ["fpJobNumber", "fpClient"].forEach((id) => {
-      $("#" + id).addEventListener("input", () => { if (state.rows) render(); });
+      $("#" + id).addEventListener("input", () => { if (state.rows && !state.done) render(); });
     });
 
     const miNavBtn = document.querySelector('nav button[data-v="master-inventory"]');
@@ -5421,13 +5518,15 @@
     $("#ciManualAddRow").addEventListener("click", ciManualAddRow);
     $("#ciManualUse").addEventListener("click", ciManualUse);
     $("#ciConfirm").addEventListener("click", async () => {
-      const btn = $("#ciConfirm");
-      btn.disabled = true;
+      if (ciState.confirming || ciState.done) return;
+      ciState.confirming = true;
+      $("#ciConfirm").disabled = true;
       try { await ciConfirm(); }
-      catch (err) { console.error(err); ciStatus("Could not confirm: " + err.message, "err"); btn.disabled = false; }
+      catch (err) { console.error(err); ciStatus("Could not confirm: " + err.message, "err"); }
+      finally { ciState.confirming = false; if (ciState.rows && !ciState.done) ciRender(); }
     });
     ["ciSupplier", "ciInvoiceNumber", "ciPoNumber", "ciDocDate"].forEach((id) => {
-      $("#" + id).addEventListener("input", () => { if (ciState.rows) ciRender(); });
+      $("#" + id).addEventListener("input", () => { if (ciState.rows && !ciState.done) ciRender(); });
     });
   }
 
