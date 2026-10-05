@@ -287,4 +287,27 @@ r = aliasRow({ code: "330070", description: "Paw Lite Mesh 3m wide roll" }, "Fre
 assert.equal(r.itemId, "brake-arm");
 assert.equal(r.matchedByAlias, null);
 
+// TEST: size suggestion (Freedom India) -- feet converted to metres, a
+// different roll size allowed but spelled out, and never across sizes,
+// families or a mere shared word.
+const sizeItems = [
+  { id: "patio-27", item_code: "910002R", description: "Patio Mesh 2.7m (30M)", current_qty: 0, unit_of_measure: "pcs", unit_cost: 73 },
+  { id: "patio-32", item_code: "910010", description: "Patio Mesh 3.2m (30M)", current_qty: 750, unit_of_measure: "pcs", unit_cost: 57 },
+  { id: "magnet", item_code: "30005R", description: "ZLS1 ZLS2 Magnet AB (200m Roll)", current_qty: 0, unit_of_measure: "pcs", unit_cost: 4.5 },
+  { id: "spline", item_code: "30016R", description: "Spline Drawbar Keder 5 STD 01 (200m)", current_qty: 976, unit_of_measure: "pcs", unit_cost: 6.7 },
+  { id: "bugfur12", item_code: "30001R", description: "Bug Fur 12mm (125m)", current_qty: 342, unit_of_measure: "pcs", unit_cost: 6.2 },
+  { id: "brake-arm", item_code: "330070", description: "ZLS1 Brake Arm AB", current_qty: 10, unit_of_measure: "pcs", unit_cost: 5 },
+  { id: "bush", item_code: "330024", description: "ZLS1 Handle Bush", current_qty: 10, unit_of_measure: "pcs", unit_cost: 5 },
+];
+const sug = (d) => { const row = matchOne(sizeItems, "", d); return row.status === "ok" ? "MATCHED:" + row.itemId : (row.suggestedItem ? row.suggestedItem.id : null); };
+assert.equal(sug("Phifer Fiberglass Pool and Patio Screen 9' x 100'"), "patio-27");   // 9 ft = 2.74 m
+assert.equal(sug("Phifer Fiberglass Pool and Patio Screen 11' x 100'"), null);        // 3.35 m: no such width
+assert.equal(sug("ZLS1- Magnet-01 ( 25mtrs roll)"), "magnet");                       // different roll size, flagged
+assert.match(matchOne(sizeItems, "", "ZLS1- Magnet-01 ( 25mtrs roll)").suggestedItem.note, /invoice 25 m, Master 200 m/);
+assert.equal(sug("Rubber Spline Drawbar ( 50 mtrs roll)"), "spline");
+assert.equal(sug("Bug Fur 8mm (125m roll)"), null);                                   // 8mm vs 12mm
+assert.equal(sug("ZLS1-Brake Rod-01 2m length"), null);                               // Rod vs Arm
+assert.equal(sug("ZLS Handle Mount 01"), null);                                       // Mount vs Bush
+assert.equal(sug("SMB1 Magnet (25m roll)"), null);                                    // other family
+
 console.log("check-in core-matching tests passed");

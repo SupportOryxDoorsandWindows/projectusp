@@ -26,6 +26,15 @@ product lines — never treat one family's item as a match for another's:
   Family, size, side/colour/finish and the stated bar length must all agree;
   only one product word may differ, and a tie suggests nothing. It is never
   auto-applied. Known family words live in `PRODUCT_FAMILIES`.
+- A third suggestion pass (`findSizeSuggestion`) covers the same product
+  with sizes written differently: feet → metres ("9' x 100'" = 2.74 m wide,
+  30.48 m roll) or a different roll size (25 m roll vs Master's 200 m). It
+  needs every Master product word on the line OR size evidence (same width ±
+  0.1 m, or roll lengths stated on both); "mm" sizes must be equal; no family,
+  series, colour or side conflict; single best candidate. Never auto-applied.
+- Roll conversion uses the invoice's OWN stated roll length when it has one
+  (`invoiceRollLengthM`, also read from `row.source` on Edit): 8 × "25mtrs
+  roll" = 200 m, never 8 × Master's 200 m roll. Master counts these in metres.
 - ZLS1 profiles have one Master row per bar length (2500 / 2900 / 5100 mm)
   under the same code, so anything that resolves a Check-in row must pick the
   exact length row by id, not just the code.
@@ -50,6 +59,11 @@ product lines — never treat one family's item as a match for another's:
   (`parseZiplineOrderForm`, one cell per line). Real samples are in
   `tests/checkin-parser.test.js`; a line is only read when qty × price
   reconciles to its total.
+- Freedom Screens **India** sends a third layout, a proforma
+  (`parseSlNoParticulars`: Sl No · Particulars · Rolls · Rate $USD · Per ·
+  Amount; rates often without decimals; sizes in feet, e.g. 9' x 100'). Its
+  packing charge is a bare "Packing 120", picked up by the last-resort rule
+  at the end of `detectShippingCharge`.
 - Colour splits ("75 White 75 Black", "50 white /25 black") become one row
   per colour. Detached notes are re-attached by page position
   (`pages.items` from `extractPdfTextPerPage`); without positions (OCR) they
