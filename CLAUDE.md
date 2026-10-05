@@ -37,7 +37,11 @@ product lines — never treat one family's item as a match for another's:
   roll" = 200 m, never 8 × Master's 200 m roll. Master counts these in metres.
 - ZLS1 profiles have one Master row per bar length (2500 / 2900 / 5100 mm)
   under the same code, so anything that resolves a Check-in row must pick the
-  exact length row by id, not just the code.
+  exact length row by id, not just the code. The manual-entry and Edit
+  pickers (`codePickerOptions`) list one option per length for such codes.
+- Negative stock is allowed on Check-out (corrected by a later Check-in);
+  the preview only has to show it. `applyCombinedStock` totals every line of
+  the same Master row so duplicates still show the shortage.
 
 ## Currency (Check-in)
 
