@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { buildCheckinRows };\n})();`
+  `\nwindow.__ciTest = { buildCheckinRows, buildAliasIndex, supplierKey, aliasDescriptionKey, aliasCodeKey };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { buildCheckinRows } = context.window.__ciTest;
+const { buildCheckinRows, buildAliasIndex, supplierKey, aliasDescriptionKey, aliasCodeKey } = context.window.__ciTest;
 
 function itemsMap(items) {
   const m = new Map();
@@ -197,6 +197,35 @@ assert.equal(matchOne(profileItems, "", "ZLS2-Infinity 60mm-IS( 2.9m)Mill").sugg
 // No stated length row exists -> nothing suggested.
 assert.equal(matchOne(profileItems, "", "ZLS1-Infinity 60mm-IS( 3.3m)Mill").suggestedItem, null);
 
+// TEST: real Freedom spellings normalised to Master's -- White/Black ->
+// WHT/BLK, "(L)"/"(R)" -> LEFT/RIGHT, "60A" -> "60 A", MILL (default
+// finish) and AB (both-sides marker) never required, the most specific item
+// wins, and a shared "ZLS1 ZLS2" part accepts either family.
+const freedomItems = [
+  { id: "hfa-wht", item_code: "330010", description: "ZLS1 Handle F A WHT - LEFT", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "hfa-blk", item_code: "330009", description: "ZLS1 Handle F A BLK - LEFT", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "mount-wht", item_code: "330022", description: "ZLS1 Handle Mount AB WHT", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "mount-blk", item_code: "330021", description: "ZLS1 Handle Mount AB BLK", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "endcap-60a", item_code: "230001", description: "SMB1 End Cap 60 A MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "endcap-60b", item_code: "230003", description: "SMB1 End Cap 60 B MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "smb-brake", item_code: "230030", description: "SMB1 Brake", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "smb-spring", item_code: "191022", description: "SMB1 Brake Spring", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "guide-a", item_code: "330001", description: "ZLS1 Track Guide A MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "track", item_code: "310028", description: "ZLS1 Track 01 MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "magnet", item_code: "30005R", description: "ZLS1 ZLS2 Magnet AB (200m Roll)", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+];
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle - F - A - 01 (L) - White").itemId, "hfa-wht");
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle Mount - 01 - Black").itemId, "mount-blk");
+assert.equal(matchOne(freedomItems, "", "SMB1 End Cap-60A-01").itemId, "endcap-60a");
+assert.equal(matchOne(freedomItems, "", "SMB1 End Cap-60B-01").itemId, "endcap-60b");
+assert.equal(matchOne(freedomItems, "", "SMB1-Brake Spring-01").itemId, "smb-spring");
+assert.equal(matchOne(freedomItems, "", "SMB1 Brake-01").itemId, "smb-brake");
+assert.equal(matchOne(freedomItems, "", "ZLS1 Track Guide-A-01 (L)").itemId, "guide-a");
+assert.equal(matchOne(freedomItems, "", "ZLS1-Magnet-01 (200m roll)").itemId, "magnet");
+// No colour on the line -> BLK and WHT tie -> never guessed.
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle-F-A-01 (L)").status, "unmatched");
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle Mount - 01").status, "unmatched");
+
 // TEST: duplicate Master Inventory descriptions -- never auto-pick one.
 r = matchOne(items, "", "Duplicate Bracket Set");
 assert.equal(r.status, "unmatched");
@@ -213,5 +242,49 @@ assert.equal(r.itemId, null);
 r = matchOne(items, "330070", "ZLS Brake Spring");
 assert.equal(r.status, "unmatched");
 assert.deepEqual(r.codeDescConflict, { codeItemCode: "330070", descItemCode: "191021" });
+
+// TEST: teach once, remember. A link a person confirmed (supplier's code or
+// wording -> item) wins over every automatic rule, survives trivial wording
+// differences, is scoped by supplier when two suppliers disagree, and an
+// exact Master code still beats it.
+assert.equal(supplierKey("FREEDOM SCREENS OF AUSTRALIA PTY LTD"), "freedom screens australia");
+assert.equal(supplierKey("Freedom Screens of Australia Pty. Ltd."), "freedom screens australia");
+assert.equal(aliasDescriptionKey("ZLS1 Handle-F-A-01 (L) - White"), aliasDescriptionKey("ZLS1 Handle - F - A - 01 (L)  -  WHT"));
+assert.equal(aliasCodeKey(" zip49 "), "ZIP49");
+
+const aliasItems = items.concat([
+  { id: "pet-mesh", item_code: "Pet Mesh", description: "PET MESH", current_qty: 90, unit_of_measure: "pcs", unit_cost: 80 },
+  { id: "spindle", item_code: "133001", description: "Cap Spindle", current_qty: 106, unit_of_measure: "pcs", unit_cost: 8 },
+]);
+const aliases = buildAliasIndex([
+  { supplier: "Freedom", supplier_key: "freedom screens australia", match_kind: "description",
+    match_key: aliasDescriptionKey("Paw Lite Mesh 3m wide roll"), item_id: "pet-mesh", times_confirmed: 3 },
+  { supplier: "Freedom", supplier_key: "freedom screens australia", match_kind: "code",
+    match_key: "ZIP60", item_id: "spindle", times_confirmed: 1 },
+  // Two suppliers linked the same wording to different items.
+  { supplier: "A", supplier_key: "alpha", match_kind: "description", match_key: "GENERIC BRACKET", item_id: "brake-arm", times_confirmed: 1 },
+  { supplier: "B", supplier_key: "beta", match_kind: "description", match_key: "GENERIC BRACKET", item_id: "handle-bush", times_confirmed: 1 },
+]);
+const aliasRow = (line, supplier) => buildCheckinRows([{ unit: "pcs", qty: 2, unitCost: 5, code: "", ...line }], [], itemsMap(aliasItems), aliases, supplier)[0];
+
+r = aliasRow({ description: "Paw Lite Mesh 3m wide roll" }, "Freedom Screens of Australia");
+assert.equal(r.status, "ok");
+assert.equal(r.itemId, "pet-mesh");
+assert.equal(r.matchedByAlias.timesConfirmed, 3);
+assert.equal(r.source.description, "Paw Lite Mesh 3m wide roll");
+// Without the link, the same line matches nothing.
+assert.equal(buildCheckinRows([{ code: "", description: "Paw Lite Mesh 3m wide roll", unit: "pcs", qty: 2, unitCost: 5 }], [], itemsMap(aliasItems))[0].status, "unmatched");
+// Supplier's own order-form ref (ZIP60) -- even with different wording.
+r = aliasRow({ supplierRef: "ZIP60", description: "RADC Spindle cap v2" }, "Freedom");
+assert.equal(r.itemId, "spindle");
+// Same wording, two suppliers, two items -> the current supplier decides...
+assert.equal(aliasRow({ description: "Generic Bracket" }, "Beta").itemId, "handle-bush");
+assert.equal(aliasRow({ description: "Generic Bracket" }, "Alpha").itemId, "brake-arm");
+// ...and with no supplier given, nothing is guessed.
+assert.equal(aliasRow({ description: "Generic Bracket" }, "").status, "unmatched");
+// An exact Master code on the line beats any remembered link.
+r = aliasRow({ code: "330070", description: "Paw Lite Mesh 3m wide roll" }, "Freedom");
+assert.equal(r.itemId, "brake-arm");
+assert.equal(r.matchedByAlias, null);
 
 console.log("check-in core-matching tests passed");

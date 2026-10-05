@@ -83,9 +83,17 @@
     const buf = await file.arrayBuffer();
     const pdf = await window.__pdfjs.getDocument({ data: buf }).promise;
     const pages = [];
+    // Each text fragment's position, kept alongside the plain text (as
+    // pages.items) so a reader can re-attach a fragment the PDF stores out
+    // of order -- e.g. Freedom's "50 white /25 black" colour-split notes,
+    // which sit on their item's line but come last in the text stream.
+    const itemsPerPage = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
+      itemsPerPage.push(content.items
+        .filter((it) => it.transform && it.str && it.str.trim())
+        .map((it) => ({ str: it.str.trim(), x: it.transform[4], y: it.transform[5] })));
       let lastY = null;
       let pageText = "";
       for (const item of content.items) {
@@ -97,6 +105,7 @@
       }
       pages.push(pageText);
     }
+    pages.items = itemsPerPage;
     return pages;
   }
 
@@ -241,8 +250,19 @@
   // genuinely different words into the same one; it only forgives the exact
   // handful of OCR mix-ups it's meant to.
   const OCR_DIGIT_TO_LETTER = { 0: "O", 1: "I", 5: "S", 8: "B" };
+  // Supplier spellings normalised to Master Inventory's, on BOTH sides:
+  // White/Black -> WHT/BLK, "(L)"/"(R)" -> LEFT/RIGHT, and a size glued to
+  // its side letter ("60A") split into "60 A".
+  function normaliseForMatch(text) {
+    return String(text || "")
+      .replace(/\(\s*L\s*\)/gi, " LEFT ")
+      .replace(/\(\s*R\s*\)/gi, " RIGHT ")
+      .replace(/\bwhite\b/gi, "WHT")
+      .replace(/\bblack\b/gi, "BLK")
+      .replace(/\b(\d{2,3})([AB])\b/g, "$1 $2");
+  }
   function tokenizeForMatch(text, raw) {
-    const tokens = String(text || "")
+    const tokens = normaliseForMatch(text)
       .toUpperCase()
       .replace(/\bMETRES?\b/g, "M")
       .split(/[^A-Z0-9]+/)
@@ -267,9 +287,10 @@
   // each other.
   function masterCoreTokens(description, raw) {
     const withoutOwnCode = String(description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
-    const tokens = tokenizeForMatch(withoutOwnCode, raw);
-    if (tokens.length && tokens[tokens.length - 1] === "AB") tokens.pop();
-    return tokens;
+    // "AB" is Master's "both sides, one record" marker wherever it appears
+    // ("ZLS1 Brake Arm AB", "ZLS1 Handle Mount AB WHT") -- suppliers rarely
+    // print it, so it's never a required word.
+    return tokenizeForMatch(withoutOwnCode, raw).filter((t) => t !== "AB");
   }
 
   // A code that's missing, truncated, or simply wrong can still be resolved
@@ -309,6 +330,15 @@
       return !!m && invoiceRaw.has(m[1]) && !invoiceSeriesBase.has(m[1]);
     }
 
+    // A shared part names several families ("ZLS1 ZLS2 Magnet AB"): the
+    // invoice naming ANY one of them is enough. A part naming one family
+    // still needs that family, exactly as before.
+    function familyGroupOk(coreRaw, test, core) {
+      const fam = coreRaw.map((t, k) => (/^[A-Z]{2,}\d{1,2}$/.test(t) ? k : -1)).filter((k) => k >= 0);
+      if (fam.length < 2) return { ok: true, skip: new Set() };
+      return { ok: fam.some((k) => test(core[k], coreRaw[k])), skip: new Set(fam) };
+    }
+
     function uniqueMatch(test) {
       const matches = [];
       for (const candidates of itemsByCode.values()) {
@@ -316,14 +346,32 @@
           const core = masterCoreTokens(candidate.description);
           if (core.length < 2) continue;
           const coreRaw = masterCoreTokens(candidate.description, true);
-          if (core.every((tok, k) => test(tok, coreRaw[k]))) matches.push(candidate);
+          const fam = familyGroupOk(coreRaw, test, core);
+          if (!fam.ok) continue;
+          if (!core.every((tok, k) => fam.skip.has(k) || test(tok, coreRaw[k]))) continue;
+          // Specificity: how many of the item's own words the invoice line
+          // actually contains (optional MILL counts only when printed).
+          const score = core.filter((tok) => invoiceTokens.has(tok)).length;
+          matches.push({ candidate, score });
         }
       }
-      const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
-      return unique.length === 1 ? unique[0] : unique.length ? false : null;
+      const unique = matches.filter((mm, idx) => matches.findIndex((o) => o.candidate.id === mm.candidate.id) === idx);
+      if (unique.length === 1) return unique[0].candidate;
+      if (!unique.length) return null;
+      // Most specific wins: when every one of several items' words is on the
+      // invoice line, the item that accounts for MORE of the line's words is
+      // the line's product -- "SMB1 Brake Spring" over "SMB1 Brake", "ZLS1
+      // Track Guide A" over "ZLS1 Track 01". A tie (e.g. BLK and WHT
+      // variants when the line names no colour) still matches nothing.
+      const top = Math.max(...unique.map((mm) => mm.score));
+      const best = unique.filter((mm) => mm.score === top);
+      return best.length === 1 ? best[0].candidate : false;
     }
 
-    return uniqueMatch(seriesTolerantPass ? seriesTolerant : (tok) => invoiceTokens.has(tok)) || null;
+    // "MILL" is Master's default finish -- invoices for mill-finish parts
+    // rarely print it, so it's never required (a coloured variant still has
+    // its own BLK/WHT word, which IS required).
+    return uniqueMatch(seriesTolerantPass ? seriesTolerant : (tok) => tok === "MILL" || invoiceTokens.has(tok)) || null;
   }
 
   // Never auto-applied: whether "ZLS1-Brake Spring 01" really is Master's
@@ -1267,11 +1315,12 @@
   //  2. a bare "$" with country details elsewhere on the document -- an ABN,
   //     "Pty Ltd", "Australia" or a .com.au address means AUD; "United
   //     States"/"USA"/"U.S." means USD;
-  //  3. a bare "$" with no such details -> USD automatically (Freedom's
-  //     priced documents to Oryx are in USD, and "$" on an international
-  //     invoice almost always means US dollars). Shown on screen as
-  //     "assumed USD" with a USD/AUD switch preselected, so it can be
-  //     corrected, but nobody has to act -- and it's never treated as AED.
+  //  3. a bare "$" with no such details -> AUD automatically. Verified on
+  //     real documents: Freedom Screens of Australia's "$"-only Zipline/ZL2
+  //     order forms carry exactly the prices of their AUD quotes/proformas
+  //     (e.g. ZL2 Drawbar Cap ASSEM $23.11 on both, 19/03/2024). Shown on
+  //     screen with a USD/AUD switch preselected for the rare correction --
+  //     nobody has to act, and it's never treated as AED.
   //  Nothing at all -> AED.
   const DOLLAR_AMOUNT_RE = /(^|[^A-Za-z])\$\s?\d/;
   // Australia-only markers. GST is deliberately not one (India, Singapore and
@@ -1295,7 +1344,7 @@
       const aud = AUD_CONTEXT_RE.test(text), usd = USD_CONTEXT_RE.test(text);
       if (aud && !usd) return { currency: "AUD", basis: "dollar-australian-details", needsChoice: false };
       if (usd && !aud) return { currency: "USD", basis: "dollar-us-details", needsChoice: false };
-      return { currency: "USD", basis: "dollar-default-usd", needsChoice: false };
+      return { currency: "AUD", basis: "dollar-default-aud", needsChoice: false };
     }
     return { currency: "AED", basis: "none", needsChoice: false };
   }
@@ -1929,11 +1978,17 @@
   // multiplies out to that Sub Total -- "Amt Per Screen" and cut-length
   // notes can never be mistaken for the quantity.
   function parseZiplineOrderForm(text) {
-    if (!/Order Form/i.test(text) || !/Ref No/i.test(text) || !/Sub Total/i.test(text) || !/Mill Price/i.test(text)) return [];
+    // Same Freedom form also comes titled "ZL2 Components" (no "Order Form"),
+    // with the "Mill Price" heading split over two lines -- gate on the
+    // column headings that every variant has.
+    if (!/Ref No/i.test(text) || !/Sub Total/i.test(text) || !/\bMill\b/i.test(text)) return [];
     const cells = text.split("\n").map((c) => c.trim()).filter(Boolean);
     const headerIdx = cells.findIndex((c) => /^Sub Total$/i.test(c));
     if (headerIdx === -1) return [];
-    const refRe = /^[A-Z]{2,5}\d{1,4}[A-Z]?$/;
+    // "ZL31", "ZIP50B", and variant refs printed as "ZL32 -" / "ZL32 PC"
+    // (mill / powder-coated) -- an empty segment between two refs simply has
+    // no Sub Total and is skipped.
+    const refRe = /^[A-Z]{2,5}\d{1,4}[A-Z]?(?:\s*-|\s+PC)?$/;
     const subTotalRe = /^\$\s?([\d,]+\.\d{2})$/;
     const numRe = /^[\d,]+(?:\.\d+)?$/;
     const starts = [];
@@ -1959,10 +2014,103 @@
         }
       }
       if (pairs.length !== 1) return;
-      const description = row[nameIdx].replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "").replace(/\s+/g, " ").trim();
-      entries.push({ code: "", description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
+      const description = row[nameIdx]
+        .replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "")
+        .replace(/\s*\(NOTE:[^)]*\)/i, "")
+        .replace(/\s+/g, " ").trim();
+      entries.push({ code: "", supplierRef: cells[start].replace(/\s*-$/, "").trim(), description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
     });
     return entries;
+  }
+
+  // Freedom Screens of Australia invoice / quote / proforma layout:
+  //   QTY  DESCRIPTION  UNIT PRICE (ex GST)  DISC %  TOTAL (ex GST)
+  // pdf.js keeps each item on one line, e.g.
+  //   "50  ZLS1 Handle - F - A - 01 (L)  -  White  $7.36  $368.00"
+  // A line is only read when QTY x UNIT PRICE (less any DISC %) reconciles
+  // to its TOTAL. Section headings ("Smartscreen Components") and colour-
+  // split notes ("50 white /25 black") have no prices, so are never read as
+  // items. No item codes are printed, so rows match by description.
+  // "75 White 75 Black", "50 white /25 black", "16 Black/16 White" -- one
+  // invoice line covering two colours. Returned only when the two counts add
+  // up to the line's quantity, so a note is never misread as something else.
+  const COLOUR_SPLIT_RE = /(\d+)\s*(white|black|wht|blk)\s*[\/,&]?\s*(\d+)\s*(white|black|wht|blk)/i;
+  function colourSplitFrom(note, qty) {
+    const m = String(note || "").match(COLOUR_SPLIT_RE);
+    if (!m) return null;
+    const a = parseFloat(m[1]), b = parseFloat(m[3]);
+    const name = (c) => (/^(white|wht)$/i.test(c) ? "White" : "Black");
+    if (name(m[2]) === name(m[4]) || Math.abs(a + b - qty) > 1e-9) return null;
+    return [{ colour: name(m[2]), qty: a }, { colour: name(m[4]), qty: b }];
+  }
+
+  function parseQtyDescPriceTotal(text, pdfItems) {
+    if (!/\bQTY\b/.test(text) || !/\bDESCRIPTION\b/.test(text) || !/UNIT PRICE/i.test(text)) return { entries: [], reconciliation: null };
+    const lineRe = /^(\d+(?:\.\d+)?)\s+(.*?[A-Za-z].*?)\s+\$\s?([\d,]+\.\d{2})\s+(?:(\d+(?:\.\d+)?)\s*%?\s+)?\$\s?([\d,]+\.\d{2})$/;
+    const money = (v) => parseFloat(v.replace(/,/g, ""));
+    const entries = [];
+    let parsedTotal = 0;
+    for (const raw of text.split("\n")) {
+      const m = raw.trim().replace(/\s+/g, " ").match(lineRe);
+      if (!m) continue;
+      const qty = parseFloat(m[1]);
+      const unitCost = money(m[3]);
+      const disc = m[4] != null ? parseFloat(m[4]) : 0;
+      const total = money(m[5]);
+      const expected = qty * unitCost * (1 - disc / 100);
+      if (!(qty > 0) || Math.abs(expected - total) > Math.max(0.02, total * 0.001)) continue;
+      const rawDescription = m[2].replace(/\s+/g, " ").trim();
+      entries.push({ code: "", rawDescription, qty, unitCost: disc ? unitCost * (1 - disc / 100) : unitCost, lineTotal: total, colourNote: null });
+      parsedTotal += total;
+    }
+    // Colour-split notes the PDF stores out of order: attach each to the
+    // item line it sits beside (same height on the page, within a few
+    // points, and the closest such line).
+    for (const pageItems of pdfItems || []) {
+      for (const note of pageItems.filter((it) => COLOUR_SPLIT_RE.test(it.str) && it.str.replace(COLOUR_SPLIT_RE, "").trim() === "")) {
+        let best = null;
+        for (const e of entries) {
+          const host = pageItems.find((it) => it.str.replace(/\s+/g, " ") === e.rawDescription.replace(/\s+-\s+/g, " - "))
+            || pageItems.find((it) => e.rawDescription.startsWith(it.str.replace(/\s+/g, " ")) && it.str.length > 6);
+          if (!host) continue;
+          const dy = Math.abs(host.y - note.y);
+          if (dy <= 12 && (!best || dy < best.dy)) best = { e, dy };
+        }
+        if (best && !best.e.colourNote) best.e.colourNote = note.str;
+      }
+    }
+    const out = [];
+    for (const e of entries) {
+      // Inline note, e.g. "ZLS1 Handle Mount - 01 - 75 White 75 Black".
+      let base = e.rawDescription, note = e.colourNote;
+      const inline = base.match(new RegExp(`\\s*-?\\s*${COLOUR_SPLIT_RE.source}\\s*$`, "i"));
+      if (inline) { note = note || inline[0]; base = base.slice(0, inline.index); }
+      const description = base.replace(/\s+-\s+/g, " - ").replace(/\s+/g, " ").trim();
+      const split = colourSplitFrom(note, e.qty);
+      if (split) {
+        for (const part of split) {
+          out.push({ code: "", description: `${description} - ${part.colour}`, qty: part.qty, unitCost: e.unitCost,
+            lineTotal: Math.round(part.qty * e.unitCost * 100) / 100, colourSplitFrom: `${note.trim()} (of ${e.qty})` });
+        }
+      } else {
+        out.push({ code: "", description, qty: e.qty, unitCost: e.unitCost, lineTotal: e.lineTotal });
+      }
+    }
+    entries.length = 0;
+    entries.push(...out);
+    // The printed Subtotal (or Total/Balance Due when there's no freight or
+    // tax) must appear somewhere on the document as the sum of the lines --
+    // a missed line would leave the rows short of it.
+    let reconciliation = null;
+    if (entries.length) {
+      const printed = [...text.matchAll(/\$\s?([\d,]+\.\d{2})/g)].map((mm) => money(mm[1]));
+      reconciliation = {
+        expectedTotal: printed.length ? Math.max(...printed) : parsedTotal,
+        parsedTotal,
+        ok: printed.some((v) => Math.abs(v - parsedTotal) <= 0.05),
+      };
+    }
+    return { entries, reconciliation };
   }
 
   // Freedom Screens packing lists contain reliable received quantities but
@@ -2517,7 +2665,7 @@
   // structure" step. Zero rows across every format means the document isn't
   // one this reader recognises; the caller must not fabricate anything from
   // that and must show a clear message instead.
-  function parseCheckinDocument(text) {
+  function parseCheckinDocument(text, pdfItems) {
     const rawLines = mergeWrappedSlNoRows(text.split("\n"));
     let best = { formatId: null, formatLabel: null, entries: [] };
     for (const format of CHECKIN_FORMATS) {
@@ -2562,11 +2710,20 @@
         reconciliation: freedomCellStream.reconciliation,
       };
     }
+    const qdpt = parseQtyDescPriceTotal(text, pdfItems);
+    if (qdpt.entries.length > best.entries.length) {
+      best = {
+        formatId: "qty-description-price-total",
+        formatLabel: "Freedom invoice / quote (QTY · DESCRIPTION · UNIT PRICE · TOTAL)",
+        entries: qdpt.entries,
+        reconciliation: qdpt.reconciliation,
+      };
+    }
     const ziplineEntries = parseZiplineOrderForm(text);
     if (ziplineEntries.length > best.entries.length) {
       best = {
         formatId: "zipline-order-form",
-        formatLabel: "Zipline Component Order Form",
+        formatLabel: "Freedom component order form (Zipline / ZL2)",
         entries: ziplineEntries,
       };
     }
@@ -2654,8 +2811,77 @@
     return best;
   }
 
-  function buildCheckinRows(lines, descriptions, itemsByCode) {
+  /* --------------------- Teach once, remember -------------------------- */
+  // A person's confirmed decision that a supplier's own code or wording means
+  // a given Master Inventory item (table supplier_item_aliases, written only
+  // by the `checkin` Edge Function after a successful Check-in). Keys are
+  // normalised the same way the matcher reads text, so trivial differences
+  // ("White" vs "WHT", spacing, dashes) still hit the same link.
+  function supplierKey(name) {
+    return String(name || "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(pty|ltd|llc|l l c|inc|co|company|limited|fzco|fze|fzc|the|of|trading)\b/g, " ")
+      .replace(/\s+/g, " ").trim();
+  }
+  function aliasDescriptionKey(text) {
+    return normaliseForMatch(text).toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean).join(" ");
+  }
+  function aliasCodeKey(code) {
+    return String(code || "").toUpperCase().replace(/\s+/g, " ").trim();
+  }
+
+  async function loadSupplierAliases() {
+    try {
+      const { data, error } = await sb.from("supplier_item_aliases").select("*");
+      if (error) throw error;
+      return data || [];
+    } catch (err) {
+      // Never blocks a Check-in -- it just reads without remembered links.
+      console.warn("Remembered matches unavailable:", err && err.message);
+      return [];
+    }
+  }
+  function buildAliasIndex(aliases) {
+    const index = new Map();
+    for (const a of aliases || []) {
+      const k = `${a.match_kind}|${a.match_key}`;
+      if (!index.has(k)) index.set(k, []);
+      index.get(k).push(a);
+    }
+    return index;
+  }
+  // Supplier's own code first, then its wording. When the same text was
+  // linked to different items for different suppliers, the current
+  // supplier's link decides; if that still isn't one item, nothing is used.
+  function lookupAlias(aliasIndex, itemsByCode, line, description, supplierHint) {
+    if (!aliasIndex || !aliasIndex.size) return null;
+    const byId = new Map();
+    for (const cands of itemsByCode.values()) for (const c of cands) byId.set(c.id, c);
+    const hint = supplierKey(supplierHint);
+    const hintFirst = hint.split(" ")[0];
+    const tries = [];
+    const code = aliasCodeKey(line.supplierRef || line.code);
+    if (code) tries.push(["code", code]);
+    const desc = aliasDescriptionKey(description);
+    if (desc) tries.push(["description", desc]);
+    for (const [kind, key] of tries) {
+      const hits = (aliasIndex.get(`${kind}|${key}`) || []).filter((a) => byId.has(a.item_id));
+      if (!hits.length) continue;
+      let pool = hits;
+      if (new Set(pool.map((a) => a.item_id)).size > 1 && hint) {
+        pool = hits.filter((a) => a.supplier_key === hint || (hintFirst && a.supplier_key.split(" ")[0] === hintFirst));
+      }
+      if (pool.length && new Set(pool.map((a) => a.item_id)).size === 1) {
+        const a = pool.reduce((x, y) => (y.times_confirmed > x.times_confirmed ? y : x));
+        return { item: byId.get(a.item_id), kind, supplier: a.supplier, timesConfirmed: a.times_confirmed };
+      }
+    }
+    return null;
+  }
+
+  function buildCheckinRows(lines, descriptions, itemsByCode, aliasIndex, supplierHint) {
     const rows = [];
+    const aliasHits = [];
     lines.forEach((l, i) => {
       const candidates = lookupExactCode(itemsByCode, l.code);
       // Description comes straight from the row parser when that format
@@ -2663,6 +2889,11 @@
       // Commercial Invoice reader relies on the separate description block.
       const pdfDescription = l.description || (descriptions.length === lines.length ? descriptions[i] : "");
       let item = pickInventoryRow({ kind: "checkin" }, candidates);
+      // Not an exact Master code -> a link a person already confirmed for this
+      // supplier's code or wording wins over every automatic rule below.
+      const matchedByAlias = !item ? lookupAlias(aliasIndex, itemsByCode, l, pdfDescription, supplierHint) : null;
+      if (matchedByAlias) item = matchedByAlias.item;
+      aliasHits[i] = matchedByAlias;
       // The invoice's own code didn't resolve to anything (missing,
       // truncated, or simply wrong) -- fall back to an exact, UNIQUE
       // description match against Master Inventory (never fires once a code
@@ -2682,7 +2913,7 @@
       // one field over the other here; flag for manual review instead of
       // silently picking the code's item.
       let codeDescConflict = null;
-      if (item && !matchedByDescription && l.code && pdfDescription) {
+      if (item && !matchedByDescription && !matchedByAlias && l.code && pdfDescription) {
         const descItem = findUniqueDescriptionItem(itemsByCode, pdfDescription);
         if (descItem && descItem.id !== item.id) {
           codeDescConflict = { codeItemCode: item.item_code, descItemCode: descItem.item_code };
@@ -2828,6 +3059,20 @@
         packageInfo: invoicePkg ? { type: invoicePkg.type, qtyPerPackage: invoicePkg.qtyPerPackage, unit: invoicePkg.unit } : null,
       });
     });
+    // Every line pushes exactly one row, so rows[i] is lines[i]. Keep what
+    // the supplier actually printed -- a resolved row's code/description are
+    // replaced by the Master item's, but "teach once, remember" needs the
+    // supplier's own wording and code.
+    rows.forEach((r, i) => {
+      const l = lines[i] || {};
+      r.source = {
+        code: l.code || "",
+        supplierRef: l.supplierRef || "",
+        description: l.description || (descriptions.length === lines.length ? descriptions[i] : "") || "",
+      };
+      const hit = aliasHits[i];
+      r.matchedByAlias = hit && r.itemId === hit.item.id ? { supplier: hit.supplier, timesConfirmed: hit.timesConfirmed } : null;
+    });
     return rows;
   }
 
@@ -2927,7 +3172,7 @@
     "dollar-australian-details": "Detected as AUD: prices are in \"$\" and the document carries Australian details (e.g. ABN, Pty Ltd, Australia).",
     "dollar-us-details": "Detected as USD: prices are in \"$\" and the document carries US details.",
     "dollar-chosen": "Prices are in \"$\" — currency chosen on this screen.",
-    "dollar-default-usd": "Prices are in \"$\" with no country details on the document, so USD was used automatically. If this supplier billed in Australian dollars, switch it to AUD above and the rate updates.",
+    "dollar-default-aud": "Prices are in \"$\" with no country details on the document, so AUD was used automatically (Freedom Screens of Australia's \"$\" order forms carry the same prices as their AUD quotes). If this document is in US dollars, switch it to USD above and the rate updates.",
   };
 
   // Landed Cost: splits ciState.shippingAmountOriginal equally across every
@@ -3152,6 +3397,7 @@
       r.newQty = item.current_qty + r.qty;
       r.status = "ok"; r.action = "add"; r.decided = true;
       r.usedDespiteDifference = { code: item.code, masterPackSize: item.packSize, invoicePackSize: item.invoicePackSize };
+      r.personResolved = true;
     }
     else if (act === "confirm-pack") {
       // Human-confirmed quantity for a bundled item whose packaging claim
@@ -3189,6 +3435,7 @@
       // fall back to Master Inventory's own unit so the row doesn't imply
       // "3240 of 200m each".
       if (!acceptedDefault) r.unit = m.itemUnit;
+      r.personResolved = true;
     }
     else if (act === "use-suggestion") {
       // The person confirmed the suggested Master Inventory item -- resolved
@@ -3198,6 +3445,7 @@
       if (!suggested) return;
       r.suggestedItem = null;
       recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit, suggested.id);
+      r.personResolved = r.status === "ok";
     }
     else if (act === "edit") { r.editing = true; }
     else if (act === "cancel-edit") { r.editing = false; }
@@ -3219,6 +3467,7 @@
         return;
       }
       recomputeCiRowAfterEdit(r, newCode, "", newQty, unitEl.value.trim() || r.unit);
+      r.personResolved = r.status === "ok";
       r.editing = false;
     }
     else if (act === "new-item") { r.creatingNew = true; }
@@ -3294,6 +3543,7 @@
       r.decided = true;
       r.creatingNew = false;
       r.newItemData = { code: r.code, description, category: category || null, unit, bufferLevel: buffer, approvedBy: approver };
+      r.personResolved = true;
     }
     ciRender();
   }
@@ -3505,7 +3755,9 @@
       const lowConfBadge = r.lowConfidence
         ? `<span title="Read via a low-confidence fallback (no known document layout matched) -- verify this row against the original document." style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:#fff3cd;color:#7a5b00;border:1px solid #f0d78c;white-space:nowrap">⚠ low-confidence</span>`
         : "";
-      const descriptionMatchBadge = r.matchedByDescription
+      const descriptionMatchBadge = r.matchedByAlias
+        ? `<span class="fp-auto-match-note fp-remembered-note" title="Matched from a previous Check-in: someone confirmed that ${esc(r.matchedByAlias.supplier || "this supplier")}'s wording/code means this item (confirmed ${esc(r.matchedByAlias.timesConfirmed)}×). Use Edit if it's wrong — confirming a different item updates the link.">Remembered</span>`
+        : r.matchedByDescription
         ? `<span class="fp-auto-match-note" title="Matched automatically from the product description (ignoring extra words like line numbers); supplier code was ${esc(r.matchedByDescription.sourceCode)}.">Auto</span>`
         : "";
       // The invoice's code and description each exactly match a different
@@ -3946,6 +4198,23 @@
         };
       });
 
+    // Teach once, remember: same rows, same order as `lines` above. Only a
+    // decision a person made (Edit / Use this item / New item / Use existing
+    // / confirmed pack) or a remembered link being re-confirmed is sent --
+    // automatic matches don't need remembering. The server saves these only
+    // after the stock itself was saved.
+    const sentRows = ciState.rows.filter((r) => (r.action === "add" && r.itemId) || (r.action === "create-new" && r.newItemData));
+    const supplierKeyForLinks = supplierKey(supplier);
+    sentRows.forEach((r, k) => {
+      if (!r.source || !(r.personResolved || r.matchedByAlias) || !supplierKeyForLinks) return;
+      const ownCode = r.source.supplierRef || r.source.code;
+      // A code that IS a Master code needs no link -- it already matches.
+      const codeKey = ownCode && !lookupExactCode(ciState.itemsByCode, ownCode).length ? aliasCodeKey(ownCode) : "";
+      const descriptionKey = aliasDescriptionKey(r.source.description);
+      if (!codeKey && !descriptionKey) return;
+      lines[k].remember = { supplier_key: supplierKeyForLinks, code_key: codeKey || null, description_key: descriptionKey || null, example: r.source.description || ownCode };
+    });
+
     const res = await fetch(CHECKIN_FN_URL, {
       method: "POST",
       headers: {
@@ -3988,7 +4257,8 @@
       <div class="fp-done">
         <h3>Check-in confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} added</h3>
         <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
-        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}</p>
+        Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}${
+          data.remembered > 0 ? ` ${lines.filter((l) => l.remember).length} line${lines.filter((l) => l.remember).length === 1 ? "" : "s"} you matched by hand will now be recognised automatically next time (see Remembered matches on the Master Inventory tab).` : ""}</p>
         <div class="fp-done-actions">
           <button class="ghost" id="ciNew">Start another Check-in</button>
         </div>
@@ -4009,11 +4279,12 @@
     const isStale = () => myToken !== ciAnalyseToken;
     ciStatus("Reading the document and matching items against the Master Inventory…");
     try {
-      let [pages, itemsByCode, hash, ratesByCurrency] = await Promise.all([
+      let [pages, itemsByCode, hash, ratesByCurrency, aliases] = await Promise.all([
         extractPdfTextPerPage(ciState.pdfFile),
         loadInventoryItems(),
         pdfFingerprint(ciState.pdfFile),
         loadExchangeRates(),
+        loadSupplierAliases(),
       ]);
 
       ciState.usedOcr = false;
@@ -4100,7 +4371,7 @@
       // API: an unrecognised document should fail fast with a clear message,
       // not spend a network round-trip first.
       if (isStale()) return;
-      const doc = parseCheckinDocument(pdfText);
+      const doc = parseCheckinDocument(pdfText, ciState.usedOcr ? null : pages.items);
       if (doc.reconciliation && !doc.reconciliation.ok) {
         ciState.rows = null;
         $("#ciConfirmBar").hidden = true;
@@ -4156,7 +4427,7 @@
         ? parseCommercialInvoiceDescriptions(pdfText, doc.entries.length)
         : [];
       if (isStale()) return;
-      ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode);
+      ciState.rows = buildCheckinRows(doc.entries, descriptions, itemsByCode, buildAliasIndex(aliases), $("#ciSupplier").value || ciState.header.supplier);
       ciState.deletedRows = [];
       ciRender();
 
@@ -4404,21 +4675,74 @@
     $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes] = await Promise.all([
+      const [itemsRes, txRes, aliases] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
         // Fetched at line-item grain, then grouped back into one Check-out
         // per (job, client, timestamp) below -- Postgres's now() returns the
         // same value for every row inserted inside one checkout_transaction()
         // call, so that triple is a reliable grouping key.
         sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(500),
+        loadSupplierAliases(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
       renderMasterInventoryView(itemsRes.data, txRes.data);
+      renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
       $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
+    }
+  }
+
+  // Remembered matches ("teach once, remember"): every saved link, newest
+  // first, with Forget. Forgetting goes through the `checkin` Edge Function
+  // (the table itself is read-only to the site).
+  function renderRememberedMatches(aliases, items) {
+    const body = $("#miAliasBody");
+    if (!body) return;
+    const byId = new Map((items || []).map((it) => [it.id, it]));
+    const list = [...(aliases || [])].sort((a, b) => String(b.last_confirmed_at).localeCompare(String(a.last_confirmed_at)));
+    body.innerHTML = list.length ? list.map((a) => {
+      const it = byId.get(a.item_id);
+      return `<tr>
+        <td>${esc(a.supplier || a.supplier_key)}</td>
+        <td>${a.match_kind === "code" ? `<span class="small muted">Code</span> <span class="code">${esc(a.match_key)}</span>` : esc(a.example_text || a.match_key)}</td>
+        <td>${it ? `<span class="code">${esc(it.item_code)}</span> — ${esc(it.description || "")}${it.bar_length_mm ? ` <span class="small muted">(${esc(it.bar_length_mm)} mm)</span>` : ""}` : `<span class="small muted">item no longer exists</span>`}</td>
+        <td class="num">${esc(a.times_confirmed)}×</td>
+        <td class="small">${esc(String(a.last_confirmed_at || "").slice(0, 10))}</td>
+        <td><button class="ghost" type="button" data-alias-forget="${esc(a.id)}">Forget</button></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="small muted">Nothing remembered yet. Links are saved automatically when a Check-in with hand-matched lines is confirmed.</td></tr>`;
+    for (const btn of body.querySelectorAll("[data-alias-forget]")) {
+      btn.onclick = async () => {
+        const a = list.find((x) => x.id === btn.dataset.aliasForget);
+        if (!a) return;
+        const it = byId.get(a.item_id);
+        const what = a.match_kind === "code" ? `code ${a.match_key}` : `"${a.example_text || a.match_key}"`;
+        if (!window.confirm(`Forget that ${a.supplier || "this supplier"}'s ${what} means ${it ? it.item_code + " — " + (it.description || "") : "this item"}?\n\nNext time, that line will be matched by the normal rules (or left for someone to pick).`)) return;
+        btn.disabled = true;
+        const statusEl = $("#miAliasStatus");
+        try {
+          const res = await fetch(CHECKIN_FN_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
+              "apikey": window.ORYX_CONFIG.supabaseKey,
+            },
+            body: JSON.stringify({ action: "forget_alias", id: a.id }),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.detail || data.error || "The link was not removed.");
+          statusEl.textContent = `Forgotten: ${a.supplier || ""} ${what}.`;
+          renderRememberedMatches(list.filter((x) => x.id !== a.id), items);
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Could not forget: " + err.message;
+          btn.disabled = false;
+        }
+      };
     }
   }
 

@@ -312,6 +312,58 @@ assert.deepEqual(
 // A row whose numbers don't multiply out to its Sub Total is never guessed.
 assert.equal(parseCheckinDocument(ziplineForm.replace("$738.00", "$739.00")).entries.length, 2);
 
+// Freedom Screens of Australia invoice/quote/proforma layout (real files:
+// PI 46810, Quote 47457). One line per item; colour splits either inline
+// ("75 White 75 Black") or stored out of order in the PDF and re-attached by
+// position ("50 white /25 black" beside its line).
+const freedomQuote = [
+  " QTY  DESCRIPTION  UNIT PRICE", "(ex GST)", "DISC %  TOTAL", "(ex GST)",
+  " Smartscreen Components",
+  " 75  SMB1 End Cap-60A-01  $6.13  $459.75",
+  " 75  SMB1 Cord Grip-01  $1.85  $138.75",
+  " 150  ZLS1 Handle Mount - 01  -  75 White 75 Black  $4.91  $736.50",
+  " 2  ZLS1 Magnet - 01  $367.82  $735.64",
+  "50 white /25 black",
+  " Subtotal:", " $2,070.64",
+].join("\n");
+const freedomQuoteItems = [[
+  { str: "SMB1 End Cap-60A-01", x: 101, y: 455 },
+  { str: "SMB1 Cord Grip-01", x: 101, y: 367 },
+  { str: "50 white /25 black", x: 183, y: 367 },
+]];
+const fq = parseCheckinDocument(freedomQuote, freedomQuoteItems);
+assert.equal(fq.formatId, "qty-description-price-total");
+assert.equal(fq.reconciliation.ok, true);
+assert.deepEqual(
+  fq.entries.map(({ description, qty, unitCost }) => [description, qty, unitCost]),
+  [
+    ["SMB1 End Cap-60A-01", 75, 6.13],
+    ["SMB1 Cord Grip-01 - White", 50, 1.85],
+    ["SMB1 Cord Grip-01 - Black", 25, 1.85],
+    ["ZLS1 Handle Mount - 01 - White", 75, 4.91],
+    ["ZLS1 Handle Mount - 01 - Black", 75, 4.91],
+    ["ZLS1 Magnet - 01", 2, 367.82],
+  ]
+);
+// Without positions (e.g. an OCR'd page) the detached note is never guessed
+// onto a line -- Cord Grip stays one 75-piece row for a person to split.
+assert.equal(parseCheckinDocument(freedomQuote, null).entries.filter((e) => /Cord Grip/.test(e.description)).length, 1);
+// A line whose QTY x PRICE doesn't equal its TOTAL is never read.
+assert.equal(parseCheckinDocument(freedomQuote.replace("$459.75", "$460.75"), null).entries.some((e) => /End Cap/.test(e.description)), false);
+
+// Freedom "ZL2 Components" order form: no "Order Form" title, "Mill Price"
+// split over two lines, refs like "ZL32 -" / "ZL32 PC".
+const zl2Form = [
+  "Ref No.", "Image", "Name", "No. Per Screen", "Mill", "Price", "QTY", "Powder", "Coat Price", "QTY", "Colour", "Sub Total",
+  " ZL30", "ZL2 Gearbox ASSEM (100mm and 80mm) 0.065kgs", "1", "17.34", "10", "0.00", "0", "n/a", "$173.40",
+  "ZL32 -", "ZL32 PC", "ZL2 Handle ASSEM (NOTE: Black, White and Grey are standard cols) (100mm and 80mm) 0.54kgs",
+  "1", "121.34", "10", "179.12", "White", "$1,213.40", " ZL2 Components",
+].join("\n");
+assert.deepEqual(
+  parseCheckinDocument(zl2Form).entries.map(({ description, qty, unitCost }) => [description, qty, unitCost]),
+  [["ZL2 Gearbox ASSEM (100mm and 80mm)", 10, 17.34], ["ZL2 Handle ASSEM (100mm and 80mm)", 10, 121.34]]
+);
+
 // Currency detection: written codes/symbols first; a bare "$" uses the
 // document's own country details; with none, it's left for the person to
 // choose (never silently AED).
@@ -323,10 +375,10 @@ assert.equal(cur("Unit A$ 4.90 Total AU$490.00").currency, "AUD");
 assert.equal(cur("Freedom Screens Pty Ltd ABN 12 345 678 901\nZIP49 Brake Adjuster $738.00").currency, "AUD");
 assert.equal(cur("Shipped from Denver, USA\nZIP49 Brake Adjuster $738.00").currency, "USD");
 const bareDollar = cur(ziplineForm);
-assert.equal(bareDollar.currency, "USD");
-assert.equal(bareDollar.basis, "dollar-default-usd");
+assert.equal(bareDollar.currency, "AUD");
+assert.equal(bareDollar.basis, "dollar-default-aud");
 assert.equal(bareDollar.needsChoice, false);
-assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, "USD");
+assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, "AUD");
 assert.equal(cur("Nylon Cord 10 4.50 45.00").currency, "AED");
 assert.equal(cur("Price AED 12.00").currency, "AED");
 
