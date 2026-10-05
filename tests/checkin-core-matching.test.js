@@ -197,6 +197,35 @@ assert.equal(matchOne(profileItems, "", "ZLS2-Infinity 60mm-IS( 2.9m)Mill").sugg
 // No stated length row exists -> nothing suggested.
 assert.equal(matchOne(profileItems, "", "ZLS1-Infinity 60mm-IS( 3.3m)Mill").suggestedItem, null);
 
+// TEST: real Freedom spellings normalised to Master's -- White/Black ->
+// WHT/BLK, "(L)"/"(R)" -> LEFT/RIGHT, "60A" -> "60 A", MILL (default
+// finish) and AB (both-sides marker) never required, the most specific item
+// wins, and a shared "ZLS1 ZLS2" part accepts either family.
+const freedomItems = [
+  { id: "hfa-wht", item_code: "330010", description: "ZLS1 Handle F A WHT - LEFT", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "hfa-blk", item_code: "330009", description: "ZLS1 Handle F A BLK - LEFT", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "mount-wht", item_code: "330022", description: "ZLS1 Handle Mount AB WHT", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "mount-blk", item_code: "330021", description: "ZLS1 Handle Mount AB BLK", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "endcap-60a", item_code: "230001", description: "SMB1 End Cap 60 A MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "endcap-60b", item_code: "230003", description: "SMB1 End Cap 60 B MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "smb-brake", item_code: "230030", description: "SMB1 Brake", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "smb-spring", item_code: "191022", description: "SMB1 Brake Spring", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "guide-a", item_code: "330001", description: "ZLS1 Track Guide A MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "track", item_code: "310028", description: "ZLS1 Track 01 MILL", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+  { id: "magnet", item_code: "30005R", description: "ZLS1 ZLS2 Magnet AB (200m Roll)", current_qty: 1, unit_of_measure: "pcs", unit_cost: 1 },
+];
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle - F - A - 01 (L) - White").itemId, "hfa-wht");
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle Mount - 01 - Black").itemId, "mount-blk");
+assert.equal(matchOne(freedomItems, "", "SMB1 End Cap-60A-01").itemId, "endcap-60a");
+assert.equal(matchOne(freedomItems, "", "SMB1 End Cap-60B-01").itemId, "endcap-60b");
+assert.equal(matchOne(freedomItems, "", "SMB1-Brake Spring-01").itemId, "smb-spring");
+assert.equal(matchOne(freedomItems, "", "SMB1 Brake-01").itemId, "smb-brake");
+assert.equal(matchOne(freedomItems, "", "ZLS1 Track Guide-A-01 (L)").itemId, "guide-a");
+assert.equal(matchOne(freedomItems, "", "ZLS1-Magnet-01 (200m roll)").itemId, "magnet");
+// No colour on the line -> BLK and WHT tie -> never guessed.
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle-F-A-01 (L)").status, "unmatched");
+assert.equal(matchOne(freedomItems, "", "ZLS1 Handle Mount - 01").status, "unmatched");
+
 // TEST: duplicate Master Inventory descriptions -- never auto-pick one.
 r = matchOne(items, "", "Duplicate Bracket Set");
 assert.equal(r.status, "unmatched");

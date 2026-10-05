@@ -83,9 +83,17 @@
     const buf = await file.arrayBuffer();
     const pdf = await window.__pdfjs.getDocument({ data: buf }).promise;
     const pages = [];
+    // Each text fragment's position, kept alongside the plain text (as
+    // pages.items) so a reader can re-attach a fragment the PDF stores out
+    // of order -- e.g. Freedom's "50 white /25 black" colour-split notes,
+    // which sit on their item's line but come last in the text stream.
+    const itemsPerPage = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
+      itemsPerPage.push(content.items
+        .filter((it) => it.transform && it.str && it.str.trim())
+        .map((it) => ({ str: it.str.trim(), x: it.transform[4], y: it.transform[5] })));
       let lastY = null;
       let pageText = "";
       for (const item of content.items) {
@@ -97,6 +105,7 @@
       }
       pages.push(pageText);
     }
+    pages.items = itemsPerPage;
     return pages;
   }
 
@@ -241,8 +250,19 @@
   // genuinely different words into the same one; it only forgives the exact
   // handful of OCR mix-ups it's meant to.
   const OCR_DIGIT_TO_LETTER = { 0: "O", 1: "I", 5: "S", 8: "B" };
+  // Supplier spellings normalised to Master Inventory's, on BOTH sides:
+  // White/Black -> WHT/BLK, "(L)"/"(R)" -> LEFT/RIGHT, and a size glued to
+  // its side letter ("60A") split into "60 A".
+  function normaliseForMatch(text) {
+    return String(text || "")
+      .replace(/\(\s*L\s*\)/gi, " LEFT ")
+      .replace(/\(\s*R\s*\)/gi, " RIGHT ")
+      .replace(/\bwhite\b/gi, "WHT")
+      .replace(/\bblack\b/gi, "BLK")
+      .replace(/\b(\d{2,3})([AB])\b/g, "$1 $2");
+  }
   function tokenizeForMatch(text, raw) {
-    const tokens = String(text || "")
+    const tokens = normaliseForMatch(text)
       .toUpperCase()
       .replace(/\bMETRES?\b/g, "M")
       .split(/[^A-Z0-9]+/)
@@ -267,9 +287,10 @@
   // each other.
   function masterCoreTokens(description, raw) {
     const withoutOwnCode = String(description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
-    const tokens = tokenizeForMatch(withoutOwnCode, raw);
-    if (tokens.length && tokens[tokens.length - 1] === "AB") tokens.pop();
-    return tokens;
+    // "AB" is Master's "both sides, one record" marker wherever it appears
+    // ("ZLS1 Brake Arm AB", "ZLS1 Handle Mount AB WHT") -- suppliers rarely
+    // print it, so it's never a required word.
+    return tokenizeForMatch(withoutOwnCode, raw).filter((t) => t !== "AB");
   }
 
   // A code that's missing, truncated, or simply wrong can still be resolved
@@ -309,6 +330,15 @@
       return !!m && invoiceRaw.has(m[1]) && !invoiceSeriesBase.has(m[1]);
     }
 
+    // A shared part names several families ("ZLS1 ZLS2 Magnet AB"): the
+    // invoice naming ANY one of them is enough. A part naming one family
+    // still needs that family, exactly as before.
+    function familyGroupOk(coreRaw, test, core) {
+      const fam = coreRaw.map((t, k) => (/^[A-Z]{2,}\d{1,2}$/.test(t) ? k : -1)).filter((k) => k >= 0);
+      if (fam.length < 2) return { ok: true, skip: new Set() };
+      return { ok: fam.some((k) => test(core[k], coreRaw[k])), skip: new Set(fam) };
+    }
+
     function uniqueMatch(test) {
       const matches = [];
       for (const candidates of itemsByCode.values()) {
@@ -316,14 +346,32 @@
           const core = masterCoreTokens(candidate.description);
           if (core.length < 2) continue;
           const coreRaw = masterCoreTokens(candidate.description, true);
-          if (core.every((tok, k) => test(tok, coreRaw[k]))) matches.push(candidate);
+          const fam = familyGroupOk(coreRaw, test, core);
+          if (!fam.ok) continue;
+          if (!core.every((tok, k) => fam.skip.has(k) || test(tok, coreRaw[k]))) continue;
+          // Specificity: how many of the item's own words the invoice line
+          // actually contains (optional MILL counts only when printed).
+          const score = core.filter((tok) => invoiceTokens.has(tok)).length;
+          matches.push({ candidate, score });
         }
       }
-      const unique = matches.filter((item, idx) => matches.findIndex((other) => other.id === item.id) === idx);
-      return unique.length === 1 ? unique[0] : unique.length ? false : null;
+      const unique = matches.filter((mm, idx) => matches.findIndex((o) => o.candidate.id === mm.candidate.id) === idx);
+      if (unique.length === 1) return unique[0].candidate;
+      if (!unique.length) return null;
+      // Most specific wins: when every one of several items' words is on the
+      // invoice line, the item that accounts for MORE of the line's words is
+      // the line's product -- "SMB1 Brake Spring" over "SMB1 Brake", "ZLS1
+      // Track Guide A" over "ZLS1 Track 01". A tie (e.g. BLK and WHT
+      // variants when the line names no colour) still matches nothing.
+      const top = Math.max(...unique.map((mm) => mm.score));
+      const best = unique.filter((mm) => mm.score === top);
+      return best.length === 1 ? best[0].candidate : false;
     }
 
-    return uniqueMatch(seriesTolerantPass ? seriesTolerant : (tok) => invoiceTokens.has(tok)) || null;
+    // "MILL" is Master's default finish -- invoices for mill-finish parts
+    // rarely print it, so it's never required (a coloured variant still has
+    // its own BLK/WHT word, which IS required).
+    return uniqueMatch(seriesTolerantPass ? seriesTolerant : (tok) => tok === "MILL" || invoiceTokens.has(tok)) || null;
   }
 
   // Never auto-applied: whether "ZLS1-Brake Spring 01" really is Master's
@@ -1267,11 +1315,12 @@
   //  2. a bare "$" with country details elsewhere on the document -- an ABN,
   //     "Pty Ltd", "Australia" or a .com.au address means AUD; "United
   //     States"/"USA"/"U.S." means USD;
-  //  3. a bare "$" with no such details -> USD automatically (Freedom's
-  //     priced documents to Oryx are in USD, and "$" on an international
-  //     invoice almost always means US dollars). Shown on screen as
-  //     "assumed USD" with a USD/AUD switch preselected, so it can be
-  //     corrected, but nobody has to act -- and it's never treated as AED.
+  //  3. a bare "$" with no such details -> AUD automatically. Verified on
+  //     real documents: Freedom Screens of Australia's "$"-only Zipline/ZL2
+  //     order forms carry exactly the prices of their AUD quotes/proformas
+  //     (e.g. ZL2 Drawbar Cap ASSEM $23.11 on both, 19/03/2024). Shown on
+  //     screen with a USD/AUD switch preselected for the rare correction --
+  //     nobody has to act, and it's never treated as AED.
   //  Nothing at all -> AED.
   const DOLLAR_AMOUNT_RE = /(^|[^A-Za-z])\$\s?\d/;
   // Australia-only markers. GST is deliberately not one (India, Singapore and
@@ -1295,7 +1344,7 @@
       const aud = AUD_CONTEXT_RE.test(text), usd = USD_CONTEXT_RE.test(text);
       if (aud && !usd) return { currency: "AUD", basis: "dollar-australian-details", needsChoice: false };
       if (usd && !aud) return { currency: "USD", basis: "dollar-us-details", needsChoice: false };
-      return { currency: "USD", basis: "dollar-default-usd", needsChoice: false };
+      return { currency: "AUD", basis: "dollar-default-aud", needsChoice: false };
     }
     return { currency: "AED", basis: "none", needsChoice: false };
   }
@@ -1929,11 +1978,17 @@
   // multiplies out to that Sub Total -- "Amt Per Screen" and cut-length
   // notes can never be mistaken for the quantity.
   function parseZiplineOrderForm(text) {
-    if (!/Order Form/i.test(text) || !/Ref No/i.test(text) || !/Sub Total/i.test(text) || !/Mill Price/i.test(text)) return [];
+    // Same Freedom form also comes titled "ZL2 Components" (no "Order Form"),
+    // with the "Mill Price" heading split over two lines -- gate on the
+    // column headings that every variant has.
+    if (!/Ref No/i.test(text) || !/Sub Total/i.test(text) || !/\bMill\b/i.test(text)) return [];
     const cells = text.split("\n").map((c) => c.trim()).filter(Boolean);
     const headerIdx = cells.findIndex((c) => /^Sub Total$/i.test(c));
     if (headerIdx === -1) return [];
-    const refRe = /^[A-Z]{2,5}\d{1,4}[A-Z]?$/;
+    // "ZL31", "ZIP50B", and variant refs printed as "ZL32 -" / "ZL32 PC"
+    // (mill / powder-coated) -- an empty segment between two refs simply has
+    // no Sub Total and is skipped.
+    const refRe = /^[A-Z]{2,5}\d{1,4}[A-Z]?(?:\s*-|\s+PC)?$/;
     const subTotalRe = /^\$\s?([\d,]+\.\d{2})$/;
     const numRe = /^[\d,]+(?:\.\d+)?$/;
     const starts = [];
@@ -1959,10 +2014,103 @@
         }
       }
       if (pairs.length !== 1) return;
-      const description = row[nameIdx].replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "").replace(/\s+/g, " ").trim();
+      const description = row[nameIdx]
+        .replace(/\s+\d+(?:\.\d+)?\s*kgs?\s*$/i, "")
+        .replace(/\s*\(NOTE:[^)]*\)/i, "")
+        .replace(/\s+/g, " ").trim();
       entries.push({ code: "", description, qty: pairs[0].qty.v, unitCost: pairs[0].price.v, lineTotal: subTotal });
     });
     return entries;
+  }
+
+  // Freedom Screens of Australia invoice / quote / proforma layout:
+  //   QTY  DESCRIPTION  UNIT PRICE (ex GST)  DISC %  TOTAL (ex GST)
+  // pdf.js keeps each item on one line, e.g.
+  //   "50  ZLS1 Handle - F - A - 01 (L)  -  White  $7.36  $368.00"
+  // A line is only read when QTY x UNIT PRICE (less any DISC %) reconciles
+  // to its TOTAL. Section headings ("Smartscreen Components") and colour-
+  // split notes ("50 white /25 black") have no prices, so are never read as
+  // items. No item codes are printed, so rows match by description.
+  // "75 White 75 Black", "50 white /25 black", "16 Black/16 White" -- one
+  // invoice line covering two colours. Returned only when the two counts add
+  // up to the line's quantity, so a note is never misread as something else.
+  const COLOUR_SPLIT_RE = /(\d+)\s*(white|black|wht|blk)\s*[\/,&]?\s*(\d+)\s*(white|black|wht|blk)/i;
+  function colourSplitFrom(note, qty) {
+    const m = String(note || "").match(COLOUR_SPLIT_RE);
+    if (!m) return null;
+    const a = parseFloat(m[1]), b = parseFloat(m[3]);
+    const name = (c) => (/^(white|wht)$/i.test(c) ? "White" : "Black");
+    if (name(m[2]) === name(m[4]) || Math.abs(a + b - qty) > 1e-9) return null;
+    return [{ colour: name(m[2]), qty: a }, { colour: name(m[4]), qty: b }];
+  }
+
+  function parseQtyDescPriceTotal(text, pdfItems) {
+    if (!/\bQTY\b/.test(text) || !/\bDESCRIPTION\b/.test(text) || !/UNIT PRICE/i.test(text)) return { entries: [], reconciliation: null };
+    const lineRe = /^(\d+(?:\.\d+)?)\s+(.*?[A-Za-z].*?)\s+\$\s?([\d,]+\.\d{2})\s+(?:(\d+(?:\.\d+)?)\s*%?\s+)?\$\s?([\d,]+\.\d{2})$/;
+    const money = (v) => parseFloat(v.replace(/,/g, ""));
+    const entries = [];
+    let parsedTotal = 0;
+    for (const raw of text.split("\n")) {
+      const m = raw.trim().replace(/\s+/g, " ").match(lineRe);
+      if (!m) continue;
+      const qty = parseFloat(m[1]);
+      const unitCost = money(m[3]);
+      const disc = m[4] != null ? parseFloat(m[4]) : 0;
+      const total = money(m[5]);
+      const expected = qty * unitCost * (1 - disc / 100);
+      if (!(qty > 0) || Math.abs(expected - total) > Math.max(0.02, total * 0.001)) continue;
+      const rawDescription = m[2].replace(/\s+/g, " ").trim();
+      entries.push({ code: "", rawDescription, qty, unitCost: disc ? unitCost * (1 - disc / 100) : unitCost, lineTotal: total, colourNote: null });
+      parsedTotal += total;
+    }
+    // Colour-split notes the PDF stores out of order: attach each to the
+    // item line it sits beside (same height on the page, within a few
+    // points, and the closest such line).
+    for (const pageItems of pdfItems || []) {
+      for (const note of pageItems.filter((it) => COLOUR_SPLIT_RE.test(it.str) && it.str.replace(COLOUR_SPLIT_RE, "").trim() === "")) {
+        let best = null;
+        for (const e of entries) {
+          const host = pageItems.find((it) => it.str.replace(/\s+/g, " ") === e.rawDescription.replace(/\s+-\s+/g, " - "))
+            || pageItems.find((it) => e.rawDescription.startsWith(it.str.replace(/\s+/g, " ")) && it.str.length > 6);
+          if (!host) continue;
+          const dy = Math.abs(host.y - note.y);
+          if (dy <= 12 && (!best || dy < best.dy)) best = { e, dy };
+        }
+        if (best && !best.e.colourNote) best.e.colourNote = note.str;
+      }
+    }
+    const out = [];
+    for (const e of entries) {
+      // Inline note, e.g. "ZLS1 Handle Mount - 01 - 75 White 75 Black".
+      let base = e.rawDescription, note = e.colourNote;
+      const inline = base.match(new RegExp(`\\s*-?\\s*${COLOUR_SPLIT_RE.source}\\s*$`, "i"));
+      if (inline) { note = note || inline[0]; base = base.slice(0, inline.index); }
+      const description = base.replace(/\s+-\s+/g, " - ").replace(/\s+/g, " ").trim();
+      const split = colourSplitFrom(note, e.qty);
+      if (split) {
+        for (const part of split) {
+          out.push({ code: "", description: `${description} - ${part.colour}`, qty: part.qty, unitCost: e.unitCost,
+            lineTotal: Math.round(part.qty * e.unitCost * 100) / 100, colourSplitFrom: `${note.trim()} (of ${e.qty})` });
+        }
+      } else {
+        out.push({ code: "", description, qty: e.qty, unitCost: e.unitCost, lineTotal: e.lineTotal });
+      }
+    }
+    entries.length = 0;
+    entries.push(...out);
+    // The printed Subtotal (or Total/Balance Due when there's no freight or
+    // tax) must appear somewhere on the document as the sum of the lines --
+    // a missed line would leave the rows short of it.
+    let reconciliation = null;
+    if (entries.length) {
+      const printed = [...text.matchAll(/\$\s?([\d,]+\.\d{2})/g)].map((mm) => money(mm[1]));
+      reconciliation = {
+        expectedTotal: printed.length ? Math.max(...printed) : parsedTotal,
+        parsedTotal,
+        ok: printed.some((v) => Math.abs(v - parsedTotal) <= 0.05),
+      };
+    }
+    return { entries, reconciliation };
   }
 
   // Freedom Screens packing lists contain reliable received quantities but
@@ -2517,7 +2665,7 @@
   // structure" step. Zero rows across every format means the document isn't
   // one this reader recognises; the caller must not fabricate anything from
   // that and must show a clear message instead.
-  function parseCheckinDocument(text) {
+  function parseCheckinDocument(text, pdfItems) {
     const rawLines = mergeWrappedSlNoRows(text.split("\n"));
     let best = { formatId: null, formatLabel: null, entries: [] };
     for (const format of CHECKIN_FORMATS) {
@@ -2562,11 +2710,20 @@
         reconciliation: freedomCellStream.reconciliation,
       };
     }
+    const qdpt = parseQtyDescPriceTotal(text, pdfItems);
+    if (qdpt.entries.length > best.entries.length) {
+      best = {
+        formatId: "qty-description-price-total",
+        formatLabel: "Freedom invoice / quote (QTY · DESCRIPTION · UNIT PRICE · TOTAL)",
+        entries: qdpt.entries,
+        reconciliation: qdpt.reconciliation,
+      };
+    }
     const ziplineEntries = parseZiplineOrderForm(text);
     if (ziplineEntries.length > best.entries.length) {
       best = {
         formatId: "zipline-order-form",
-        formatLabel: "Zipline Component Order Form",
+        formatLabel: "Freedom component order form (Zipline / ZL2)",
         entries: ziplineEntries,
       };
     }
@@ -2927,7 +3084,7 @@
     "dollar-australian-details": "Detected as AUD: prices are in \"$\" and the document carries Australian details (e.g. ABN, Pty Ltd, Australia).",
     "dollar-us-details": "Detected as USD: prices are in \"$\" and the document carries US details.",
     "dollar-chosen": "Prices are in \"$\" — currency chosen on this screen.",
-    "dollar-default-usd": "Prices are in \"$\" with no country details on the document, so USD was used automatically. If this supplier billed in Australian dollars, switch it to AUD above and the rate updates.",
+    "dollar-default-aud": "Prices are in \"$\" with no country details on the document, so AUD was used automatically (Freedom Screens of Australia's \"$\" order forms carry the same prices as their AUD quotes). If this document is in US dollars, switch it to USD above and the rate updates.",
   };
 
   // Landed Cost: splits ciState.shippingAmountOriginal equally across every
@@ -4100,7 +4257,7 @@
       // API: an unrecognised document should fail fast with a clear message,
       // not spend a network round-trip first.
       if (isStale()) return;
-      const doc = parseCheckinDocument(pdfText);
+      const doc = parseCheckinDocument(pdfText, ciState.usedOcr ? null : pages.items);
       if (doc.reconciliation && !doc.reconciliation.ok) {
         ciState.rows = null;
         $("#ciConfirmBar").hidden = true;

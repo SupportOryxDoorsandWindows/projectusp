@@ -35,8 +35,28 @@ product lines — never treat one family's item as a match for another's:
 - `detectDocumentCurrencyInfo` in `fp-pro.js`: a written code or code-marked
   symbol (USD, AUD, US$, A$…) wins; a bare "$" uses Australia-only markers
   (ABN, Pty Ltd, Australia, .com.au — not GST, which India also uses) or US
-  markers; a bare "$" with no markers is USD automatically (the owner wants
-  this automated; never AED). The screen shows "USD used automatically" with
-  a preselected USD/AUD switch for the rare correction — nobody must act.
+  markers; a bare "$" with no markers is **AUD** automatically — verified on
+  real files: Freedom Screens of Australia's "$"-only Zipline/ZL2 order forms
+  carry the same prices as their AUD quotes (never AED). The screen says so
+  and keeps a preselected USD/AUD switch for the rare correction.
 - The AED rate comes from the fawazahmed0 currency-api on jsDelivr, for the
   invoice date first, then latest, then the last rate on file.
+
+## Supplier layouts & matching rules (Check-in)
+
+- Freedom Screens of Australia sends two layouts: invoice/quote/proforma
+  (`parseQtyDescPriceTotal`: QTY · DESCRIPTION · UNIT PRICE · TOTAL, no item
+  codes) and component order forms titled "Zipline…" or "ZL2 Components"
+  (`parseZiplineOrderForm`, one cell per line). Real samples are in
+  `tests/checkin-parser.test.js`; a line is only read when qty × price
+  reconciles to its total.
+- Colour splits ("75 White 75 Black", "50 white /25 black") become one row
+  per colour. Detached notes are re-attached by page position
+  (`pages.items` from `extractPdfTextPerPage`); without positions (OCR) they
+  are never guessed.
+- Matching normalises supplier spellings to Master's (`normaliseForMatch`):
+  White/Black → WHT/BLK, (L)/(R) → LEFT/RIGHT, "60A" → "60 A". MILL (default
+  finish) and AB (both-sides marker) are never required. When several items
+  fully fit, the one matching the most of the line's words wins; a tie (e.g.
+  BLK vs WHT with no colour on the line) matches nothing. A shared part
+  ("ZLS1 ZLS2 Magnet") accepts either family.
