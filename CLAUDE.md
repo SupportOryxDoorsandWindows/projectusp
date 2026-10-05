@@ -26,6 +26,15 @@ product lines — never treat one family's item as a match for another's:
   Family, size, side/colour/finish and the stated bar length must all agree;
   only one product word may differ, and a tie suggests nothing. It is never
   auto-applied. Known family words live in `PRODUCT_FAMILIES`.
+- A third suggestion pass (`findSizeSuggestion`) covers the same product
+  with sizes written differently: feet → metres ("9' x 100'" = 2.74 m wide,
+  30.48 m roll) or a different roll size (25 m roll vs Master's 200 m). It
+  needs every Master product word on the line OR size evidence (same width ±
+  0.1 m, or roll lengths stated on both); "mm" sizes must be equal; no family,
+  series, colour or side conflict; single best candidate. Never auto-applied.
+- Roll conversion uses the invoice's OWN stated roll length when it has one
+  (`invoiceRollLengthM`, also read from `row.source` on Edit): 8 × "25mtrs
+  roll" = 200 m, never 8 × Master's 200 m roll. Master counts these in metres.
 - ZLS1 profiles have one Master row per bar length (2500 / 2900 / 5100 mm)
   under the same code, so anything that resolves a Check-in row must pick the
   exact length row by id, not just the code.

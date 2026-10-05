@@ -382,7 +382,119 @@
     if (!description) return null;
     const item = findUniqueDescriptionItem(itemsByCode, description, true);
     if (item) return { item, note: "Same words, but the series number differs (e.g. ZLS vs ZLS1)." };
-    return findCloseSuggestion(itemsByCode, description);
+    return findCloseSuggestion(itemsByCode, description) || findSizeSuggestion(itemsByCode, description);
+  }
+
+  // --- Sizes stated on an invoice line (metres) ---------------------------
+  // Roll LENGTH only when the line clearly states one: feet "9' x 100'"
+  // (the second figure), a bracketed "(25mtrs roll)" / "(125m)", or
+  // "50 mtrs roll". Never a width ("3m wide roll" is a width).
+  const FEET_DIMS_RE = /(\d+(?:\.\d+)?)\s*['\u2032]\s*[x\u00d7]\s*(\d+(?:\.\d+)?)\s*['\u2032]/i;
+  const METRE_UNIT = "(?:m|mtrs?|meters?|metres?)";
+  function invoiceRollLengthM(text) {
+    const t = String(text || "");
+    const ft = t.match(FEET_DIMS_RE);
+    if (ft) return Math.round(parseFloat(ft[2]) * 0.3048 * 100) / 100;
+    const br = t.match(new RegExp(`\\(\\s*(\\d+(?:\\.\\d+)?)\\s*${METRE_UNIT}\\b[^)]*\\)`, "i"));
+    if (br) return parseFloat(br[1]);
+    const rl = t.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${METRE_UNIT}\\s+rolls?\\b`, "i"));
+    return rl ? parseFloat(rl[1]) : null;
+  }
+  // Width: the first figure of feet "9' x 100'", or "3m wide"; on a Master
+  // description, a metre figure OUTSIDE brackets ("Patio Mesh 2.7m (30M)").
+  function invoiceWidthM(text) {
+    const t = String(text || "");
+    const ft = t.match(FEET_DIMS_RE);
+    if (ft) return Math.round(parseFloat(ft[1]) * 0.3048 * 100) / 100;
+    const w = t.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${METRE_UNIT}\\s+wide\\b`, "i"));
+    return w ? parseFloat(w[1]) : null;
+  }
+  function masterWidthM(description) {
+    const outside = String(description || "").replace(/\([^()]*\)/g, " ");
+    const m = outside.match(/(\d+(?:\.\d+)?)\s*m\b/i);
+    return m ? parseFloat(m[1]) : null;
+  }
+  const mmSizes = (t) => [...String(t || "").matchAll(/(\d+(?:\.\d+)?)\s*mm\b/gi)].map((m) => parseFloat(m[1]));
+
+  // Third suggestion pass -- same product, sizes written differently (feet vs
+  // metres) or a different roll size. E.g. Freedom India's "Phifer Fiberglass
+  // Pool and Patio Screen 9' x 100'" -> Master "Patio Mesh 2.7m (30M)"
+  // (9 ft = 2.74 m wide), or "ZLS1- Magnet-01 (25mtrs roll)" -> Master's
+  // 200 m roll magnet. Never applied by itself. Required:
+  //  - a product word in common, covering at least half of the Master item's
+  //    own product words;
+  //  - no product-family conflict (ZLS1 vs SMB1 / ZL2 ...);
+  //  - no colour or side conflict;
+  //  - widths within 0.1 m and every "mm" size equal when both sides state
+  //    one (8mm vs 12mm Bug Fur, 11 ft = 3.35 m vs 3.2 m -> nothing);
+  //  - a single best candidate.
+  // A different roll LENGTH is allowed but spelled out in the note.
+  const SIZE_STOP_WORDS = new Set(["ROLL", "ROLLS", "WIDE", "LENGTH", "ONLY", "WITH", "SHEET", "PER", "MILL", "LEFT", "RIGHT", "AND", "FROM", "ASSEM", "SCREEN", "FIBERGLASS", "FIBREGLASS",
+    "THE", "FOR", "PCS", "NOS", "SET", "MTR", "MTRS", "BLK", "WHT", "STR", "CNR", "OFF", "NEW", "OLD"]);
+  function productWords(text) {
+    return closeTokens(String(text || "").replace(/\([^()]*\)/g, " "))
+      .filter((t) => /^[A-Z]{3,}$/.test(t) && !SIZE_STOP_WORDS.has(t) && !PRODUCT_FAMILIES.has(t));
+  }
+  function findSizeSuggestion(itemsByCode, description) {
+    const inv = new Set(closeTokens(description));
+    const invWords = new Set(productWords(description));
+    if (!invWords.size) return null;
+    // Family tokens as written (ZLS1, SMB2, ZL2...): same family and series,
+    // or one side bare (ZLS = ZLS1) -- never ZLS1 vs ZLS2.
+    const famTokens = (set) => [...set].filter((t) => { const b = familyBase(t); return b && (PRODUCT_FAMILIES.has(b) || /\d$/.test(t)); });
+    const sameSeries = (a, b) => familyBase(a) === familyBase(b) && (a === b || a === familyBase(a) || b === familyBase(b));
+    const invFamilies = famTokens(inv);
+    const invColour = ["BLK", "WHT"].filter((c) => inv.has(c));
+    const invSide = ["LEFT", "RIGHT"].filter((c) => inv.has(c));
+    const invWidth = invoiceWidthM(description);
+    const invRoll = invoiceRollLengthM(description);
+    const invMm = mmSizes(description);
+    let best = null, tie = false;
+    for (const candidates of itemsByCode.values()) {
+      for (const c of candidates) {
+        const desc = String(c.description || "").replace(/^[a-z0-9]*\d[a-z0-9]*\s*[-:]\s*/i, "");
+        const words = [...new Set(productWords(desc))];
+        if (!words.length) continue;
+        const shared = words.filter((w) => invWords.has(w));
+        if (!shared.length || shared.length * 2 < words.length) continue;
+        const mt = new Set(closeTokens(desc));
+        const masterFamilies = famTokens(mt);
+        if (invFamilies.length && !invFamilies.some((f) => masterFamilies.some((m) => sameSeries(f, m)))) continue;
+        if (invFamilies.length && masterFamilies.some((m) => !invFamilies.some((f) => sameSeries(f, m))) && masterFamilies.length === 1) continue;
+        if (!invFamilies.length && masterFamilies.length) {
+          // A family-specific Master part needs the line to name that family.
+          continue;
+        }
+        if (invColour.length && ["BLK", "WHT"].some((col) => mt.has(col) && !invColour.includes(col))) continue;
+        if (invSide.length && ["LEFT", "RIGHT"].some((sd) => mt.has(sd) && !invSide.includes(sd))) continue;
+        if (!invColour.length && (mt.has("BLK") || mt.has("WHT"))) continue; // colour unknown -> no guess
+        const mWidth = masterWidthM(desc);
+        if (invWidth != null && mWidth != null && Math.abs(invWidth - mWidth) > 0.1) continue;
+        const mMm = mmSizes(desc);
+        if (invMm.length && mMm.length && !invMm.every((v) => mMm.includes(v))) continue;
+        // Evidence it's the same product: every one of the Master item's
+        // product words is on the line, OR the sizes back it up (same width,
+        // or a roll length stated on both). "Handle Mount" vs "Handle Bush"
+        // shares a word but has neither -> nothing.
+        const sizeEvidence = (invWidth != null && mWidth != null) || (invRoll != null && parseBundleLengthM(c.description) != null);
+        if (shared.length < words.length && !sizeEvidence) continue;
+        const score = shared.length * 10 + (invWidth != null && mWidth != null ? 5 : 0);
+        if (!best || score > best.score) { best = { item: c, score, mWidth, mRoll: parseBundleLengthM(c.description) }; tie = false; }
+        else if (score === best.score && best.item.id !== c.id) tie = true;
+      }
+    }
+    if (!best || tie) return null;
+    const bits = [];
+    if (invWidth != null && best.mWidth != null) bits.push(`width ${invWidth} m on the invoice vs ${best.mWidth} m in Master`);
+    if (invRoll != null && best.mRoll != null) {
+      bits.push(Math.abs(invRoll - best.mRoll) <= best.mRoll * 0.02
+        ? `roll length ${invRoll} m ≈ ${best.mRoll} m`
+        : `roll size differs — invoice ${invRoll} m, Master ${best.mRoll} m; stock is added in metres (rolls × ${invRoll} m)`);
+    }
+    return {
+      item: best.item,
+      note: `Similar product, written differently${bits.length ? ` (${bits.join("; ")})` : ""}. Check it's the same item.`,
+    };
   }
 
   // Second suggestion pass, for supplier names that use a different product
@@ -3161,12 +3273,18 @@
     // coded row on the same document already gets, checking in "+1" (a
     // roll) instead of the roll's real length in metres.
     const bundleLenM = parseBundleLengthM(item.description);
-    const editedInvoiceLen = parseLengthToken(`${newUnit || ""} ${newDescription || ""}`);
-    if (bundleLenM != null && (editedInvoiceLen == null || editedInvoiceLen === bundleLenM)) {
+    // The supplier's own wording (kept on row.source) counts too -- Edit
+    // passes no description, and "(25mtrs roll)" / "9' x 100'" must never be
+    // lost: 8 rolls of 25 m are 200 m, not 8 x Master's 200 m roll.
+    const invoiceText = `${newUnit || ""} ${newDescription || ""} ${(row.source && row.source.description) || ""}`;
+    const statedRollM = invoiceRollLengthM(invoiceText);
+    const editedInvoiceLen = statedRollM != null ? statedRollM : parseLengthToken(`${newUnit || ""} ${newDescription || ""}`);
+    if (bundleLenM != null && (editedInvoiceLen == null || editedInvoiceLen === bundleLenM || statedRollM != null)) {
+      const perRollM = statedRollM != null ? statedRollM : bundleLenM;
       const rollCount = invoiceQty;
-      const qtyMetres = rollCount * bundleLenM;
+      const qtyMetres = Math.round(rollCount * perRollM * 100) / 100;
       const rollUnitCost = row.invoiceUnitCost; // original per-roll price, before conversion
-      const perMetreCost = rollUnitCost != null ? rollUnitCost / bundleLenM : null;
+      const perMetreCost = rollUnitCost != null ? rollUnitCost / perRollM : null;
       const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${newDescription || ""} ${newUnit || ""}`) ? "Roll" : "Length";
       row.qty = qtyMetres;
       row.invoiceUnitCost = perMetreCost;
@@ -3175,7 +3293,7 @@
       row.status = "ok"; row.action = "add"; row.decided = true;
       row.itemId = item.id;
       row.description = item.description || newDescription;
-      row.packageInfo = { type: bundleType, qtyPerPackage: bundleLenM, unit: "m", rollCount, rollUnitCost };
+      row.packageInfo = { type: bundleType, qtyPerPackage: perRollM, unit: "m", rollCount, rollUnitCost };
       return;
     }
     row.description = item.description || newDescription;
