@@ -364,6 +364,40 @@ assert.deepEqual(
   [["ZL2 Gearbox ASSEM (100mm and 80mm)", 10, 17.34], ["ZL2 Handle ASSEM (100mm and 80mm)", 10, 121.34]]
 );
 
+// Freedom Screens India proforma (real file "SUP 22 Pool Patio Mesh R2"):
+// Sl No · Particulars · Rolls · Rate $USD · Per · Amount -- rates without
+// decimals, a bare "Packing 120" charge, USD stated in the headings.
+const freedomIndia = [
+  " Sl No  Particulars  Rolls  Rate $USD  Per  Amount ($USD)",
+  " 1  Phifer Fiberglass Pool and Patio Screen 9' x 100'  10  458  roll  4580.000",
+  " 2  Phifer Fiberglass Pool and Patio Screen 11' x 100'  5  560  roll  2800.000",
+  " 3  ZLS1- Magnet-01 ( 25mtrs roll)  8  11  roll  88.000",
+  " 4  Rubber Spline Drawbar ( 50 mtrs roll)  2  7.5  roll  15.000",
+  " 7483.00",
+  " Validity Of Pi is 30 days  Packing  120",
+  " Total  7603.000",
+].join("\n");
+const fi = parseCheckinDocument(freedomIndia);
+assert.equal(fi.formatId, "slno-particulars");
+assert.equal(fi.reconciliation.ok, true);
+assert.deepEqual(fi.missingLnNumbers, []);
+assert.deepEqual(
+  fi.entries.map(({ description, qty, unitCost, unit }) => [description, qty, unitCost, unit]),
+  [
+    ["Phifer Fiberglass Pool and Patio Screen 9' x 100'", 10, 458, "roll"],
+    ["Phifer Fiberglass Pool and Patio Screen 11' x 100'", 5, 560, "roll"],
+    ["ZLS1- Magnet-01 ( 25mtrs roll)", 8, 11, "roll"],
+    ["Rubber Spline Drawbar ( 50 mtrs roll)", 2, 7.5, "roll"],
+  ]
+);
+assert.equal(detectShippingCharge(freedomIndia).amount, 120);
+assert.equal(detectDocumentCurrencyInfo(freedomIndia).currency, "USD");
+// A line whose qty x rate doesn't equal its amount is never read -- and its
+// missing Sl No is reported, not silently skipped.
+const fiBad = parseCheckinDocument(freedomIndia.replace("4580.000", "4581.000"));
+assert.equal(fiBad.entries.length, 3);
+assert.deepEqual(fiBad.missingLnNumbers, [1]);
+
 // Currency detection: written codes/symbols first; a bare "$" uses the
 // document's own country details; with none, it's left for the person to
 // choose (never silently AED).

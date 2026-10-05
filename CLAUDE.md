@@ -50,6 +50,11 @@ product lines — never treat one family's item as a match for another's:
   (`parseZiplineOrderForm`, one cell per line). Real samples are in
   `tests/checkin-parser.test.js`; a line is only read when qty × price
   reconciles to its total.
+- Freedom Screens **India** sends a third layout, a proforma
+  (`parseSlNoParticulars`: Sl No · Particulars · Rolls · Rate $USD · Per ·
+  Amount; rates often without decimals; sizes in feet, e.g. 9' x 100'). Its
+  packing charge is a bare "Packing 120", picked up by the last-resort rule
+  at the end of `detectShippingCharge`.
 - Colour splits ("75 White 75 Black", "50 white /25 black") become one row
   per colour. Detached notes are re-attached by page position
   (`pages.items` from `extractPdfTextPerPage`); without positions (OCR) they

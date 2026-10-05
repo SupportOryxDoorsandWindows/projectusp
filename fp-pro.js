@@ -1524,6 +1524,17 @@
         if (amt > 0) candidates.push({ label: `${line} / ${next}`, amount: amt });
       }
     }
+    // Last resort, only when nothing above matched: a bare "Packing 120" /
+    // "Freight: 85" at the very end of a line, with a plain number (Freedom
+    // Screens India's proforma prints "Validity Of Pi is 30 days  Packing  120").
+    if (!candidates.length) {
+      for (const raw of rawLines) {
+        const m = raw.trim().match(/\b(packing|freight|shipping)(?:\s+charges?)?\s*:?\s+([\d,]+(?:\.\d{1,3})?)\s*$/i);
+        if (!m || NOT_SHIPPING_RE.test(raw) || ITEM_ROW_SHAPE_RE.test(raw)) continue;
+        const amt = parseFloat(m[2].replace(/,/g, ""));
+        if (amt > 0) candidates.push({ label: `${m[1]} ${m[2]}`, amount: amt });
+      }
+    }
     const seen = new Set();
     const uniq = candidates.filter((c) => {
       const k = c.label + "|" + c.amount;
@@ -2109,6 +2120,37 @@
         parsedTotal,
         ok: printed.some((v) => Math.abs(v - parsedTotal) <= 0.05),
       };
+    }
+    return { entries, reconciliation };
+  }
+
+  // Freedom Screens India proforma (real file: "SUP 22 Oryx Doors- Pool Patio
+  // Mesh R2"):  Sl No · Particulars · Rolls/Qty · Rate $USD · Per · Amount
+  //   "1  Phifer Fiberglass Pool and Patio Screen 9' x 100'  10  458  roll  4580.000"
+  // Rates often have no decimals, so a line is read only when its numbers
+  // reconcile (qty x rate = amount) and its Sl No runs in sequence (a gap is
+  // reported, never guessed). No item codes are printed.
+  const PER_UNIT_RE = "(?:rolls?|pcs?|nos?|each|ea|sets?|pairs?|m|mtrs?|meters?|metres?|kgs?|box(?:es)?|sheets?|lengths?|bars?)";
+  function parseSlNoParticulars(text) {
+    if (!/\bSl\.?\s*No\b/i.test(text) || !/\bParticulars\b/i.test(text) || !/\bAmount\b/i.test(text)) return { entries: [], reconciliation: null };
+    const num = "([\\d,]+(?:\\.\\d+)?)";
+    const lineRe = new RegExp(`^(\\d{1,3})\\s+(.*?[A-Za-z].*?)\\s+${num}\\s+${num}\\s+(?:(${PER_UNIT_RE})\\s+)?${num}$`, "i");
+    const money = (v) => parseFloat(v.replace(/,/g, ""));
+    const entries = [];
+    let parsedTotal = 0;
+    for (const raw of text.split("\n")) {
+      const m = raw.trim().replace(/\s+/g, " ").match(lineRe);
+      if (!m) continue;
+      const qty = money(m[3]), rate = money(m[4]), amount = money(m[6]);
+      // Only cent-level rounding of the rate is tolerated (half a cent per unit).
+      if (!(qty > 0) || !(rate > 0) || Math.abs(qty * rate - amount) > 0.02 + qty * 0.005) continue;
+      entries.push({ code: "", description: m[2].replace(/\s+/g, " ").trim(), qty, unitCost: rate, unit: m[5] ? m[5].toLowerCase() : "", ln: parseInt(m[1], 10), lineTotal: amount });
+      parsedTotal += amount;
+    }
+    let reconciliation = null;
+    if (entries.length) {
+      const printed = [...text.matchAll(/(?:^|\s)([\d,]+\.\d{2,3})(?=\s|$)/gm)].map((mm) => money(mm[1]));
+      reconciliation = { expectedTotal: parsedTotal, parsedTotal, ok: printed.some((v) => Math.abs(v - parsedTotal) <= 0.05) };
     }
     return { entries, reconciliation };
   }
@@ -2717,6 +2759,15 @@
         formatLabel: "Freedom invoice / quote (QTY · DESCRIPTION · UNIT PRICE · TOTAL)",
         entries: qdpt.entries,
         reconciliation: qdpt.reconciliation,
+      };
+    }
+    const slNo = parseSlNoParticulars(text);
+    if (slNo.entries.length > best.entries.length) {
+      best = {
+        formatId: "slno-particulars",
+        formatLabel: "Freedom India proforma (Sl No · Particulars · Rate · Amount)",
+        entries: slNo.entries,
+        reconciliation: slNo.reconciliation,
       };
     }
     const ziplineEntries = parseZiplineOrderForm(text);
