@@ -939,6 +939,11 @@
 
   function render() {
     applyCombinedStock(state.rows);
+    // Item photos (same ones as Master Inventory): loaded once, then the
+    // preview redraws with them.
+    if (!state.photos) {
+      loadItemPhotos().then((photos) => { state.photos = photos; if (state.rows && !state.done) render(); });
+    }
     const job = state.parsedJob;
     const t = tallyTotals();
     const u = unresolvedByStatus();
@@ -947,6 +952,7 @@
       if (r.editing) {
         const codeLabel = r.itemId ? `${esc(r.code)} — ${esc(r.description)}` : esc(r.code);
         return `<tr class="fp-editing">
+          <td></td>
           <td class="fp-code-picker">
             <input class="fp-inline-input" id="fpEditCodeSearch${i}" type="text" value="${codeLabel}"
               placeholder="Type to search Master Inventory" autocomplete="off">
@@ -975,7 +981,11 @@
       const variantNote = r.hasVariants
         ? `<div class="small muted">Code has multiple Master Inventory rows — the row with the best cost/length match was used.</div>`
         : "";
+      const photoCell = r.itemId
+        ? itemPhotoCell(state.photos, { item_code: r.code, description: r.description })
+        : `<td><span class="fp-photo-none" title="Not in Master Inventory"></span></td>`;
       return `<tr class="${rowClass}">
+        ${photoCell}
         <td class="code">${esc(r.code)}</td>
         <td>${esc(r.description)}
           ${r.pdfDetail ? `<div class="small muted">${esc(r.pdfDetail)}</div>` : ""}
@@ -1024,6 +1034,7 @@
       <div class="fp-scroll">
         <table class="fp-table fp-checkout-table">
           <thead><tr>
+            <th class="fp-photo-col"><span class="sr-only">Photo</span></th>
             <th>Code</th><th>Description</th>
             <th class="num">Required</th>
             <th class="num">Available</th>
@@ -1059,6 +1070,9 @@
 
     document.querySelectorAll("#fpOut .fp-row-actions button, #fpOut .fp-batch-actions button").forEach((b) => {
       b.addEventListener("click", () => applyRowAction(+b.dataset.i, b.dataset.act));
+    });
+    document.querySelectorAll("#fpOut [data-mi-photo]").forEach((b) => {
+      b.onclick = () => openItemPhoto(b.dataset.miPhoto, b.dataset.miPhotoCap);
     });
     state.rows.forEach((r, i) => { if (r.editing) wireCodePicker("fpEdit", state.itemsByCode, i); });
   }
