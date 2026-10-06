@@ -3491,8 +3491,8 @@
   const CURRENCY_BASIS_NOTE = {
     "dollar-australian-details": "Detected as AUD: prices are in \"$\" and the document carries Australian details (e.g. ABN, Pty Ltd, Australia).",
     "dollar-us-details": "Detected as USD: prices are in \"$\" and the document carries US details.",
-    "dollar-chosen": "Prices are in \"$\" — currency chosen on this screen.",
-    "dollar-default-aud": "Prices are in \"$\" with no country details on the document, so AUD was used automatically (Freedom Screens of Australia's \"$\" order forms carry the same prices as their AUD quotes). If this document is in US dollars, switch it to USD above and the rate updates.",
+    "dollar-chosen": "Prices are in \"$\" — currency changed on this screen; every price was converted to AED with the new rate.",
+    "dollar-default-aud": "Prices are in \"$\", so AUD was used automatically (Freedom Screens of Australia's \"$\" order forms carry the same prices as their AUD quotes) and every price was converted to AED. Nothing to do here.",
   };
 
   // Landed Cost: splits ciState.shippingAmountOriginal equally across every
@@ -4355,7 +4355,14 @@
     // Bare "$": which dollar is asked here (or shown, with how it was
     // detected, and changeable) -- never assumed silently.
     const dollarDoc = /^dollar-/.test(ciState.currencyBasis || "");
-    const dollarPicker = dollarDoc ? `<div>
+    // Already decided automatically: shown as plain text with a small
+    // "Change" link, so it doesn't look like a step staff must do.
+    const dollarFixed = dollarDoc && cur && !ciState.showDollarPicker;
+    const dollarPicker = dollarFixed ? `<div>
+            <label class="field-label">${ciState.currencyBasis === "dollar-chosen" ? "Currency (changed on this screen)" : "Currency (found automatically)"}</label>
+            <strong>${esc(cur)}</strong>
+            <button type="button" id="ciDollarChange" class="fp-currency-change">Change</button>
+          </div>` : dollarDoc ? `<div>
             <label class="field-label" for="ciDollarCurrency">Which dollar? (document shows "$" only)</label>
             <select id="ciDollarCurrency">
               ${cur ? "" : `<option value="" selected>Choose USD or AUD…</option>`}
@@ -4475,12 +4482,20 @@
       const search = panel.querySelector("[id^='ciManCodeSearch']");
       if (search) search.focus({ preventScroll: true });
     };
+    const dollarChange = document.getElementById("ciDollarChange");
+    if (dollarChange) dollarChange.onclick = () => {
+      ciState.showDollarPicker = true;
+      ciRender();
+      const sel = document.getElementById("ciDollarCurrency");
+      if (sel) sel.focus();
+    };
     const dollarSelect = document.getElementById("ciDollarCurrency");
     if (dollarSelect) {
       dollarSelect.addEventListener("change", async () => {
         if (!dollarSelect.value) return;
         ciState.currency = dollarSelect.value;
         ciState.currencyBasis = "dollar-chosen";
+        ciState.showDollarPicker = false;
         dollarSelect.disabled = true;
         await ciLoadExchangeRate($("#ciDocDate").value || null);
         ciStatus(ciState.exchangeRate
@@ -4908,7 +4923,7 @@
     ciState.deletedRows = [];
     ciState.done = false;
     ciManualItemsPromise = null; // next manual entry reloads current stock
-    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null;
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null; ciState.showDollarPicker = false;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
@@ -5059,7 +5074,7 @@
     ciState.pdfHash = null;
     ciState.header = {};
     ciState.itemsByCode = ciManualItemsByCode;
-    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a";
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a"; ciState.showDollarPicker = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
     ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
