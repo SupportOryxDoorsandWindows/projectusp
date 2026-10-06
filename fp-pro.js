@@ -1014,6 +1014,7 @@
       ${t.shortages} item${t.shortages === 1 ? "" : "s"} will go negative — allowed, and shown in red below.
       A future Check-in will correct it.</p>` : "";
 
+    const keptEdits = keepOpenEdits($("#fpOut"), state.rows);
     $("#fpOut").innerHTML = `
       <div class="fp-jobcard">
         <div class="fp-jobfield"><label>Job ref</label><strong>${esc(job.ref || "—")}</strong></div>
@@ -1084,6 +1085,7 @@
       const search = panel.querySelector("[id^='fpManCodeSearch']");
       if (search) search.focus({ preventScroll: true });
     };
+    restoreOpenEdits(keptEdits, state.rows);
     state.rows.forEach((r, i) => { if (r.editing) wireCodePicker("fpEdit", state.itemsByCode, i); });
   }
 
@@ -3967,6 +3969,32 @@
     window.addEventListener("resize", update);
   }
 
+  // Every Save/Cancel/Skip redraws the whole table, which used to throw
+  // away what was typed or picked in any OTHER row still open for editing.
+  // These keep those unsaved values: noted per row (not per position, so a
+  // deleted row can't shift them onto the wrong one) and put back after
+  // the redraw, before the pickers are wired.
+  function keepOpenEdits(container, rows) {
+    const kept = [];
+    if (!container || !rows) return kept;
+    container.querySelectorAll("tr.fp-editing input[id], tr.fp-editing select[id], tr.fp-editing textarea[id]").forEach((el) => {
+      const m = /^(.*?)(\d+)$/.exec(el.id);
+      if (!m || !rows[+m[2]]) return;
+      kept.push({ row: rows[+m[2]], base: m[1], value: el.value, checked: el.checked });
+    });
+    return kept;
+  }
+  function restoreOpenEdits(kept, rows) {
+    kept.forEach(({ row, base, value, checked }) => {
+      const i = rows.indexOf(row);
+      if (i < 0 || !(row.editing || row.creatingNew)) return;
+      const el = document.getElementById(base + i);
+      if (!el || !el.closest("tr.fp-editing")) return;
+      if (el.type === "checkbox" || el.type === "radio") el.checked = checked;
+      else el.value = value;
+    });
+  }
+
   function wireCodePicker(prefix, itemsByCode, i) {
     const searchEl = document.getElementById(`${prefix}CodeSearch${i}`);
     const valueEl = document.getElementById(`${prefix}CodeValue${i}`);
@@ -4434,6 +4462,7 @@
         <div class="fp-currency-note">${esc(shippingGuidance)}</div>
       </div>`;
 
+    const keptEdits = keepOpenEdits($("#ciOut"), ciState.rows);
     $("#ciOut").innerHTML = `
       ${currencyCard}
       ${shippingCard}
@@ -4481,6 +4510,7 @@
     document.querySelectorAll("#ciOut .fp-row-actions button, #ciOut .fp-batch-actions button, #ciOut .fp-code-review-flag").forEach((b) => {
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
+    restoreOpenEdits(keptEdits, ciState.rows);
     ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
     document.querySelectorAll("#ciOut [data-mi-photo]").forEach((b) => {
       b.onclick = () => openItemPhoto(b.dataset.miPhoto, b.dataset.miPhotoCap);
