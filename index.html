@@ -350,6 +350,23 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
   margin-bottom:var(--space-1);
 }
 .fp-jobrow-field input{width:100%}
+/* Required job details: a red star on the label, and a highlighted field
+   with a message when Confirm is clicked while it's still empty. */
+.fp-required{color:var(--danger); margin-left:2px}
+.fp-field-error{margin-top:var(--space-1); font-size:13px; color:var(--danger)}
+.fp-jobrow-field.fp-invalid input{
+  border-color:var(--danger); background:var(--danger-bg);
+  box-shadow:0 0 0 3px rgba(138,43,43,0.18);
+}
+.fp-jobrow-field.fp-invalid .field-label{color:var(--danger)}
+.fp-jobrow-field.fp-attention input{animation:fp-attention 0.9s ease-out 1}
+@keyframes fp-attention{
+  0%{box-shadow:0 0 0 0 rgba(138,43,43,0.45)}
+  100%{box-shadow:0 0 0 10px rgba(138,43,43,0)}
+}
+@media (prefers-reduced-motion: reduce){
+  .fp-jobrow-field.fp-attention input{animation:none}
+}
 .fp-actions{
   display:flex; align-items:center; gap:var(--space-3);
   margin-bottom:var(--space-5); flex-wrap:wrap;
@@ -964,12 +981,14 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
     <div class="fp-step-h">Step 2 — Job details</div>
     <div class="fp-jobrow">
       <div class="fp-jobrow-field">
-        <label class="field-label" for="fpJobNumber">Job number</label>
-        <input id="fpJobNumber" type="text" autocomplete="off" placeholder="Auto-filled from the PDF; you can edit it">
+        <label class="field-label" for="fpJobNumber">Job number<span class="fp-required" aria-hidden="true">*</span></label>
+        <input id="fpJobNumber" type="text" autocomplete="off" required aria-required="true" aria-describedby="fpJobNumberError" placeholder="Auto-filled from the PDF; you can edit it">
+        <div class="fp-field-error" id="fpJobNumberError" hidden>Enter the job number to confirm this Check-out.</div>
       </div>
       <div class="fp-jobrow-field">
-        <label class="field-label" for="fpClient">Client name</label>
-        <input id="fpClient" type="text" autocomplete="off" placeholder="e.g. AHMED KHAN">
+        <label class="field-label" for="fpClient">Client name<span class="fp-required" aria-hidden="true">*</span></label>
+        <input id="fpClient" type="text" autocomplete="off" required aria-required="true" aria-describedby="fpClientError" placeholder="e.g. AHMED KHAN">
+        <div class="fp-field-error" id="fpClientError" hidden>Enter the client name to confirm this Check-out.</div>
       </div>
     </div>
 

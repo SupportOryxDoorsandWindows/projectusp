@@ -1040,16 +1040,20 @@
       The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
     `;
 
+    // Job number and client name are required, but they don't disable the
+    // button: clicking Confirm with one empty takes the person to that field
+    // (see missingJobDetail), which is clearer than a button that just won't
+    // press.
     const canConfirm =
       !state.done && !state.confirming &&
       t.unresolved === 0 &&
       t.totalItems > 0 &&
-      !state.rows.some((r) => r.editing) &&
-      !!$("#fpJobNumber").value.trim() &&
-      !!$("#fpClient").value.trim();
+      !state.rows.some((r) => r.editing);
+    const missing = missingJobDetail();
     $("#fpConfirmSummary").textContent =
       `${t.totalItems} items · ${money(t.totalValue)}` +
-      (t.skipped ? ` · ${t.skipped} skipped` : "");
+      (t.skipped ? ` · ${t.skipped} skipped` : "") +
+      (missing ? ` · ${missing.label} needed` : "");
     $("#fpConfirmBar").hidden = state.done;
     $("#fpConfirm").disabled = !canConfirm;
 
@@ -1061,9 +1065,48 @@
 
   /* --------------------------- Confirm & apply --------------- */
 
+  // Required job details, in the order they appear on the page.
+  const REQUIRED_JOB_FIELDS = [
+    { id: "fpJobNumber", label: "job number" },
+    { id: "fpClient", label: "client name" },
+  ];
+
+  function missingJobDetail() {
+    return REQUIRED_JOB_FIELDS.find((f) => !$("#" + f.id).value.trim()) || null;
+  }
+
+  function setJobFieldInvalid(id, invalid) {
+    const input = $("#" + id);
+    const field = input.closest(".fp-jobrow-field");
+    field.classList.toggle("fp-invalid", invalid);
+    if (!invalid) field.classList.remove("fp-attention");
+    input.setAttribute("aria-invalid", invalid ? "true" : "false");
+    $("#" + id + "Error").hidden = !invalid;
+  }
+
+  // Marks every empty required field, then scrolls to the first one,
+  // highlights it and puts the cursor in it. Returns true when something
+  // was missing (so Confirm must stop).
+  function promptForMissingJobDetails() {
+    const empty = REQUIRED_JOB_FIELDS.filter((f) => !$("#" + f.id).value.trim());
+    REQUIRED_JOB_FIELDS.forEach((f) => setJobFieldInvalid(f.id, empty.includes(f)));
+    if (!empty.length) return false;
+    const first = $("#" + empty[0].id);
+    const field = first.closest(".fp-jobrow-field");
+    const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    field.classList.remove("fp-attention");
+    void field.offsetWidth; // restart the highlight animation on every click
+    field.classList.add("fp-attention");
+    field.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+    first.focus({ preventScroll: true });
+    status(`Enter the ${empty.map((f) => f.label).join(" and ")} before confirming.`, "err");
+    return true;
+  }
+
   async function confirmAllocation() {
     const jobRef = $("#fpJobNumber").value.trim();
     const client = $("#fpClient").value.trim();
+    if (!jobRef || !client) throw new Error("Enter the job number and client name before confirming.");
     const lines = state.rows
       .filter((r) => r.action === "deduct" && r.itemId)
       .map((r) => ({ item_id: r.itemId, quantity: r.requiredQty, unit: r.unit }));
@@ -1260,6 +1303,7 @@
     $("#fpPdfName").textContent = "Click or drop the PDF file here";
     $("#fpDrop").classList.remove("ready");
     $("#fpJobNumber").value = ""; $("#fpClient").value = "";
+    REQUIRED_JOB_FIELDS.forEach((f) => setJobFieldInvalid(f.id, false));
     $("#fpOut").innerHTML = "";
     $("#fpDone").innerHTML = "";
     $("#fpConfirmBar").hidden = true;
@@ -5539,6 +5583,8 @@
     $("#fpManualUse").addEventListener("click", fpManualUse);
     $("#fpConfirm").addEventListener("click", async () => {
       if (state.confirming || state.done) return;
+      if (promptForMissingJobDetails()) return;
+      status("");
       state.confirming = true;
       $("#fpConfirm").disabled = true;
       try { await confirmAllocation(); }
@@ -5546,7 +5592,11 @@
       finally { state.confirming = false; if (state.rows && !state.done) render(); }
     });
     ["fpJobNumber", "fpClient"].forEach((id) => {
-      $("#" + id).addEventListener("input", () => { if (state.rows && !state.done) render(); });
+      $("#" + id).addEventListener("input", () => {
+        // The highlight clears as soon as something is typed in.
+        if ($("#" + id).value.trim()) setJobFieldInvalid(id, false);
+        if (state.rows && !state.done) render();
+      });
     });
 
     const miNavBtn = document.querySelector('nav button[data-v="master-inventory"]');
