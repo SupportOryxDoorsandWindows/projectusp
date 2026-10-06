@@ -4196,7 +4196,7 @@
       return `<tr class="${rowClass}">
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
         <td><div class="fp-checkin-description-cell">${r.itemId
-          ? `<div class="fp-ci-item">${itemPhotoButton(ciState.photos, { item_code: r.code, description: r.description }, "fp-photo-sm")}<span>${esc(r.description)}</span></div>`
+          ? `<div class="fp-ci-item">${itemPhotoButton(ciState.photos, { item_code: r.code, description: r.description }, "fp-photo-sm")}<span>${esc(r.description)}${r.addedByHand ? `<span class="small muted" style="display:block">${esc(["Added by hand", r.handLengthMm ? `${Math.round(r.handLengthMm)} mm` : ""].filter(Boolean).join(" · "))}</span>` : ""}</span></div>`
           : `<span>${esc(r.description)}</span>`}${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
@@ -4379,6 +4379,7 @@
         </table>
       </div>
       ${ciState.rows.length ? "" : `<p class="small muted">Every line has been deleted from this Check-in — there is nothing left to add.</p>`}
+      ${ciState.done ? "" : `<div class="fp-actions" style="margin-top:var(--space-3)"><button class="ghost" type="button" id="ciAddMore">+ Add more items</button></div>`}
       ${deletedItemsBox(ciState.deletedRows, "Check-in", "not acknowledged and not added to the Master Inventory.",
         (row) => esc([fmt(row.qty), row.unit].filter(Boolean).join(" ")))}
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been added yet.
@@ -4398,6 +4399,15 @@
     document.querySelectorAll("#ciOut [data-mi-photo]").forEach((b) => {
       b.onclick = () => openItemPhoto(b.dataset.miPhoto, b.dataset.miPhotoCap);
     });
+    const ciAddMore = document.getElementById("ciAddMore");
+    if (ciAddMore) ciAddMore.onclick = async () => {
+      // Opens the hand-entry table (above the list) and takes the person there.
+      const panel = $("#ciManualPanel");
+      if (panel.hidden) await ciManualToggle(); else ciManualUpdateHint();
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
+      const search = panel.querySelector("[id^='ciManCodeSearch']");
+      if (search) search.focus({ preventScroll: true });
+    };
     const dollarSelect = document.getElementById("ciDollarCurrency");
     if (dollarSelect) {
       dollarSelect.addEventListener("change", async () => {
@@ -4889,9 +4899,28 @@
     return ciManualItemsPromise;
   }
 
+  // Hand-entered costs are in the currency of the Check-in they join: AED
+  // for a new hand-entry Check-in, or the invoice's own currency when they're
+  // added to an invoice being reviewed -- so they're converted at the same
+  // rate as the invoice's other lines, never twice.
+  function ciManualCurrency() {
+    return ciState.rows && !ciState.done ? (ciState.currency || "AED") : "AED";
+  }
+
+  function ciManualUpdateHint() {
+    const existing = ciState.rows && !ciState.done ? ciState.rows.length : 0;
+    const cur = ciManualCurrency();
+    $("#ciManualHint").innerHTML = existing
+      ? `Pick each item, type how many arrived and the unit cost in <b>${esc(cur)}</b>. They're <b>added</b> to the ${existing} line${existing === 1 ? "" : "s"} already in this Check-in.`
+      : "Pick each item, type how many arrived and the unit cost in AED, then press <b>Add to Check-in</b>.";
+    $("#ciManCostHead").textContent = `Unit cost (${cur})`;
+    document.querySelectorAll("#ciManualBody [id^='ciManCost']").forEach((el) => { el.placeholder = cur; });
+  }
+
   async function ciManualAddRow() {
     const i = ciManualRowCount++;
     $("#ciManualBody").insertAdjacentHTML("beforeend", ciManualRowHtml(i));
+    $(`#ciManCost${i}`).placeholder = ciManualCurrency();
     $(`[data-man-remove="${i}"]`).addEventListener("click", () => {
       const row = document.querySelector(`[data-man-row="${i}"]`);
       if (row) row.remove();
@@ -4907,6 +4936,7 @@
   async function ciManualToggle() {
     const panel = $("#ciManualPanel");
     panel.hidden = !panel.hidden;
+    ciManualUpdateHint();
     if (!panel.hidden && !ciManualRowCount) {
       $("#ciManualStatus").textContent = "Loading Master Inventory…";
       await ciManualAddRow();
@@ -4934,6 +4964,7 @@
       if (unitCost !== null && !(unitCost >= 0)) { $("#ciManualStatus").textContent = "Unit cost can't be negative — leave it blank to use the Master Inventory cost."; return; }
       rows.push({
         code: item.item_code, description: item.description, unit: item.unit_of_measure || "", qty,
+        addedByHand: true, handLengthMm: item.bar_length_mm || null,
         invoiceUnitCost: unitCost,
         current: item.current_qty, newQty: item.current_qty + qty,
         status: "ok", action: "add", decided: true,
@@ -4942,6 +4973,21 @@
       });
     }
     $("#ciManualStatus").textContent = "";
+    // Clear the hand-entry table for the next lot.
+    $("#ciManualBody").innerHTML = "";
+    ciManualRowCount = 0;
+    $("#ciManualPanel").hidden = true;
+    const added = `${rows.length} item${rows.length === 1 ? "" : "s"}`;
+    if (ciState.rows && !ciState.done) {
+      // A Check-in is already being reviewed (an invoice or earlier hand
+      // entry): add to it. The document, its currency and rate, shipping and
+      // any warnings stay exactly as they were.
+      ciState.rows.push(...rows);
+      ciRender();
+      ciStatus(`Added ${added} by hand. The Check-in now has ${ciState.rows.length} lines.`);
+      $("#ciOut").scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     ciState.pdfFile = null;
     ciState.pdfHash = null;
     ciState.header = {};
@@ -4955,8 +5001,8 @@
     ciState.rows = rows;
     ciState.deletedRows = [];
     ciRender();
-    const t = ciTally();
-    ciStatus(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
+    ciStatus(`${added} added by hand, ready for review.`);
+    $("#ciOut").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function ciStatus(text, kind) {

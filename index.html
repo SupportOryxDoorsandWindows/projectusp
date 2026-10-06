@@ -321,7 +321,7 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
 .fp-drop-alt .fp-drop-icon{background:var(--accent); color:var(--brand); font-size:22px}
 /* The hand-entry card explains itself in two short lines, so let it wrap
    instead of cutting off like a file name. */
-#fpManualToggle .fp-drop-sub{white-space:normal; overflow:visible; text-overflow:clip}
+#fpManualToggle .fp-drop-sub,#ciManualToggle .fp-drop-sub{white-space:normal; overflow:visible; text-overflow:clip}
 .fp-drop-alt:hover{border-color:var(--accent-hover); background:var(--white)}
 .fp-drop-icon{
   font-family:var(--font-display); font-weight:700; font-size:12px;
@@ -1029,7 +1029,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
     stock and logs a Check-in transaction. Items that can't be matched are never guessed;
     they're flagged for you to review.</p>
 
-    <div class="fp-step-h">Step 1 — Upload the document, or add items without one</div>
+    <div class="fp-step-h">Step 1 — Upload the document, or add items by hand</div>
     <div class="fp-drops">
       <label class="fp-drop" id="ciDrop" for="ciPdf">
         <input type="file" id="ciPdf" accept="application/pdf,.pdf" class="visually-hidden">
@@ -1040,21 +1040,22 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         </div>
       </label>
       <button type="button" class="fp-drop fp-drop-alt" id="ciManualToggle">
-        <div class="fp-drop-icon">OR</div>
+        <div class="fp-drop-icon" aria-hidden="true">+</div>
         <div class="fp-drop-main">
-          <div class="fp-drop-title">No file? Add items without one</div>
-          <div class="fp-drop-sub">Search Master Inventory, enter quantity and cost by hand</div>
+          <div class="fp-drop-title">Add items by hand</div>
+          <div class="fp-drop-sub">Search the Master Inventory and type the quantity and cost. Works with or without a PDF.</div>
         </div>
       </button>
     </div>
     <div id="ciManualPanel" hidden>
+      <p class="small muted" id="ciManualHint">Pick each item, type how many arrived and the unit cost in AED, then press <b>Add to Check-in</b>.</p>
       <table class="fp-table" id="ciManualTable">
-        <thead><tr><th>Item</th><th class="num">Quantity</th><th class="num">Unit cost</th><th></th></tr></thead>
+        <thead><tr><th>Item</th><th class="num">Quantity</th><th class="num" id="ciManCostHead">Unit cost (AED)</th><th></th></tr></thead>
         <tbody id="ciManualBody"></tbody>
       </table>
       <div class="fp-actions">
         <button class="ghost" type="button" id="ciManualAddRow">+ Add another item</button>
-        <button class="btn-primary" type="button" id="ciManualUse">Use these items</button>
+        <button class="btn-primary" type="button" id="ciManualUse">Add to Check-in</button>
         <span class="small muted" id="ciManualStatus"></span>
       </div>
     </div>
