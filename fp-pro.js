@@ -392,6 +392,29 @@
   // "ZLS Brake Spring" is a stock decision, so a series-tolerant match is
   // only offered to the person doing the Check-in as a one-click
   // suggestion. Only consulted once the strict match has found nothing.
+  // Master Inventory sometimes keeps two supplier parts as ONE item and
+  // writes the second code into the name, e.g. 230031 "SMB1 Slide Bolt
+  // BLK-230033-SMB1 Slide Lock BLK". An invoice line coded 230033 then has
+  // no Master row of its own; this offers that combined item as a
+  // "Possible match" (never auto-applied -- whether the lock is counted
+  // separately from the bolt is the stock team's call). One item only.
+  function findEmbeddedCodeSuggestion(itemsByCode, code) {
+    const c = String(code || "").trim();
+    if (!/^[A-Za-z0-9]{5,}$/.test(c)) return null;
+    const re = new RegExp(`(^|[^A-Za-z0-9])${c}([^A-Za-z0-9]|$)`, "i");
+    const hits = new Map();
+    for (const list of itemsByCode.values()) {
+      for (const it of list) {
+        if (String(it.item_code || "").toUpperCase() !== c.toUpperCase() && re.test(it.description || "")) hits.set(it.item_code, it);
+      }
+    }
+    if (hits.size !== 1) return null;
+    const item = [...hits.values()][0];
+    // A code with one row per bar length can't be resolved from the name.
+    if ((itemsByCode.get(item.item_code) || []).length > 1) return null;
+    return { item, note: `Master Inventory lists code ${c} inside this item's name — the two parts are kept as one item there. Check before using it.` };
+  }
+
   function findSeriesSuggestion(itemsByCode, description) {
     if (!description) return null;
     const item = findUniqueDescriptionItem(itemsByCode, description, true);
@@ -3233,7 +3256,9 @@
       if (!item) {
         // Only for a plain "not found" -- a code/description conflict
         // already has its own, more specific note.
-        const suggestion = !codeDescConflict ? findSeriesSuggestion(itemsByCode, pdfDescription) : null;
+        const suggestion = !codeDescConflict
+          ? (findEmbeddedCodeSuggestion(itemsByCode, l.code) || findSeriesSuggestion(itemsByCode, pdfDescription))
+          : null;
         rows.push({
           code: l.code, description: pdfDescription, unit: l.unit || "", qty: l.qty,
           invoiceUnitCost: l.unitCost,
