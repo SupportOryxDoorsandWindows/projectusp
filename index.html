@@ -318,7 +318,10 @@ tbody tr:hover{background:var(--line-soft)}
    "or" option (§2's gold accent = an alternative/AI-adjacent action, same as
    btn-accent) -- never a small afterthought link a user could miss. */
 button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appearance:none}
-.fp-drop-alt .fp-drop-icon{background:var(--accent); color:var(--brand)}
+.fp-drop-alt .fp-drop-icon{background:var(--accent); color:var(--brand); font-size:22px}
+/* The hand-entry card explains itself in two short lines, so let it wrap
+   instead of cutting off like a file name. */
+#fpManualToggle .fp-drop-sub{white-space:normal; overflow:visible; text-overflow:clip}
 .fp-drop-alt:hover{border-color:var(--accent-hover); background:var(--white)}
 .fp-drop-icon{
   font-family:var(--font-display); font-weight:700; font-size:12px;
@@ -952,7 +955,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
     stock and logs a Check-out transaction. There's no stock file to upload or download
     anymore: the Master Inventory lives in the system and stays up to date automatically.</p>
 
-    <div class="fp-step-h">Step 1 — Upload the PDF, or add items without one</div>
+    <div class="fp-step-h">Step 1 — Upload the PDF, or add items by hand</div>
     <div class="fp-drops">
       <label class="fp-drop" id="fpDrop" for="fpPdf">
         <input type="file" id="fpPdf" accept="application/pdf,.pdf" class="visually-hidden">
@@ -963,21 +966,22 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         </div>
       </label>
       <button type="button" class="fp-drop fp-drop-alt" id="fpManualToggle">
-        <div class="fp-drop-icon">OR</div>
+        <div class="fp-drop-icon" aria-hidden="true">+</div>
         <div class="fp-drop-main">
-          <div class="fp-drop-title">No file? Add items without one</div>
-          <div class="fp-drop-sub">Search Master Inventory and enter quantities by hand</div>
+          <div class="fp-drop-title">Add items by hand</div>
+          <div class="fp-drop-sub">Search the Master Inventory and type the quantity. Works with or without a PDF.</div>
         </div>
       </button>
     </div>
     <div id="fpManualPanel" hidden>
+      <p class="small muted" id="fpManualHint">Pick each item and type how many to take out, then press <b>Add to Check-out</b>.</p>
       <table class="fp-table" id="fpManualTable">
         <thead><tr><th>Item</th><th class="num">Quantity</th><th></th></tr></thead>
         <tbody id="fpManualBody"></tbody>
       </table>
       <div class="fp-actions">
         <button class="ghost" type="button" id="fpManualAddRow">+ Add another item</button>
-        <button class="btn-primary" type="button" id="fpManualUse">Use these items</button>
+        <button class="btn-primary" type="button" id="fpManualUse">Add to Check-out</button>
         <span class="small muted" id="fpManualStatus"></span>
       </div>
     </div>
