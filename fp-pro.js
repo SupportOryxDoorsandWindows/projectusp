@@ -3376,7 +3376,20 @@
     return rows;
   }
 
+  // The invoice's own quantity for a row: the roll count for a row already
+  // converted to metres ("2 rolls" -> 250 m), else its quantity. Edit and
+  // "Use this item" always start from this, so converting again can never
+  // treat 250 m as 250 rolls.
+  function ciInvoiceQty(row) {
+    return row.packageInfo && row.packageInfo.rollCount != null ? row.packageInfo.rollCount : row.qty;
+  }
+
   function recomputeCiRowAfterEdit(row, newCode, newDescription, newQty, newUnit, exactItemId) {
+    // A row already converted to metres carries a per-metre cost; go back to
+    // the invoice's own per-roll price before working anything out again.
+    if (row.packageInfo && row.packageInfo.rollCount != null && row.packageInfo.rollUnitCost !== undefined) {
+      row.invoiceUnitCost = row.packageInfo.rollUnitCost;
+    }
     // The typed qty is still the invoice's own number (e.g. "1" roll) --
     // captured before row.qty is overwritten below, so the roll/bundle
     // check further down still has the pre-edit invoice quantity to expand,
@@ -3422,7 +3435,8 @@
       const qtyMetres = Math.round(rollCount * perRollM * 100) / 100;
       const rollUnitCost = row.invoiceUnitCost; // original per-roll price, before conversion
       const perMetreCost = rollUnitCost != null ? rollUnitCost / perRollM : null;
-      const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${newDescription || ""} ${newUnit || ""}`) ? "Roll" : "Length";
+      // The supplier's own wording counts ("Paw Lite Mesh 3m wide roll").
+      const bundleType = /roll|coil|reel/i.test(`${item.description || ""} ${invoiceText}`) ? "Roll" : "Length";
       row.qty = qtyMetres;
       row.invoiceUnitCost = perMetreCost;
       row.current = item.current_qty;
@@ -3751,7 +3765,7 @@
       const suggested = r.suggestedItem;
       if (!suggested) return;
       r.suggestedItem = null;
-      recomputeCiRowAfterEdit(r, suggested.code, r.description, r.qty, r.unit, suggested.id);
+      recomputeCiRowAfterEdit(r, suggested.code, r.description, ciInvoiceQty(r), r.unit, suggested.id);
       r.personResolved = r.status === "ok";
     }
     else if (act === "edit") { r.editing = true; }
@@ -4113,7 +4127,7 @@
           <td><input class="fp-inline-input" id="ciEditDesc${i}" type="text" value="${esc(r.description)}" readonly></td>
           <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
           <td class="num">
-            <input class="fp-inline-input fp-inline-input-num" id="ciEditQty${i}" type="number" step="any" min="0" value="${r.qty}">
+            <input class="fp-inline-input fp-inline-input-num" id="ciEditQty${i}" type="number" step="any" min="0" value="${ciInvoiceQty(r)}"${r.packageInfo && r.packageInfo.rollCount != null ? ` title="Quantity as on the invoice (${esc(r.packageInfo.type.toLowerCase())}s), not metres"` : ""}>
             <input class="fp-inline-input fp-inline-input-unit" id="ciEditUnit${i}" type="text" value="${esc(r.unit)}">
           </td>
           <td class="num">—</td>
