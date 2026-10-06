@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__manTest = { codePickerOptions, pickedInventoryRow, applyCombinedStock };\n})();`
+  `\nwindow.__manTest = { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { codePickerOptions, pickedInventoryRow, applyCombinedStock } = context.window.__manTest;
+const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches } = context.window.__manTest;
 
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -95,5 +95,18 @@ assert.deepStrictEqual(plain(rows.map((r) => [r.status, r.remaining])), [["ok", 
 const unmatched = { itemId: null, available: null, requiredQty: 3, status: "unmatched", baseStatus: "unmatched", action: "pending" };
 applyCombinedStock([unmatched]);
 assert.strictEqual(unmatched.status, "unmatched");
+
+// Picker ranking: codes starting with the query first, then codes
+// containing it, then description matches.
+const pickerOpts = [
+  { code: "230001", searchText: "SMB1 End Cap 60 A MILL" },
+  { code: "30001R", searchText: "Bug Fur 12mm (125m)" },
+  { code: "30003R", searchText: "Bug Fur 16mm (300m Roll)" },
+  { code: "910010", searchText: "Patio Mesh 3000 wide" },
+  { code: "133001", searchText: "Cap Spindle" },
+];
+assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "3000").map((o) => o.code)), ["30001R", "30003R", "230001", "910010"]);
+assert.strictEqual(rankPickerMatches(pickerOpts, "").length, 5, "empty query lists everything");
+assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "spindle").map((o) => o.code)), ["133001"]);
 
 console.log("manual-entry tests passed");
