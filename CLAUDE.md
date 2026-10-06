@@ -35,6 +35,9 @@ product lines — never treat one family's item as a match for another's:
 - Roll conversion uses the invoice's OWN stated roll length when it has one
   (`invoiceRollLengthM`, also read from `row.source` on Edit): 8 × "25mtrs
   roll" = 200 m, never 8 × Master's 200 m roll. Master counts these in metres.
+  Edit and "Use this item" start from the invoice's own roll count and
+  per-roll price (`ciInvoiceQty`, `packageInfo.rollUnitCost`), so editing a
+  converted row never converts it twice (250 m must not become 250 rolls).
 - ZLS1 profiles have one Master row per bar length (2500 / 2900 / 5100 mm)
   under the same code, so anything that resolves a Check-in row must pick the
   exact length row by id, not just the code. The manual-entry and Edit
