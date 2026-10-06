@@ -38,6 +38,12 @@ product lines — never treat one family's item as a match for another's:
   Edit and "Use this item" start from the invoice's own roll count and
   per-roll price (`ciInvoiceQty`, `packageInfo.rollUnitCost`), so editing a
   converted row never converts it twice (250 m must not become 250 rolls).
+- Master sometimes keeps two supplier parts as one item, with the second
+  code inside the name: 230031 "SMB1 Slide Bolt BLK-230033-SMB1 Slide Lock
+  BLK", 230032 "…WHT-230034-…". An invoice line coded 230033/230034 is only
+  offered that item as a "Possible match" (`findEmbeddedCodeSuggestion`),
+  never auto-matched: whether a lock line adds to the bolt's count is the
+  stock team's call.
 - ZLS1 profiles have one Master row per bar length (2500 / 2900 / 5100 mm)
   under the same code, so anything that resolves a Check-in row must pick the
   exact length row by id, not just the code. The manual-entry and Edit

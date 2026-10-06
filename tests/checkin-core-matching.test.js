@@ -310,4 +310,20 @@ assert.equal(sug("ZLS1-Brake Rod-01 2m length"), null);                         
 assert.equal(sug("ZLS Handle Mount 01"), null);                                       // Mount vs Bush
 assert.equal(sug("SMB1 Magnet (25m roll)"), null);                                    // other family
 
+// A second code written inside a Master name ("…BLK-230033-SMB1 Slide Lock
+// BLK") is offered as a Possible match for an invoice line coded 230033 --
+// never auto-matched -- and only when exactly one item carries it.
+const kitItems = [
+  { id: "bolt-blk", item_code: "230031", description: "SMB1 Slide Bolt BLK-230033-SMB1 Slide Lock BLK", current_qty: 316, unit_of_measure: "pcs", unit_cost: 8.8 },
+  { id: "bolt-wht", item_code: "230032", description: "SMB1 Slide Bolt WHT-230034-SMB1 Slide Lock WHT", current_qty: 214, unit_of_measure: "pcs", unit_cost: 8.7 },
+];
+const kitRow = (code, description) => buildCheckinRows([{ code, description, unit: "pcs", qty: 200, unitCost: 0.58 }], [], itemsMap(kitItems))[0];
+const lockBlk = kitRow("230033", "SMB1 Slide Lock BLK");
+assert.equal(lockBlk.status, "unmatched");
+assert.equal(lockBlk.suggestedItem.code, "230031");
+assert.match(lockBlk.suggestedItem.note, /230033/);
+assert.equal(kitRow("230034", "SMB1 Slide Lock WHT").suggestedItem.code, "230032");
+assert.equal(kitRow("23003", "Something").suggestedItem, null);          // part of a code is not a code
+assert.equal(kitRow("230032", "SMB1 Slide Bolt WHT").itemId, "bolt-wht"); // own code still matches exactly
+
 console.log("check-in core-matching tests passed");
