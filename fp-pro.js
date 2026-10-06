@@ -4355,14 +4355,7 @@
     // Bare "$": which dollar is asked here (or shown, with how it was
     // detected, and changeable) -- never assumed silently.
     const dollarDoc = /^dollar-/.test(ciState.currencyBasis || "");
-    // Already decided automatically: shown as plain text with a small
-    // "Change" link, so it doesn't look like a step staff must do.
-    const dollarFixed = dollarDoc && cur && !ciState.showDollarPicker;
-    const dollarPicker = dollarFixed ? `<div>
-            <label class="field-label">${ciState.currencyBasis === "dollar-chosen" ? "Currency (changed on this screen)" : "Currency (found automatically)"}</label>
-            <strong>${esc(cur)}</strong>
-            <button type="button" id="ciDollarChange" class="fp-currency-change">Change</button>
-          </div>` : dollarDoc ? `<div>
+    const dollarPicker = dollarDoc ? `<div>
             <label class="field-label" for="ciDollarCurrency">Which dollar? (document shows "$" only)</label>
             <select id="ciDollarCurrency">
               ${cur ? "" : `<option value="" selected>Choose USD or AUD…</option>`}
@@ -4370,7 +4363,25 @@
               <option value="AUD" ${cur === "AUD" ? "selected" : ""}>AUD — Australian dollar</option>
             </select>
           </div>` : "";
-    const currencyCard = !cur
+    // Normally nothing to do: one short line (currency, rate, total) with a
+    // "Change" link that opens the full card. The full card shows by itself
+    // only when a rate is missing and has to be typed in.
+    const rateMissing = ciState.rateSource === "unavailable" || rate == null;
+    const rateOld = ciState.rateSource === "cache-fallback" || ciState.rateSource === "api-latest-fallback";
+    const prettyRateDate = (() => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ciState.rateDate || "");
+      if (!m) return "";
+      const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m[2] - 1];
+      return ` <span class="fp-currency-muted">(rate of ${+m[3]} ${mon} ${m[1]})</span>`;
+    })();
+    const compactCurrency = cur && cur !== "AED" && !rateMissing && !ciState.showCurrencyEdit;
+    const currencyCard = compactCurrency
+      ? `<div class="fp-currency-card fp-currency-compact">
+          <span>Prices in <b>${esc(cur)}</b>, converted to AED automatically at <b>1 ${esc(cur)} = ${esc(String(rate))} AED</b>${prettyRateDate}</span>
+          <button type="button" id="ciCurrencyChange" class="fp-currency-change">Change</button>
+          ${rateOld ? `<div class="fp-currency-note">Today's rate couldn't be fetched, so an older one is used — check it if the amount matters.</div>` : ""}
+        </div>`
+      : !cur
       ? `<div class="fp-currency-card">
           ${dollarPicker}
           <div class="fp-currency-note" style="color:var(--danger)">This document shows prices as "$" without saying which dollar, and nothing else on it
@@ -4387,6 +4398,7 @@
             <input id="ciRateInput" type="number" step="any" min="0" value="${rate != null ? rate : ""}" placeholder="e.g. 2.45">
           </div>
           <div><label class="field-label">AED amount</label><strong>${t.totalValueAed != null ? money(t.totalValueAed) : "—"}</strong></div>
+          ${rateMissing ? "" : `<button type="button" id="ciCurrencyDone" class="ghost">Done</button>`}
           <div class="fp-currency-note">${
             ciState.rateSource === "unavailable"
               ? `Could not retrieve an exchange rate for ${esc(cur)} from the currency API, and none is on file — flagged for review. Enter the current rate to continue.`
@@ -4482,12 +4494,17 @@
       const search = panel.querySelector("[id^='ciManCodeSearch']");
       if (search) search.focus({ preventScroll: true });
     };
-    const dollarChange = document.getElementById("ciDollarChange");
-    if (dollarChange) dollarChange.onclick = () => {
-      ciState.showDollarPicker = true;
+    const currencyChange = document.getElementById("ciCurrencyChange");
+    if (currencyChange) currencyChange.onclick = () => {
+      ciState.showCurrencyEdit = true;
       ciRender();
-      const sel = document.getElementById("ciDollarCurrency");
-      if (sel) sel.focus();
+      const first = document.getElementById("ciDollarCurrency") || document.getElementById("ciRateInput");
+      if (first) first.focus();
+    };
+    const currencyDone = document.getElementById("ciCurrencyDone");
+    if (currencyDone) currencyDone.onclick = () => {
+      ciState.showCurrencyEdit = false;
+      ciRender();
     };
     const dollarSelect = document.getElementById("ciDollarCurrency");
     if (dollarSelect) {
@@ -4495,7 +4512,7 @@
         if (!dollarSelect.value) return;
         ciState.currency = dollarSelect.value;
         ciState.currencyBasis = "dollar-chosen";
-        ciState.showDollarPicker = false;
+        ciState.showCurrencyEdit = false;
         dollarSelect.disabled = true;
         await ciLoadExchangeRate($("#ciDocDate").value || null);
         ciStatus(ciState.exchangeRate
@@ -4923,7 +4940,7 @@
     ciState.deletedRows = [];
     ciState.done = false;
     ciManualItemsPromise = null; // next manual entry reloads current stock
-    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null; ciState.showDollarPicker = false;
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.ratesByCurrency = null; ciState.showCurrencyEdit = false;
     ciState.rateDate = null; ciState.rateSource = "n/a";
     ciState.missingLnNumbers = []; ciState.missingLnAcknowledged = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
@@ -5074,7 +5091,7 @@
     ciState.pdfHash = null;
     ciState.header = {};
     ciState.itemsByCode = ciManualItemsByCode;
-    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a"; ciState.showDollarPicker = false;
+    ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a"; ciState.showCurrencyEdit = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
     ciState.lowConfidenceFallback = false; ciState.lowConfidenceAcknowledged = false;
