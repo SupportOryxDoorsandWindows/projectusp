@@ -1046,6 +1046,7 @@
         </table>
       </div>
       ${state.rows.length ? "" : `<p class="small muted">Every item has been deleted from this Check-out — there is nothing left to deduct.</p>`}
+      ${state.done ? "" : `<div class="fp-actions" style="margin-top:var(--space-3)"><button class="ghost" type="button" id="fpAddMore">+ Add more items</button></div>`}
       ${removedNote}
       <p class="small muted" style="margin-top:var(--space-3)">Nothing has been deducted yet.
       The confirm button unlocks once every unmatched row has been edited or acknowledged.</p>
@@ -1074,6 +1075,15 @@
     document.querySelectorAll("#fpOut [data-mi-photo]").forEach((b) => {
       b.onclick = () => openItemPhoto(b.dataset.miPhoto, b.dataset.miPhotoCap);
     });
+    const addMore = document.getElementById("fpAddMore");
+    if (addMore) addMore.onclick = async () => {
+      // Opens the hand-entry table (above the list) and takes the person there.
+      const panel = $("#fpManualPanel");
+      if (panel.hidden) await fpManualToggle(); else fpManualUpdateHint();
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
+      const search = panel.querySelector("[id^='fpManCodeSearch']");
+      if (search) search.focus({ preventScroll: true });
+    };
     state.rows.forEach((r, i) => { if (r.editing) wireCodePicker("fpEdit", state.itemsByCode, i); });
   }
 
@@ -1257,9 +1267,19 @@
     }
   }
 
+  // The hint above the hand-entry table says whether the items start a new
+  // Check-out or join the list that's already being reviewed.
+  function fpManualUpdateHint() {
+    const existing = state.rows && !state.done ? state.rows.length : 0;
+    $("#fpManualHint").innerHTML = existing
+      ? `Pick each item and type how many to take out. They're <b>added</b> to the ${existing} item${existing === 1 ? "" : "s"} already in this Check-out.`
+      : "Pick each item and type how many to take out, then press <b>Add to Check-out</b>.";
+  }
+
   async function fpManualToggle() {
     const panel = $("#fpManualPanel");
     panel.hidden = !panel.hidden;
+    fpManualUpdateHint();
     if (!panel.hidden && !fpManualRowCount) {
       $("#fpManualStatus").textContent = "Loading Master Inventory…";
       await fpManualAddRow();
@@ -1282,7 +1302,8 @@
       const remaining = item.current_qty - qty;
       rows.push({
         kind: "fitting", code: item.item_code, barLenMm: null,
-        description: item.description, pdfDetail: "",
+        description: item.description,
+        pdfDetail: ["Added by hand", item.bar_length_mm ? `${Math.round(item.bar_length_mm)} mm` : ""].filter(Boolean).join(" · "),
         requiredQty: qty, unit: item.unit_of_measure || "",
         available: item.current_qty, remaining,
         costPerUnit: item.unit_cost || 0,
@@ -1293,16 +1314,29 @@
       });
     }
     $("#fpManualStatus").textContent = "";
-    state.pdfFile = null;
-    state.pdfHash = null;
-    state.parsedJob = { ref: "", user: "", description: "", printedAt: "" };
-    state.itemsByCode = fpManualItemsByCode;
-    state.done = false;
-    state.rows = rows;
-    state.removedRows = [];
-    render();
-    const t = tallyTotals();
-    status(`${t.totalItems} manually entered item${t.totalItems === 1 ? "" : "s"} ready for review.`);
+    // Clear the hand-entry table for the next lot.
+    $("#fpManualBody").innerHTML = "";
+    fpManualRowCount = 0;
+    $("#fpManualPanel").hidden = true;
+    const added = `${rows.length} item${rows.length === 1 ? "" : "s"}`;
+    if (state.rows && !state.done) {
+      // A Check-out is already being reviewed (from a PDF or earlier hand
+      // entry): add to it. The PDF, its fingerprint and job details stay.
+      state.rows.push(...rows);
+      render();
+      status(`Added ${added} by hand. The Check-out now has ${state.rows.length} lines.`);
+    } else {
+      state.pdfFile = null;
+      state.pdfHash = null;
+      state.parsedJob = { ref: "", user: "", description: "", printedAt: "" };
+      state.itemsByCode = fpManualItemsByCode;
+      state.done = false;
+      state.rows = rows;
+      state.removedRows = [];
+      render();
+      status(`${added} added by hand, ready for review.`);
+    }
+    $("#fpOut").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   /* --------------------------- Reset / status ---------------- */
