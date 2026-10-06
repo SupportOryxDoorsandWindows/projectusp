@@ -3935,6 +3935,11 @@
   }
 
   function ciRender() {
+    // Item photos (same ones as Master Inventory): loaded once, then the
+    // preview redraws with them.
+    if (!ciState.photos) {
+      loadItemPhotos().then((photos) => { ciState.photos = photos; if (ciState.rows && !ciState.done) ciRender(); });
+    }
     const t = ciTally();
     const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
@@ -4085,7 +4090,7 @@
       // applied, until the person clicks "Use this item".
       const suggestionNote = r.status === "unmatched" && !r.decided && r.suggestedItem ? `<div class="fp-exactdiff">
           <div class="fp-exactdiff-h">Possible match in Master Inventory</div>
-          <div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}${r.suggestedItem.barLengthMm != null ? ` <span class="small muted">(${esc(r.suggestedItem.barLengthMm)} mm)</span>` : ""}</div>
+          <div class="fp-ci-item">${itemPhotoButton(ciState.photos, { item_code: r.suggestedItem.code, description: r.suggestedItem.description }, "fp-photo-sm")}<div><span class="code">${esc(r.suggestedItem.code)}</span> — ${esc(r.suggestedItem.description)}${r.suggestedItem.barLengthMm != null ? ` <span class="small muted">(${esc(r.suggestedItem.barLengthMm)} mm)</span>` : ""}</div></div>
           <div class="small muted">${esc(r.suggestedItem.note || "")} Not added unless you confirm.</div>
           <div class="fp-row-actions"><button data-act="use-suggestion" data-i="${i}" class="on">Use this item</button></div>
         </div>` : "";
@@ -4156,7 +4161,9 @@
         : genericMoney(landedUnitCost, curLabel);
       return `<tr class="${rowClass}">
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
-        <td><div class="fp-checkin-description-cell"><span>${esc(r.description)}</span>${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
+        <td><div class="fp-checkin-description-cell">${r.itemId
+          ? `<div class="fp-ci-item">${itemPhotoButton(ciState.photos, { item_code: r.code, description: r.description }, "fp-photo-sm")}<span>${esc(r.description)}</span></div>`
+          : `<span>${esc(r.description)}</span>`}${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
@@ -4354,6 +4361,9 @@
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
     ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
+    document.querySelectorAll("#ciOut [data-mi-photo]").forEach((b) => {
+      b.onclick = () => openItemPhoto(b.dataset.miPhoto, b.dataset.miPhotoCap);
+    });
     const dollarSelect = document.getElementById("ciDollarCurrency");
     if (dollarSelect) {
       dollarSelect.addEventListener("change", async () => {
@@ -5012,12 +5022,18 @@
     return itemPhotosPromise;
   }
 
-  function itemPhotoCell(photos, it) {
+  // The photo thumbnail itself (a button that opens the viewer), or an
+  // empty box when the code has no photo yet. `extraClass` sizes it.
+  function itemPhotoButton(photos, it, extraClass = "") {
     const src = photos && photos.get(String(it.item_code).toUpperCase());
-    if (!src) return `<td><span class="fp-photo-none" title="No photo yet"></span></td>`;
+    if (!src) return `<span class="fp-photo-none ${extraClass}" title="No photo yet"></span>`;
     const label = `${it.item_code} — ${it.description || ""}`;
-    return `<td><button class="fp-photo-btn" type="button" data-mi-photo="${esc(src)}" data-mi-photo-cap="${esc(label)}" aria-label="View photo of ${esc(label)}">
-      <img src="${esc(src)}" alt="" loading="lazy"></button></td>`;
+    return `<button class="fp-photo-btn ${extraClass}" type="button" data-mi-photo="${esc(src)}" data-mi-photo-cap="${esc(label)}" aria-label="View photo of ${esc(label)}">
+      <img src="${esc(src)}" alt="" loading="lazy"></button>`;
+  }
+
+  function itemPhotoCell(photos, it) {
+    return `<td>${itemPhotoButton(photos, it)}</td>`;
   }
 
   function openItemPhoto(src, caption) {
