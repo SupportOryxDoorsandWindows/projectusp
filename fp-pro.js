@@ -3900,6 +3900,59 @@
     return (itemId && candidates.find((c) => c.id === itemId)) || pickInventoryRow(entry, candidates);
   }
 
+  // Best matches first: codes that start with what was typed, then codes
+  // that contain it, then description matches -- so "3000" lists 30001R
+  // before 230001. Order within each group stays alphabetical by code.
+  function rankPickerMatches(options, query) {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    const rank = (o) => {
+      const code = o.code.toLowerCase();
+      if (code.startsWith(q)) return 0;
+      if (code.includes(q)) return 1;
+      if (o.searchText.toLowerCase().includes(q)) return 2;
+      return -1;
+    };
+    return options
+      .map((o) => ({ o, r: rank(o) }))
+      .filter((x) => x.r >= 0)
+      .sort((a, b) => a.r - b.r)
+      .map((x) => x.o);
+  }
+
+  // The results list floats over the page (position: fixed) so a table's
+  // scroll box can't hide it -- it used to open below the last row and get
+  // clipped out of sight. Opens upward when there's no room below, and is
+  // never narrower than 340px so it reads well from a narrow Code column.
+  function placePickerResults(searchEl, resultsEl) {
+    if (resultsEl.hidden || !searchEl.isConnected) return;
+    const r = searchEl.getBoundingClientRect();
+    const width = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    const height = Math.min(220, resultsEl.scrollHeight);
+    const below = window.innerHeight - r.bottom;
+    const top = below < height + 8 && r.top > below ? r.top - 2 - height : r.bottom + 2;
+    Object.assign(resultsEl.style, {
+      position: "fixed", left: left + "px", top: top + "px", width: width + "px",
+      right: "auto", marginTop: "0", zIndex: "60",
+    });
+  }
+  // One page-wide listener keeps whichever list is open next to its box
+  // while the page or a table scrolls.
+  let pickerRepositionWired = false;
+  function wirePickerRepositioning() {
+    if (pickerRepositionWired) return;
+    pickerRepositionWired = true;
+    const update = () => {
+      document.querySelectorAll(".fp-dropdown-results:not([hidden])").forEach((el) => {
+        const search = el.parentElement && el.parentElement.querySelector("input[type=text]");
+        if (search) placePickerResults(search, el);
+      });
+    };
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+  }
+
   function wireCodePicker(prefix, itemsByCode, i) {
     const searchEl = document.getElementById(`${prefix}CodeSearch${i}`);
     const valueEl = document.getElementById(`${prefix}CodeValue${i}`);
@@ -3911,15 +3964,15 @@
     const allOptions = codePickerOptions(itemsByCode);
     const optionText = (o) => `${o.code} — ${o.description}${o.label ? ` · ${o.label}` : ""}`;
     function renderResults(query) {
-      const q = query.trim().toLowerCase();
-      const matches = allOptions.filter((o) => !q || o.code.toLowerCase().includes(q) || o.searchText.toLowerCase().includes(q))
-        .slice(0, 30);
+      const matches = rankPickerMatches(allOptions, query).slice(0, 30);
       resultsEl.innerHTML = matches.length
         ? matches.map((o) =>
             `<div class="fp-dropdown-option" data-code="${esc(o.code)}" data-id="${esc(o.id)}"><span class="code">${esc(o.code)}</span> — ${esc(o.description)}${o.label ? ` · <b>${esc(o.label)}</b>` : ""}</div>`
           ).join("")
         : `<div class="fp-dropdown-empty">No matching Master Inventory item.</div>`;
       resultsEl.hidden = false;
+      wirePickerRepositioning();
+      placePickerResults(searchEl, resultsEl);
     }
 
     searchEl.addEventListener("focus", () => renderResults(searchEl.value));
