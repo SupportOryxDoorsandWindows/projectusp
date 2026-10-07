@@ -12,9 +12,8 @@ window.ORYX_CONFIG = {
   supabaseUrl: "https://ylhdsvwzqcshffwohhfy.supabase.co",
   supabaseKey: "sb_publishable_-8lQTmwPyAsmJXKATTcbpg_OtKG9qJF",
   drawingsBucket: "drawings",
-  // Shown on the sign-in screen ("Contact an Admin"): who staff email for an
-  // account, a new password link, or access problems.
-  // Oryx uses Outlook (Microsoft 365): the button opens a new email in
-  // Outlook on the web; "Use my email app" opens the desktop app instead.
+  // Sign-in screen "Get help signing in": who staff email for an account, a
+  // new password link, or access problems. Oryx uses Outlook (Microsoft 365):
+  // the button opens a new email in Outlook on the web.
   adminContact: { name: "Lharyl", email: "lharyl@oryxdoors.com", outlookWeb: true },
 };
