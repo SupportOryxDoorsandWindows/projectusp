@@ -259,18 +259,44 @@
     if (mode === "set") $("#gateNewPassword").focus();
   }
 
-  // "Contact an Admin": an email to the Admin in config.js, with the
-  // person's email (if typed) already in the message.
+  // "Contact an Admin": a new email to the Admin in config.js, with the
+  // person's email (if typed) already in the message. Outlook on the web
+  // (new tab) when outlookWeb is set; "Use my email app" = mailto (desktop
+  // Outlook or whatever the computer's mail app is).
   const contact = CFG.adminContact || {};
   if (contact.email) {
     $("#gateContactWho").textContent = `${contact.name ? contact.name + " · " : ""}${contact.email}`;
-    $("#gateContact").addEventListener("click", (e) => {
-      e.preventDefault();
+    const message = () => {
       const mine = ($("#gateEmail").value || $("#gateNewEmail").value || "").trim();
-      const body = `Hello${contact.name ? " " + contact.name : ""},\n\nI need help signing in to the Oryx Product Selector ` +
-        `(new account / new password link).\n\nMy work email: ${mine || "(please write it here)"}\n\nThank you.`;
-      location.href = `mailto:${contact.email}?subject=${encodeURIComponent("Product Selector - sign-in help")}&body=${encodeURIComponent(body)}`;
-    });
+      return {
+        subject: "Product Selector - sign-in help",
+        body: `Hello${contact.name ? " " + contact.name : ""},\n\nI need help signing in to the Oryx Product Selector ` +
+          `(new account / new password link).\n\nMy work email: ${mine || "(please write it here)"}\n\nThank you.`,
+      };
+    };
+    const outlookUrl = () => {
+      const m = message();
+      return "https://outlook.office.com/mail/deeplink/compose?to=" + encodeURIComponent(contact.email) +
+        "&subject=" + encodeURIComponent(m.subject) + "&body=" + encodeURIComponent(m.body);
+    };
+    const mailtoUrl = () => {
+      const m = message();
+      return `mailto:${contact.email}?subject=${encodeURIComponent(m.subject)}&body=${encodeURIComponent(m.body)}`;
+    };
+    // The link's address is refreshed just before it's followed, so it
+    // carries whatever email was typed.
+    const btn = $("#gateContact");
+    if (contact.outlookWeb) {
+      const refresh = () => { btn.href = outlookUrl(); };
+      ["mousedown", "focus", "touchstart"].forEach((ev) => btn.addEventListener(ev, refresh));
+      btn.addEventListener("click", refresh);
+      refresh();
+    } else {
+      btn.removeAttribute("target");
+      btn.addEventListener("click", (e) => { e.preventDefault(); location.href = mailtoUrl(); });
+      $("#gateContactAlt").hidden = true;
+    }
+    $("#gateContactApp").addEventListener("click", (e) => { e.preventDefault(); location.href = mailtoUrl(); });
   } else {
     $("#gateFoot").hidden = true;
   }

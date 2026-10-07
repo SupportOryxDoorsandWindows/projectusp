@@ -14,5 +14,7 @@ window.ORYX_CONFIG = {
   drawingsBucket: "drawings",
   // Shown on the sign-in screen ("Contact an Admin"): who staff email for an
   // account, a new password link, or access problems.
-  adminContact: { name: "Lharyl", email: "lharyl@oryxdoors.com" },
+  // Oryx uses Outlook (Microsoft 365): the button opens a new email in
+  // Outlook on the web; "Use my email app" opens the desktop app instead.
+  adminContact: { name: "Lharyl", email: "lharyl@oryxdoors.com", outlookWeb: true },
 };
