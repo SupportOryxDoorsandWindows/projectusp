@@ -13,7 +13,8 @@
 //             code is 1 if anything changed. --update rewrites it.
 //
 // Nothing is ever saved: the Edge Functions are answered here, the exchange
-// rate is fixed (USD 3.6725, AUD 2.41 AED). Master Inventory is read live
+// rate is fixed (USD 3.6725, AUD 2.41 AED), and the staff sign-in is a local
+// stand-in (one "Sweep" user with Allow Delete) -- no real account is used. Master Inventory is read live
 // (read-only), so "current stock" is left out of the comparison.
 // Per file it records: every row as read; every row after pressing
 // "Use this item" on each Possible match; and the Confirm payload with the
@@ -56,12 +57,30 @@ async function sweepFile(browser, file) {
     if (!cdn[url]) return route.fulfill({ status: 404, body: "" });
     route.fulfill({ status: 200, contentType: "application/javascript", body: fs.readFileSync(path.join(libDir, cdn[url])) });
   });
+  // Stand-in sign-in: the sweep tests Check-in, not accounts.
+  const sweepUser = { id: "00000000-0000-0000-0000-000000000001", aud: "authenticated", role: "authenticated", email: "sweep@example.test", app_metadata: {}, user_metadata: {} };
+  await p.route(/\.supabase\.co\/(auth\/v1\/|rest\/v1\/(user_profiles|rpc\/record_line_delete))/, (route) => {
+    const u = new URL(route.request().url());
+    const body = (obj) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(obj) });
+    if (u.pathname === "/auth/v1/token") return body({ access_token: "sweep", token_type: "bearer", expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: "sweep", user: sweepUser });
+    if (u.pathname === "/auth/v1/user") return body(sweepUser);
+    if (u.pathname.startsWith("/auth/v1/")) return route.fulfill({ status: 204, body: "" });
+    if (u.pathname === "/rest/v1/user_profiles") {
+      const prof = { user_id: sweepUser.id, email: sweepUser.email, full_name: "Sweep", role: "user", can_delete: true, active: true };
+      return (route.request().headers()["accept"] || "").includes("vnd.pgrst.object") ? body(prof) : body([prof]);
+    }
+    return body({ ok: true, id: 1 });
+  });
   const sent = [];
   await p.route("**/functions/v1/**", (route) => {
     sent.push(JSON.parse(route.request().postData() || "{}"));
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, lines: [] }) });
   });
   await p.goto("https://app.local/", { waitUntil: "networkidle" });
+  await p.fill("#gateEmail", "sweep@example.test");
+  await p.fill("#gatePassword", "sweep-stand-in");
+  await p.click("#gateForm button[type=submit]");
+  await p.waitForSelector("#appShell:not([hidden])", { timeout: 60000 });
   await p.click('nav button[data-v="checkin"]');
   await p.setInputFiles("#ciPdf", file);
   await p.waitForTimeout(300);

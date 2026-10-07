@@ -4,7 +4,7 @@ A technical assistant for the doors, windows and shading range. It answers produ
 questions and tells you whether a given opening can be built in a given system —
 and what to use instead when it cannot.
 
-Hosted on GitHub Pages, with the product data in Supabase. No sign-in — open to
+Hosted on GitHub Pages, with the product data in Supabase. Staff sign in — open to
 anyone with the link.
 
 Built from two sources:
@@ -23,7 +23,12 @@ Built from two sources:
 | Product data — specs, engineering notes, glossary | Supabase Postgres, read-only |
 | 170 technical drawings | Supabase Storage, public bucket |
 
-There is **no sign-in**. Anyone who opens the page can use it.
+**Everyone signs in.** Accounts are created by an Admin in **User Management**
+(the Admin gets a one-time link to send; the person sets their own password).
+Every signed-in person can view, add and edit; deleting a line on Check-in or
+Check-out needs **Allow Delete**, which an Admin turns on per person (Admins can
+always delete). Every delete is logged with who, what, when and the reason.
+See "User permissions" below.
 
 `config.js` holds the Supabase URL and the *publishable* key. It is read-only —
 no table has an insert, update or delete policy, so nothing can be changed
@@ -51,6 +56,32 @@ Two steps, if you later want it staff-only:
 
 Then create users under **Authentication → Users → Add user**, ticking
 *Auto Confirm User*.
+
+## User permissions
+
+| Who | Can delete lines | Manages users |
+|---|---|---|
+| Admin | Always | Yes |
+| User with Allow Delete | Yes | No |
+| User without it | No — the button is greyed out and explains why | No |
+
+- Tables: `user_profiles` (role, can_delete, active) and `delete_audit_log`.
+  Signed-in people read only their own profile; Admins read all of it and the
+  log. Nobody writes to them directly.
+- Every Delete button calls `record_line_delete()` in the database, which
+  refuses anyone who isn't an active Admin or doesn't have Allow Delete, and
+  logs the delete. The line is only removed when it says yes — hiding the
+  button is not the protection.
+- Admin changes go through the `user-admin` Edge Function, which checks the
+  caller is an active Admin; `admin_set_user_access()` refuses an Admin
+  removing their own Admin access or turning themselves off, and never lets
+  the last active Admin be removed. A turned-off account can't sign in.
+- `checkin` and `checkout` Edge Functions only accept a signed-in, active
+  staff account.
+- **First Admin / locked out:** an Admin is created from a one-time token:
+  insert `sha256(token)` into `admin_bootstrap_tokens` (email, expiry) in the
+  SQL editor, then POST `{"action":"bootstrap","token":"…"}` to the
+  `user-admin` function; it returns a token for `?invite=` on the site.
 
 ## Running it locally
 

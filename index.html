@@ -823,12 +823,132 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 }
 #loading.err #loadingMsg{color:var(--accent)}
 #loading.err #loadingDetail{color:rgba(255,255,255,0.72)}
+
+/* ---------- Staff sign-in (user permissions) ---------- */
+#gate{
+  position:fixed; inset:0; z-index:61; background:var(--brand);
+  display:flex; align-items:center; justify-content:center; padding:var(--space-6);
+}
+#gate[hidden]{display:none}
+.gate-card{
+  width:100%; max-width:380px; background:var(--white);
+  border-radius:var(--r-lg); box-shadow:var(--sh-modal);
+  padding:var(--space-8) var(--space-7);
+}
+.gate-brand{
+  display:flex; justify-content:center; align-items:center;
+  background:var(--brand); border-radius:var(--r-md);
+  padding:var(--space-5) var(--space-6); margin-bottom:var(--space-7);
+}
+.gate-brand img{height:34px; width:auto; display:block}
+.gate-card h2{margin:0 0 var(--space-1); font-size:18px; text-align:center}
+.gate-sub{
+  font-family:var(--font-display); font-weight:500; font-size:11px;
+  letter-spacing:0.08em; text-transform:uppercase; color:var(--text-muted-light);
+  text-align:center; margin:0 0 var(--space-7);
+}
+.gate-field{margin-bottom:var(--space-5)}
+.gate-field input{width:100%; box-sizing:border-box}
+.gate-card .btn-primary{width:100%; margin-top:var(--space-2)}
+#gateStatus{min-height:18px; margin-top:var(--space-4); font-size:12.5px; color:var(--text-muted); text-align:center}
+#gateStatus.err{color:var(--danger)}
+.gate-foot{
+  margin-top:var(--space-6); padding-top:var(--space-5); border-top:1px solid var(--line-soft);
+  font-size:11.5px; color:var(--text-muted-light); text-align:center; line-height:1.6;
+}
+.gate-form[hidden]{display:none}
+.who-box{display:flex; align-items:center; gap:var(--space-3)}
+.who{font-family:var(--font-display); font-weight:500; font-size:11px; letter-spacing:0.04em; color:var(--silver)}
+#signOut{
+  font-family:var(--font-display); font-weight:600; font-size:11px;
+  letter-spacing:0.06em; text-transform:uppercase;
+  background:none; border:1px solid rgba(255,255,255,0.22);
+  color:rgba(255,255,255,0.72); border-radius:var(--r-pill);
+  padding:var(--space-1) var(--space-4); cursor:pointer;
+}
+#signOut:hover{background:rgba(255,255,255,0.1); color:var(--white); border-color:rgba(255,255,255,0.4)}
+nav button[hidden]{display:none}
+/* Delete without permission: still visible, clearly unavailable. */
+.fp-row-actions button.fp-row-delete[aria-disabled="true"]{
+  color:var(--text-muted-light); border-color:var(--line); background:var(--white); cursor:not-allowed; opacity:0.7;
+}
+.fp-row-actions button.fp-row-delete[aria-disabled="true"]:hover{background:var(--white); border-color:var(--line)}
+#delDialog .del-body{padding:var(--space-6); min-width:min(440px,88vw); max-width:520px}
+#delDialog h3{margin:0 0 var(--space-3)}
+#delDialog .del-what{font-weight:600; margin:var(--space-3) 0}
+#delDialog .del-reason{margin-top:var(--space-4)}
+#delDialog .del-reason input{width:100%; box-sizing:border-box}
+#delDialog .del-error{color:var(--danger); font-size:12.5px; min-height:16px; margin-top:var(--space-3)}
+#delDialog .bar{justify-content:flex-end}
+#delDialog .del-go{background:var(--danger); color:var(--white); border:1px solid var(--danger); border-radius:var(--r-pill);
+  font:inherit; font-weight:600; padding:var(--space-2) var(--space-5); cursor:pointer}
+#delDialog .del-go:hover{filter:brightness(1.1)}
+#delDialog .del-go[disabled]{opacity:0.6; cursor:wait}
+/* Admin → User Management */
+.um-grid{width:100%; border-collapse:collapse; font-size:13px}
+.um-grid th{text-align:left; font-size:11px; letter-spacing:0.05em; text-transform:uppercase; color:var(--text-muted); padding:var(--space-2) var(--space-3); border-bottom:1px solid var(--line)}
+.um-grid td{padding:var(--space-3); border-bottom:1px solid var(--line-soft); vertical-align:middle}
+.um-grid td.c{text-align:center}
+.um-grid .um-fixed{color:var(--text-muted)}
+.um-name{font-weight:600}
+.um-email{font-size:12px; color:var(--text-muted)}
+.um-badge{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:var(--r-pill); background:var(--panel); color:var(--brand)}
+.um-badge.admin{background:var(--brand); color:var(--white)}
+.um-badge.off{background:var(--danger-bg); color:var(--danger)}
+.um-toggle{display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:600}
+.um-toggle input{width:18px; height:18px; cursor:pointer}
+.um-toggle input:disabled{cursor:not-allowed}
+.um-link{display:flex; gap:var(--space-2); align-items:center; margin-top:var(--space-3)}
+.um-link input{flex:1; min-width:0; font-family:var(--font-mono); font-size:12px}
+.um-status{font-size:12.5px; min-height:18px; margin-top:var(--space-3)}
+.um-status.err{color:var(--danger)}
+.um-scroll{overflow-x:auto}
 </style>
 </head>
 <body>
 
-<!-- Shown while the knowledge base loads from Supabase. No sign-in required. -->
-<div id="loading">
+<!-- Staff sign-in. Nothing below it loads until a staff account signs in. -->
+<div id="gate" hidden>
+  <div class="gate-card">
+    <div class="gate-brand">
+      <img src="assets/logos/oryx-logo-white.png" alt="Oryx Doors &amp; Windows">
+    </div>
+    <h2 id="gateTitle">Product Selector</h2>
+    <p class="gate-sub" id="gateSub">Oryx staff sign-in</p>
+    <form id="gateForm" class="gate-form">
+      <div class="gate-field">
+        <label class="field-label" for="gateEmail">Work email</label>
+        <input id="gateEmail" type="email" autocomplete="username" required>
+      </div>
+      <div class="gate-field">
+        <label class="field-label" for="gatePassword">Password</label>
+        <input id="gatePassword" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn-primary" type="submit">Sign in</button>
+    </form>
+    <form id="gateSetForm" class="gate-form" hidden>
+      <div class="gate-field">
+        <label class="field-label" for="gateNewEmail">Your account</label>
+        <input id="gateNewEmail" type="email" readonly>
+      </div>
+      <div class="gate-field">
+        <label class="field-label" for="gateNewPassword">New password (at least 8 characters)</label>
+        <input id="gateNewPassword" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div class="gate-field">
+        <label class="field-label" for="gateNewPassword2">Type it again</label>
+        <input id="gateNewPassword2" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <button class="btn-primary" type="submit">Save password and continue</button>
+    </form>
+    <div id="gateStatus" role="status" aria-live="polite"></div>
+    <div class="gate-foot" id="gateFoot">Accounts are created by an Admin.<br>
+      Forgot your password? Ask an Admin for a new link.</div>
+  </div>
+</div>
+
+<!-- Shown while the knowledge base loads from Supabase, after sign-in. -->
+<div id="loading" hidden>
   <div class="loading-card">
     <div class="loading-brand">
       <img src="assets/logos/oryx-logo-white.png" alt="Oryx Doors &amp; Windows">
@@ -860,7 +980,9 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
         <button data-v="fp">Check-out (FP Pro)</button>
         <button data-v="checkin">Check-in</button>
         <button data-v="master-inventory">Master Inventory</button>
+        <button data-v="admin" id="navAdmin" hidden>User Management</button>
       </nav>
+      <span class="who-box"><span class="who" id="whoami"></span><button id="signOut" type="button">Sign out</button></span>
     </div>
   </div>
 </header>
@@ -1214,7 +1336,79 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
   </div>
 </section>
 
+<!-- =========================== USER MANAGEMENT (Admin only) =========================== -->
+<section id="v-admin" class="view">
+  <div class="card">
+    <h2>User Management</h2>
+    <p class="lede">Who can use the system, and who may <b>delete</b> lines. Every signed-in person can view,
+    add and edit; only Admins and people with <b>Allow Delete</b> on can delete. Changes take effect straight away.</p>
+    <div class="um-scroll">
+      <table class="um-grid">
+        <thead><tr>
+          <th>Person</th><th>Role</th><th class="c">View</th><th class="c">Add</th><th class="c">Edit</th>
+          <th class="c">Allow Delete</th><th class="c">Admin</th><th class="c">Active</th><th></th>
+        </tr></thead>
+        <tbody id="umRows"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="um-status" id="umStatus" role="status" aria-live="polite"></div>
+    <div class="um-link" id="umLinkBox" hidden>
+      <input id="umLink" type="text" readonly aria-label="Link to send">
+      <button class="ghost" type="button" id="umCopy">Copy link</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Invite a person</h2>
+    <p class="lede">You get a link to send them (WhatsApp or email). They open it, set their own password, and they're in.
+    The link works for about an hour; make a new one from their row if it runs out.</p>
+    <form id="umInviteForm" class="fp-jobrow" style="align-items:flex-end">
+      <div class="fp-jobrow-field" style="flex:1; min-width:200px">
+        <label class="field-label" for="umName">Full name</label>
+        <input id="umName" type="text" autocomplete="off" required placeholder="e.g. John Doe">
+      </div>
+      <div class="fp-jobrow-field" style="flex:1; min-width:220px">
+        <label class="field-label" for="umEmail">Work email</label>
+        <input id="umEmail" type="email" autocomplete="off" required placeholder="name@oryxdoors.com">
+      </div>
+      <div class="fp-jobrow-field">
+        <label class="um-toggle"><input id="umCanDelete" type="checkbox"> Allow Delete</label>
+      </div>
+      <div class="fp-jobrow-field"><button class="btn-accent" type="submit" id="umInviteBtn">Create invite link</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Delete log</h2>
+    <p class="lede">Every line deleted (and restored) on Check-in and Check-out, newest first.</p>
+    <div class="um-scroll">
+      <table class="um-grid">
+        <thead><tr><th>When</th><th>Who</th><th>What</th><th>Where</th><th>Reason</th></tr></thead>
+        <tbody id="umLog"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
 </main>
+
+<!-- Delete confirmation, and the "no permission" message. -->
+<dialog id="delDialog" aria-labelledby="delTitle">
+  <div class="del-body">
+    <h3 id="delTitle">Delete Record?</h3>
+    <p id="delText"></p>
+    <p class="del-what" id="delWhat"></p>
+    <div class="del-reason" id="delReasonBox">
+      <label class="field-label" for="delReason">Reason <span class="muted">(optional)</span></label>
+      <input id="delReason" type="text" maxlength="300" autocomplete="off" placeholder="e.g. Duplicate line on the invoice">
+    </div>
+    <div class="del-error" id="delError" role="alert"></div>
+  </div>
+  <div class="bar">
+    <button class="ghost" type="button" id="delCancel">Cancel</button>
+    <button class="del-go" type="button" id="delGo">Delete</button>
+  </div>
+</dialog>
 
 <dialog id="lightbox">
   <img id="lbImg" alt="">
@@ -1228,6 +1422,6 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 <!-- boot.js loads the knowledge base from Supabase, then loads app.js and
      fp-pro.js. Bump ?v= when config.js or boot.js change so browsers
      fetch the new file. -->
-<script src="boot.js?v=4"></script>
+<script src="boot.js?v=5"></script>
 </body>
 </html>

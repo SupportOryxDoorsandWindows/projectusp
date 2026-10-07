@@ -1,7 +1,7 @@
 // Phase 2 Check-in. Mirrors the `checkout` function: the browser (fp-pro.js)
-// sends the extracted invoice lines with the anon key's JWT (this site has
-// no sign-in, so verify_jwt just requires *some* valid Supabase JWT, same as
-// every read already does). All writing happens inside checkin_transaction()
+// sends the extracted invoice lines with the signed-in person's own token;
+// requireStaff() below refuses anyone without an active staff account.
+// All writing happens inside checkin_transaction()
 // via the service-role client -- this file only validates the request shape
 // and forwards it. The service-role key never reaches the browser.
 //
@@ -66,6 +66,17 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+// Signed-in staff only (user-permissions update): the caller's own sign-in
+// token is checked and their profile must be active. Nothing below changed.
+async function requireStaff(req: Request) {
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!jwt) return null;
+  const { data, error } = await supabase.auth.getUser(jwt);
+  if (error || !data?.user) return null;
+  const { data: p } = await supabase.from("user_profiles").select("user_id, active").eq("user_id", data.user.id).maybeSingle();
+  return p && p.active ? p : null;
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 
@@ -75,6 +86,9 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== "POST") {
     return json({ ok: false, error: "method_not_allowed" }, 405);
+  }
+  if (!(await requireStaff(req))) {
+    return json({ ok: false, error: "sign_in_required" }, 401);
   }
 
   let body: any;

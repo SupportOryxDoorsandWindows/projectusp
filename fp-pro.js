@@ -34,7 +34,18 @@
     }
   }
 
-  const sb = window.supabase.createClient(window.ORYX_CONFIG.supabaseUrl, window.ORYX_CONFIG.supabaseKey);
+  // The signed-in client from boot.js (falls back to a plain one in tests).
+  const sb = window.ORYX_AUTH ? window.ORYX_AUTH.sb : window.supabase.createClient(window.ORYX_CONFIG.supabaseUrl, window.ORYX_CONFIG.supabaseKey);
+  // Edge Functions only accept signed-in staff: send the person's own token.
+  async function fnHeaders() {
+    if (window.ORYX_AUTH) return window.ORYX_AUTH.fnHeaders();
+    return { "Content-Type": "application/json", "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey, "apikey": window.ORYX_CONFIG.supabaseKey };
+  }
+  // Delete permission (Admin, or Allow Delete). The server checks again.
+  const canDeleteLines = () => !window.ORYX_AUTH || window.ORYX_AUTH.canDelete();
+  const deleteBtnAttrs = () => canDeleteLines()
+    ? ""
+    : ` aria-disabled="true" title="You don't have permission to delete this record. Please contact an administrator."`;
 
   let libsPromise = null;
   function loadLibs() {
@@ -912,7 +923,7 @@
     return `<div class="fp-row-actions fp-row-actions-line">
         ${first}
         <button data-act="edit" data-i="${idx}">Edit</button>
-        <button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this item from the Check-out">Delete</button>
+        <button data-act="delete" data-i="${idx}" class="fp-row-delete"${deleteBtnAttrs() || ` title="Remove this item from the Check-out"`}>Delete</button>
       </div>`;
   }
 
@@ -929,6 +940,8 @@
     if (act === "restore") {
       const back = restoreDeleted(state.rows, state.removedRows || [], idx);
       if (back) {
+        if (window.ORYX_AUTH) window.ORYX_AUTH.logRestore({ area: "checkout", ref: back.code || back.description,
+          detail: { code: back.code || null, description: back.description || null }, documentName: state.pdfFile ? state.pdfFile.name : null });
         render();
         status(`Restored ${back.code ? back.code + " — " : ""}${back.description || "item"} to the Check-out.`);
       }
@@ -941,11 +954,25 @@
       // no longer be acknowledged, edited or deducted. Nothing has been
       // written yet, so this only changes what Confirm would send.
       const label = `${r.code ? r.code + " — " : ""}${r.description || "this item"} (${[fmt(r.requiredQty), r.unit].filter(Boolean).join(" ")})`;
-      const ok = window.confirm(
-        `Delete ${label} from this Check-out?\n\n` +
-        "It will be removed from the list, so it can no longer be acknowledged and will not be deducted from the Master Inventory.\n\n" +
-        "You can bring it back with Restore in the \"Deleted items\" box below the table, any time before you confirm."
-      );
+      // Confirmation + the server's permission check (and the delete log);
+      // the line is only removed once both say yes.
+      if (window.ORYX_AUTH) {
+        window.ORYX_AUTH.requestDelete({
+          what: label, area: "checkout", ref: r.code || r.description,
+          detail: { code: r.code || null, description: r.description || null, qty: r.requiredQty, unit: r.unit || null,
+                    job_number: ($("#fpJobNumber") || {}).value || null },
+          documentName: state.pdfFile ? state.pdfFile.name : null,
+          note: "It won't be deducted from the Master Inventory. You can still bring it back with Restore, below the table, until you confirm the Check-out.",
+        }).then((ok) => {
+          if (!ok || state.done || state.rows[idx] !== r) return;
+          state.removedRows = state.removedRows || [];
+          deleteRowAt(state.rows, state.removedRows, idx);
+          render();
+          status(`Deleted ${label} — it will not be acknowledged or deducted. Use Restore below the table to bring it back.`);
+        });
+        return;
+      }
+      const ok = window.confirm(`Delete ${label} from this Check-out?`);
       if (!ok) return;
       state.removedRows = state.removedRows || [];
       deleteRowAt(state.rows, state.removedRows, idx);
@@ -1183,11 +1210,7 @@
 
     const res = await fetch(CHECKOUT_FN_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
-        "apikey": window.ORYX_CONFIG.supabaseKey,
-      },
+      headers: await fnHeaders(),
       body: JSON.stringify({
         job_number: jobRef,
         client,
@@ -3673,7 +3696,7 @@
 
   function ciRenderRowActionButtons(idx, row) {
     // Delete is always the last button, whatever the row's status.
-    const deleteBtn = `<button data-act="delete" data-i="${idx}" class="fp-row-delete" title="Remove this line from the Check-in">Delete</button>`;
+    const deleteBtn = `<button data-act="delete" data-i="${idx}" class="fp-row-delete"${deleteBtnAttrs() || ` title="Remove this line from the Check-in"`}>Delete</button>`;
     const on = (yes) => yes ? "on" : "";
     const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
     if (row.status === "ok") {
@@ -3727,6 +3750,8 @@
     if (act === "restore") {
       const back = restoreDeleted(ciState.rows, ciState.deletedRows || [], idx);
       if (back) {
+        if (window.ORYX_AUTH) window.ORYX_AUTH.logRestore({ area: "checkin", ref: back.code || back.description,
+          detail: { code: back.code || null, description: back.description || null }, documentName: ciState.pdfFile ? ciState.pdfFile.name : null });
         ciRender();
         ciStatus(`Restored ${back.code ? back.code + " — " : ""}${back.description || "line"} to the Check-in.`);
       }
@@ -3740,11 +3765,26 @@
       // out of the shipping split. Nothing is written until Confirm, and
       // Restore puts it back exactly as it was.
       const label = `${r.code ? r.code + " — " : ""}${r.description || "this line"} (${[fmt(r.qty), r.unit].filter(Boolean).join(" ")})`;
-      const ok = window.confirm(
-        `Delete ${label} from this Check-in?\n\n` +
-        "It will be removed from the list, so it can no longer be acknowledged and will not be added to the Master Inventory.\n\n" +
-        "You can bring it back with Restore in the \"Deleted items\" box below the table, any time before you confirm."
-      );
+      // Confirmation + the server's permission check (and the delete log);
+      // the line is only removed once both say yes.
+      if (window.ORYX_AUTH) {
+        window.ORYX_AUTH.requestDelete({
+          what: label, area: "checkin", ref: r.code || r.description,
+          detail: { code: r.code || null, description: r.description || null, qty: r.qty, unit: r.unit || null,
+                    unit_cost: r.invoiceUnitCost != null ? r.invoiceUnitCost : null, currency: ciState.currency || null,
+                    supplier: ($("#ciSupplier") || {}).value || null, invoice_number: ($("#ciInvoiceNumber") || {}).value || null },
+          documentName: ciState.pdfFile ? ciState.pdfFile.name : null,
+          note: "It won't be added to the Master Inventory. You can still bring it back with Restore, below the table, until you confirm the Check-in.",
+        }).then((ok) => {
+          if (!ok || ciState.done || ciState.rows[idx] !== r) return;
+          ciState.deletedRows = ciState.deletedRows || [];
+          deleteRowAt(ciState.rows, ciState.deletedRows, idx);
+          ciRender();
+          ciStatus(`Deleted ${label} — it will not be acknowledged or checked in. Use Restore below the table to bring it back.`);
+        });
+        return;
+      }
+      const ok = window.confirm(`Delete ${label} from this Check-in?`);
       if (!ok) return;
       ciState.deletedRows = ciState.deletedRows || [];
       deleteRowAt(ciState.rows, ciState.deletedRows, idx);
@@ -4847,11 +4887,7 @@
 
     const res = await fetch(CHECKIN_FN_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
-        "apikey": window.ORYX_CONFIG.supabaseKey,
-      },
+      headers: await fnHeaders(),
       body: JSON.stringify({
         supplier, invoice_number: invoiceNumber, po_number: poNumber, document_date: docDate,
         pdf_hash: ciState.pdfHash,
@@ -5451,11 +5487,7 @@
         try {
           const res = await fetch(CHECKIN_FN_URL, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
-              "apikey": window.ORYX_CONFIG.supabaseKey,
-            },
+            headers: await fnHeaders(),
             body: JSON.stringify({ action: "forget_alias", id: a.id }),
           });
           const data = await readFnJson(res);
@@ -5523,11 +5555,7 @@
           if (!(unitCost >= 0)) { showErr("Enter a valid unit cost."); return; }
           const res = await fetch(CHECKIN_FN_URL, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
-              "apikey": window.ORYX_CONFIG.supabaseKey,
-            },
+            headers: await fnHeaders(),
             body: JSON.stringify({
               supplier: "Manual correction",
               invoice_number: reason,
@@ -5541,11 +5569,7 @@
         } else {
           const res = await fetch(CHECKOUT_FN_URL, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey,
-              "apikey": window.ORYX_CONFIG.supabaseKey,
-            },
+            headers: await fnHeaders(),
             body: JSON.stringify({
               job_number: reason,
               client: "Manual correction",
@@ -5972,6 +5996,12 @@
         if ($("#" + id).value.trim()) setJobFieldInvalid(id, false);
         if (state.rows && !state.done) render();
       });
+    });
+
+    // An Admin turned Allow Delete on/off: redraw the Delete buttons now.
+    document.addEventListener("oryx-permissions", () => {
+      if (state.rows && !state.done) render();
+      if (ciState.rows && !ciState.done) ciRender();
     });
 
     const miNavBtn = document.querySelector('nav button[data-v="master-inventory"]');
