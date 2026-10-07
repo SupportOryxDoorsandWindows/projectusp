@@ -71,10 +71,10 @@
       }
       if (g.txType === "check_in") {
         return { ...g, kind: "in", tag: "Check-in", did: `checked in ${items}`,
-          detail: [g.party, g.ref ? `Invoice ${g.ref}` : "", g.doc, aed(g.value)].filter(Boolean).join(" · ") };
+          detail: [g.party, g.ref ? `Order Number ${g.ref}` : "", g.doc, aed(g.value)].filter(Boolean).join(" · ") };
       }
       return { ...g, kind: "out", tag: "Check-out", did: `checked out ${items}`,
-        detail: [g.ref ? `Job ${g.ref}` : "", g.party ? `Client ${g.party}` : "", g.doc, aed(g.value)].filter(Boolean).join(" · ") };
+        detail: [g.ref ? `Order Number ${g.ref}` : "", g.party ? `Client ${g.party}` : "", g.doc, aed(g.value)].filter(Boolean).join(" · ") };
     });
   }
 
@@ -94,7 +94,7 @@
       return { key: "del|" + g.key, at: g.at, kind: "del", tag: r.action === "restore" ? "Restored line" : "Deleted line",
         who: r.user_name || r.user_email, whoEmail: r.user_email,
         did: n === 1 ? `${verb} ${one || "a line"}` : `${verb} ${n} lines before confirming`,
-        detail: [(r.area === "checkin" ? "Check-in" : "Check-out"), d.job_number ? `Job ${d.job_number}` : "", d.invoice_number ? `Invoice ${d.invoice_number}` : "",
+        detail: [(r.area === "checkin" ? "Check-in" : "Check-out"), d.job_number ? `Order Number ${d.job_number}` : "", d.invoice_number ? `Order Number ${d.invoice_number}` : "",
           r.document_name || "", r.reason ? `Reason: ${r.reason}` : ""].filter(Boolean).join(" · "),
         lines: g.rows.map((x) => ({ item_code: (x.record_detail || {}).code || x.record_ref, description: (x.record_detail || {}).description || "", quantity: (x.record_detail || {}).qty, unit: (x.record_detail || {}).unit })) };
     });

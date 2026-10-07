@@ -134,7 +134,7 @@
   const logWhere = (r) => {
     const d = r.record_detail || {};
     return (r.area === "checkin" ? "Check-in" : "Check-out") + (r.document_name ? ` · ${r.document_name}` : "") +
-      (d.job_number ? ` · job ${d.job_number}` : "") + (d.invoice_number ? ` · inv. ${d.invoice_number}` : "");
+      (d.job_number ? ` · Order Number ${d.job_number}` : "") + (d.invoice_number ? ` · Order Number ${d.invoice_number}` : "");
   };
   const logWho = (r) => r.user_name || r.user_email;
 
