@@ -1246,14 +1246,15 @@ nav button[hidden]{display:none}
       <div class="fp-jobrow-field" style="flex:1">
         <label class="field-label">Direction</label>
         <select id="miAdjustDirection">
-          <option value="check_in">Check-in (add stock)</option>
-          <option value="check_out">Check-out (remove stock)</option>
+          <option value="set_to">Set stock to a counted number</option>
+          <option value="check_in">Add to stock (Check-in)</option>
+          <option value="check_out">Take from stock (Check-out)</option>
         </select>
       </div>
     </div>
     <div class="fp-jobrow">
       <div class="fp-jobrow-field">
-        <label class="field-label" for="miAdjustQty">Quantity</label>
+        <label class="field-label" for="miAdjustQty" id="miAdjustQtyLabel">Quantity</label>
         <input id="miAdjustQty" type="number" min="0" step="any" placeholder="0">
       </div>
       <div class="fp-jobrow-field" id="miAdjustCostField">
@@ -1267,6 +1268,7 @@ nav button[hidden]{display:none}
         <input id="miAdjustReason" type="text" autocomplete="off" placeholder="e.g. Correcting miscount from physical check">
       </div>
     </div>
+    <p class="small" id="miAdjustPreview" style="margin:var(--space-2) 0 0; font-weight:600"></p>
     <p class="small" id="miAdjustError" style="color:var(--danger); display:none"></p>
     <div class="bar">
       <button class="ghost" type="button" id="miAdjustCancel">Cancel</button>

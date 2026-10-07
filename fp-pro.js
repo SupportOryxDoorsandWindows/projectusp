@@ -5515,16 +5515,31 @@
     const dlg = $("#miAdjustDialog");
     $("#miAdjustTitle").textContent = `Adjust ${item.item_code}`;
     $("#miAdjustSubtitle").textContent = `${item.description || ""} — current stock: ${fmt(item.current_qty)}`;
-    $("#miAdjustDirection").value = "check_in";
+    // Default: set the stock to what was counted (e.g. 58). The system works
+    // out the difference and books it as a Check-in or Check-out.
+    $("#miAdjustDirection").value = "set_to";
     $("#miAdjustQty").value = "";
     $("#miAdjustCost").value = item.unit_cost != null ? item.unit_cost : "";
     $("#miAdjustReason").value = "";
     $("#miAdjustError").style.display = "none";
-    $("#miAdjustCostField").style.display = "";
 
-    $("#miAdjustDirection").onchange = () => {
-      $("#miAdjustCostField").style.display = $("#miAdjustDirection").value === "check_in" ? "" : "none";
+    const updateAdjustForm = () => {
+      const dir = $("#miAdjustDirection").value;
+      const qty = parseFloat($("#miAdjustQty").value);
+      $("#miAdjustQtyLabel").textContent = dir === "set_to" ? "Counted quantity (new stock)" : dir === "check_in" ? "Quantity to add" : "Quantity to take out";
+      $("#miAdjustCostField").style.display = dir === "check_in" ? "" : "none";
+      let preview = "";
+      if (isFinite(qty) && $("#miAdjustQty").value !== "") {
+        const after = dir === "set_to" ? qty : dir === "check_in" ? item.current_qty + qty : item.current_qty - qty;
+        const diff = after - item.current_qty;
+        preview = `Stock: ${fmt(item.current_qty)} → ${fmt(after)}` +
+          (diff === 0 ? " (no change)" : ` (${diff > 0 ? "+" : "−"}${fmt(Math.abs(diff))})`);
+      }
+      $("#miAdjustPreview").textContent = preview;
     };
+    $("#miAdjustDirection").onchange = updateAdjustForm;
+    $("#miAdjustQty").oninput = updateAdjustForm;
+    updateAdjustForm();
 
     function showErr(msg) {
       $("#miAdjustError").textContent = msg;
@@ -5534,13 +5549,26 @@
     $("#miAdjustCancel").onclick = () => dlg.close();
 
     $("#miAdjustSubmit").onclick = async () => {
-      const direction = $("#miAdjustDirection").value;
-      const qty = parseFloat($("#miAdjustQty").value);
+      let direction = $("#miAdjustDirection").value;
+      let qty = parseFloat($("#miAdjustQty").value);
       const reason = $("#miAdjustReason").value.trim();
-      if (!(qty > 0)) return showErr("Enter a quantity greater than 0.");
-      if (!reason) return showErr("A reason is required for every manual adjustment.");
+      let unitCostForSet = null;
+      if (direction === "set_to") {
+        // A stock count: book only the difference, at the item's own cost
+        // (a Check-in never changes an existing item's unit cost).
+        if (!(qty >= 0) || $("#miAdjustQty").value === "") return showErr("Enter the counted quantity (0 or more).");
+        const diff = qty - item.current_qty;
+        if (Math.abs(diff) < 1e-9) return showErr(`Stock is already ${fmt(item.current_qty)} — nothing to change.`);
+        if (!reason) return showErr("A reason is required for every manual adjustment.");
+        direction = diff > 0 ? "check_in" : "check_out";
+        qty = Math.round(Math.abs(diff) * 1e6) / 1e6;
+        unitCostForSet = item.unit_cost != null ? Number(item.unit_cost) : 0;
+      } else {
+        if (!(qty > 0)) return showErr("Enter a quantity greater than 0.");
+        if (!reason) return showErr("A reason is required for every manual adjustment.");
+      }
 
-      if (direction === "check_out" && qty > item.current_qty) {
+      if (direction === "check_out" && qty > item.current_qty && unitCostForSet == null) {
         const proceed = confirm(
           `This would take ${item.item_code} to ${fmt(item.current_qty - qty)}, below zero. Continue anyway?`
         );
@@ -5551,14 +5579,14 @@
       btn.disabled = true;
       try {
         if (direction === "check_in") {
-          const unitCost = parseFloat($("#miAdjustCost").value);
+          const unitCost = unitCostForSet != null ? unitCostForSet : parseFloat($("#miAdjustCost").value);
           if (!(unitCost >= 0)) { showErr("Enter a valid unit cost."); return; }
           const res = await fetch(CHECKIN_FN_URL, {
             method: "POST",
             headers: await fnHeaders(),
             body: JSON.stringify({
               supplier: "Manual correction",
-              invoice_number: reason,
+              invoice_number: unitCostForSet != null ? `Stock count: ${reason}` : reason,
               currency: "AED",
               exchange_rate: 1,
               lines: [{ item_id: item.id, quantity: qty, unit: item.unit_of_measure || "", unit_cost: unitCost }],
@@ -5571,7 +5599,7 @@
             method: "POST",
             headers: await fnHeaders(),
             body: JSON.stringify({
-              job_number: reason,
+              job_number: unitCostForSet != null ? `Stock count: ${reason}` : reason,
               client: "Manual correction",
               lines: [{ item_id: item.id, quantity: qty, unit: item.unit_of_measure || "" }],
             }),
