@@ -86,29 +86,31 @@ body{
 }
 
 /* ---------- Header (§8) ---------- */
+/* Compact two-row header: brand + stats + who on top, every tab on one
+   line below (scrolls sideways on a narrow screen instead of wrapping). */
 header{
   position:sticky; top:0; z-index:30;
-  padding:var(--space-6) var(--space-8);
+  padding:var(--space-3) var(--space-8) var(--space-2);
   background:var(--brand);
   box-shadow:var(--sh-header);
 }
 .header-inner{
   display:flex; align-items:center; justify-content:space-between;
-  gap:20px; flex-wrap:wrap;
+  gap:var(--space-2) 20px; flex-wrap:wrap;
   max-width:1180px; margin:0 auto;
 }
 .brand-row{display:flex; align-items:center; gap:var(--space-5)}
-.logo-img{height:52px; width:auto; display:block}
-.brand-mark{display:flex; flex-direction:column; gap:2px}
+.logo-img{height:36px; width:auto; display:block}
+.brand-mark{display:flex; flex-direction:column; gap:0}
 h1{
-  font-family:var(--font-display); font-weight:700; font-size:20px;
-  letter-spacing:0.01em; color:var(--white); margin:0; line-height:1.3;
+  font-family:var(--font-display); font-weight:700; font-size:17px;
+  letter-spacing:0.01em; color:var(--white); margin:0; line-height:1.25;
 }
 .tagline{
   font-family:var(--font-display); font-weight:500; font-size:11px;
   letter-spacing:0.12em; text-transform:uppercase; color:var(--silver);
 }
-.header-actions{display:flex; align-items:center; gap:var(--space-6); flex-wrap:wrap}
+.header-actions{display:flex; align-items:center; gap:var(--space-5); flex-wrap:wrap}
 .stat-pill{
   font-family:var(--font-display); font-weight:600; font-size:11.5px;
   letter-spacing:0.06em; text-transform:uppercase; color:var(--silver);
@@ -116,13 +118,15 @@ h1{
 .stat-pill strong{color:var(--white); font-size:13px}
 
 /* Nav sits on the dark ground: white fills at low alpha (§8) */
-nav{display:flex; gap:var(--space-1); flex-wrap:wrap}
+nav{display:flex; gap:var(--space-1); flex:1 1 100%; overflow-x:auto; scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
 nav button{
+  flex:none; white-space:nowrap;
   font-family:var(--font-display); font-weight:600; font-size:12px;
   letter-spacing:0.06em; text-transform:uppercase;
   background:rgba(255,255,255,0.04); color:rgba(255,255,255,0.72);
   border:1px solid transparent; border-radius:var(--r-pill);
-  padding:var(--space-2) var(--space-5); cursor:pointer;
+  padding:6px var(--space-4); cursor:pointer;
   transition:background .15s ease, color .15s ease, border-color .15s ease;
 }
 nav button:hover{background:rgba(255,255,255,0.1); color:var(--white)}
@@ -769,8 +773,10 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
   .kv{grid-template-columns:1fr}
   .kv dt{margin-top:var(--space-3)}
   main{padding:var(--space-6) var(--space-5) 48px}
-  header{padding:var(--space-5) var(--space-5)}
-  .logo-img{height:40px}
+  header{padding:var(--space-3) var(--space-5) var(--space-2)}
+  .logo-img{height:30px}
+  .tagline{display:none}
+  .stat-pill{display:none}
 }
 
 /* ---------- Item photos (Master Inventory) ---------- */
@@ -868,7 +874,8 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
   border-radius:var(--r-pill); color:var(--brand); font-weight:600; font-size:12.5px; text-decoration:none;
 }
 .gate-contact:hover{background:var(--brand); color:var(--white)}
-.who-box{display:flex; align-items:center; gap:var(--space-3)}
+.who-box{display:flex; align-items:center; gap:var(--space-3); padding-left:var(--space-5); border-left:1px solid rgba(255,255,255,0.14)}
+@media (max-width:620px){ .who-box{padding-left:0; border-left:none} }
 .who{font-family:var(--font-display); font-weight:500; font-size:11px; letter-spacing:0.04em; color:var(--silver)}
 #signOut{
   font-family:var(--font-display); font-weight:600; font-size:11px;
@@ -1042,19 +1049,19 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
     <div class="header-actions">
       <span class="stat-pill">Systems: <strong id="sysCount">0</strong></span>
       <span class="stat-pill">Drawings: <strong id="drwCount">0</strong></span>
-      <nav>
-        <button data-v="ask" class="on">Ask the bot</button>
-        <button data-v="check">Opening checker</button>
-        <button data-v="systems">Systems</button>
-        <button data-v="matrix">Comparison</button>
-        <button data-v="fp">Check-out (FP Pro)</button>
-        <button data-v="checkin">Check-in</button>
-        <button data-v="master-inventory">Master Inventory</button>
-        <button data-v="activity" id="navActivity">Activity</button>
-        <button data-v="admin" id="navAdmin" hidden>User Management</button>
-      </nav>
       <span class="who-box"><span class="who" id="whoami"></span><button id="signOut" type="button">Sign out</button></span>
     </div>
+    <nav>
+      <button data-v="ask" class="on">Ask the bot</button>
+      <button data-v="check">Opening checker</button>
+      <button data-v="systems">Systems</button>
+      <button data-v="matrix">Comparison</button>
+      <button data-v="fp">Check-out (FP Pro)</button>
+      <button data-v="checkin">Check-in</button>
+      <button data-v="master-inventory">Master Inventory</button>
+      <button data-v="activity" id="navActivity">Activity</button>
+      <button data-v="admin" id="navAdmin" hidden>User Management</button>
+    </nav>
   </div>
 </header>
 
