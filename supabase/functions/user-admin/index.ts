@@ -61,6 +61,16 @@ async function passwordLink(email: string) {
   return { kind, user: data.user, token: data.properties.hashed_token };
 }
 
+// Activity timeline: who changed which account, and how. Never fails the action.
+async function logAccount(me: any, action: string, target: { email?: string | null; full_name?: string | null } | null, detail: unknown = null) {
+  try {
+    await supabase.from("account_activity_log").insert({
+      actor_id: me?.user_id ?? null, actor_name: me?.full_name || me?.email || null, actor_email: me?.email ?? null,
+      action, target_email: target?.email ?? null, target_name: target?.full_name ?? null, detail,
+    });
+  } catch (e) { console.error("account log failed", e); }
+}
+
 async function sha256(text: string) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -86,6 +96,7 @@ Deno.serve(async (req: Request) => {
         user_id: link.user.id, email: row.email, full_name: row.full_name, role: "admin", can_delete: true, active: true, updated_at: new Date().toISOString(),
       });
       if (error) throw error;
+      await logAccount(null, "first_admin", { email: row.email, full_name: row.full_name });
       return json({ ok: true, kind: link.kind, token: link.token, email: row.email });
     }
 
@@ -105,15 +116,17 @@ Deno.serve(async (req: Request) => {
         });
         if (error) throw error;
       }
+      await logAccount(me, existing ? "password_link" : "invite", { email, full_name: str(body.full_name, 120) }, { can_delete: body.can_delete === true });
       return json({ ok: true, kind: link.kind, token: link.token, existed: !!existing });
     }
 
     if (action === "reset_link") {
       const id = typeof body.user_id === "string" && UUID_RE.test(body.user_id) ? body.user_id : null;
       if (!id) return json({ ok: false, error: "invalid_user" }, 400);
-      const { data: p } = await supabase.from("user_profiles").select("email").eq("user_id", id).maybeSingle();
+      const { data: p } = await supabase.from("user_profiles").select("email, full_name").eq("user_id", id).maybeSingle();
       if (!p) return json({ ok: false, error: "no_such_user" }, 404);
       const link = await passwordLink(p.email);
+      await logAccount(me, "password_link", p);
       return json({ ok: true, kind: link.kind, token: link.token });
     }
 
@@ -133,6 +146,11 @@ Deno.serve(async (req: Request) => {
         // Deactivated: can't sign in either (and is refused by every function).
         await supabase.auth.admin.updateUserById(id, { ban_duration: body.active ? "none" : "876000h" });
       }
+      const changed: Record<string, unknown> = {};
+      if (typeof body.can_delete === "boolean") changed.can_delete = body.can_delete;
+      if (typeof body.role === "string") changed.role = body.role;
+      if (typeof body.active === "boolean") changed.active = body.active;
+      await logAccount(me, "access_changed", data.user, changed);
       return json(data);
     }
 
@@ -140,7 +158,7 @@ Deno.serve(async (req: Request) => {
       const id = typeof body.user_id === "string" && UUID_RE.test(body.user_id) ? body.user_id : null;
       if (!id) return json({ ok: false, error: "invalid_user" }, 400);
       if (id === me.user_id) return json({ ok: false, error: "cannot_remove_self" }, 400);
-      const { data: t } = await supabase.from("user_profiles").select("role, active").eq("user_id", id).maybeSingle();
+      const { data: t } = await supabase.from("user_profiles").select("role, active, email, full_name").eq("user_id", id).maybeSingle();
       if (!t) return json({ ok: false, error: "no_such_user" }, 404);
       if (t.role === "admin" && t.active) {
         const { count } = await supabase.from("user_profiles").select("user_id", { count: "exact", head: true }).eq("role", "admin").eq("active", true);
@@ -148,6 +166,7 @@ Deno.serve(async (req: Request) => {
       }
       const { error } = await supabase.auth.admin.deleteUser(id);
       if (error) throw error;
+      await logAccount(me, "removed", t);
       return json({ ok: true });
     }
 

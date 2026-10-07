@@ -913,6 +913,66 @@ nav button[hidden]{display:none}
 .um-status{font-size:12.5px; min-height:18px; margin-top:var(--space-3)}
 .um-status.err{color:var(--danger)}
 .um-scroll{overflow-x:auto}
+/* Activity timeline */
+.act-stats{display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:var(--space-3); margin:var(--space-4) 0}
+.act-stat{background:var(--panel); border-radius:var(--r-md); padding:var(--space-3) var(--space-4)}
+.act-stat span{display:block; font-size:12px; color:var(--text-muted)}
+.act-stat strong{font-family:var(--font-display); font-size:20px; color:var(--brand)}
+.act-filters{margin:var(--space-2) 0}
+.act-types{display:flex; flex-wrap:wrap; gap:6px; margin:var(--space-2) 0 var(--space-4)}
+.act-types button{min-height:36px; padding:0 14px; border-radius:var(--r-pill); border:1px solid var(--line); background:var(--white); font:inherit; font-size:12.5px; font-weight:600; color:var(--brand); cursor:pointer}
+.act-types button[aria-pressed="true"]{background:var(--brand); border-color:var(--brand); color:var(--white)}
+.act-day{display:flex; align-items:center; gap:var(--space-3); margin:var(--space-5) 0 var(--space-2); font-family:var(--font-display); font-weight:700; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; color:var(--brand)}
+.act-day::after{content:""; flex:1; height:1px; background:var(--line)}
+.act-list ol{list-style:none; margin:0; padding:0}
+.act-ev{display:grid; grid-template-columns:52px 34px minmax(0,1fr); column-gap:var(--space-3)}
+.act-time{padding-top:14px; text-align:right; font-size:12.5px; font-weight:600; color:var(--text-muted)}
+.act-rail{display:flex; flex-direction:column; align-items:center}
+.act-rail::before{content:""; width:2px; height:10px; background:var(--line)}
+.act-rail::after{content:""; width:2px; flex:1; background:var(--line)}
+.act-ev:first-child .act-rail::before{background:transparent}
+.act-dot{width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-size:11px; font-weight:700; background:var(--brand); color:var(--white); flex:none}
+.act-dot.none{background:var(--panel); color:var(--text-muted); border:1px dashed var(--line)}
+.act-card{margin:6px 0; border:1px solid var(--line-soft); border-radius:var(--r-md); padding:var(--space-3) var(--space-4); background:var(--white)}
+.act-card summary{cursor:pointer; list-style:none}
+.act-card summary::-webkit-details-marker{display:none}
+.act-line{display:flex; flex-wrap:wrap; align-items:center; gap:8px}
+.act-tag{font-size:10.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; padding:3px 9px; border-radius:var(--r-pill)}
+.act-tag.out{background:#E7EEF2; color:#0C4A63}
+.act-tag.in{background:#E3F2EA; color:#1F6B45}
+.act-tag.adj{background:#FBF0DC; color:#7A4F08}
+.act-tag.del{background:#FBECEB; color:#8A2B2B}
+.act-tag.acc{background:#EEE9F7; color:#4B3A78}
+.act-who{font-weight:600; color:var(--brand)}
+.act-who.none{font-weight:500; color:var(--text-muted); font-style:italic}
+.act-detail{font-size:12.5px; color:var(--text-muted); margin-top:3px}
+.act-items{margin-top:var(--space-3); font-size:12.5px; width:100%; border-collapse:collapse}
+.act-items td{padding:4px 8px; border-top:1px solid var(--line-soft)}
+.act-items td.num{text-align:right}
+/* Item timeline panel */
+#itemTimeline{margin:0 0 0 auto; height:100vh; max-height:100vh; width:min(520px, 100vw); max-width:100vw; border-radius:0; padding:0; display:none; flex-direction:column}
+#itemTimeline[open]{display:flex}
+.it-head{display:flex; justify-content:space-between; gap:var(--space-3); padding:var(--space-5) var(--space-5) var(--space-3)}
+.it-head h3{margin:2px 0 0; font-size:18px}
+.it-code{font-family:var(--font-mono); font-weight:700; color:var(--text-muted)}
+.it-close{width:40px; height:40px; padding:0; flex:none}
+.it-facts{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:var(--space-2); padding:0 var(--space-5)}
+.it-facts div{background:var(--panel); border-radius:var(--r-md); padding:var(--space-2) var(--space-3)}
+.it-facts span{display:block; font-size:11.5px; color:var(--text-muted)}
+.it-facts strong{font-family:var(--font-display); color:var(--brand)}
+.it-sub{padding:var(--space-3) var(--space-5); font-size:12.5px; color:var(--text-muted); border-bottom:1px solid var(--line)}
+.it-list{list-style:none; margin:0; padding:var(--space-3) var(--space-5); overflow:auto; flex:1}
+.it-step{display:grid; grid-template-columns:22px minmax(0,1fr); column-gap:var(--space-3)}
+.it-rail{display:flex; flex-direction:column; align-items:center}
+.it-rail::before{content:""; width:2px; height:10px; background:var(--line)}
+.it-rail::after{content:""; width:2px; flex:1; background:var(--line)}
+.it-step:first-child .it-rail::before{background:transparent}
+.it-dot{width:12px; height:12px; border-radius:50%; border:3px solid var(--brand); background:var(--white); flex:none}
+.it-body{padding:4px 0 14px}
+.it-chg{font-family:var(--font-mono); font-weight:700; font-size:14px; margin-right:6px}
+.it-chg.up{color:#1F6B45} .it-chg.down{color:var(--danger)}
+.it-meta{font-size:12px; color:var(--text-muted)}
+.it-foot{display:flex; justify-content:space-between; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-5); border-top:1px solid var(--line)}
 .um-log > summary{cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:var(--space-3)}
 .um-log > summary::-webkit-details-marker{display:none}
 .um-log > summary h2{display:inline; margin:0}
@@ -1013,6 +1073,7 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
         <button data-v="fp">Check-out (FP Pro)</button>
         <button data-v="checkin">Check-in</button>
         <button data-v="master-inventory">Master Inventory</button>
+        <button data-v="activity" id="navActivity">Activity</button>
         <button data-v="admin" id="navAdmin" hidden>User Management</button>
       </nav>
       <span class="who-box"><span class="who" id="whoami"></span><button id="signOut" type="button">Sign out</button></span>
@@ -1331,7 +1392,7 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
         <thead><tr>
           <th class="fp-photo-col"><span class="sr-only">Photo</span></th>
           <th>Code</th><th>Description</th><th class="num">Qty</th>
-          <th class="num">Unit cost</th><th class="num">Value</th><th>Status</th><th></th>
+          <th class="num">Unit cost</th><th class="num">Value</th><th>Status</th><th>Last change</th><th></th>
         </tr></thead>
         <tbody id="miItemsBody"></tbody>
       </table>
@@ -1367,6 +1428,44 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
         </tr></thead>
         <tbody id="miTxBody"></tbody>
       </table>
+    </div>
+  </div>
+</section>
+
+<!-- =========================== ACTIVITY (timeline) =========================== -->
+<section id="v-activity" class="view">
+  <div class="card">
+    <h2>Activity</h2>
+    <p class="lede">Who did what, and when — every Check-out, Check-in and stock adjustment<span id="actAdminNote" hidden>, plus deleted lines and account changes</span>, newest first.
+      Click an entry to see the items.</p>
+    <div class="act-stats" id="actStats"></div>
+    <div class="fp-jobrow act-filters">
+      <div class="fp-jobrow-field" style="flex:1; min-width:220px">
+        <label class="field-label" for="actSearch">Search</label>
+        <input id="actSearch" type="search" autocomplete="off" placeholder="Item code, job, client, invoice, supplier, file…">
+      </div>
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="actWho">Person</label>
+        <select id="actWho"><option value="">Everyone</option></select>
+      </div>
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="actFrom">From</label>
+        <input id="actFrom" type="date">
+      </div>
+      <div class="fp-jobrow-field">
+        <label class="field-label" for="actTo">To</label>
+        <input id="actTo" type="date">
+      </div>
+    </div>
+    <div class="act-types" role="group" aria-label="Type" id="actTypes"></div>
+    <div id="actList" class="act-list"><p class="small muted">Loading…</p></div>
+    <div class="fp-pager">
+      <span class="small muted" id="actInfo"></span>
+      <div class="fp-pager-controls">
+        <button class="ghost" id="actPrev" type="button">Prev</button>
+        <span class="small" id="actPage"></span>
+        <button class="ghost" id="actNext" type="button">Next</button>
+      </div>
     </div>
   </div>
 </section>
@@ -1459,6 +1558,21 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
 </section>
 
 </main>
+
+<!-- Item timeline (Master Inventory → Timeline): every change to one item. -->
+<dialog id="itemTimeline" aria-labelledby="itTitle">
+  <div class="it-head">
+    <div>
+      <div class="it-code" id="itCode"></div>
+      <h3 id="itTitle"></h3>
+    </div>
+    <button class="ghost it-close" type="button" id="itClose" aria-label="Close">✕</button>
+  </div>
+  <div class="it-facts" id="itFacts"></div>
+  <div class="it-sub" id="itLast"></div>
+  <ol class="it-list" id="itList"></ol>
+  <div class="it-foot"><span class="small muted" id="itInfo"></span><button class="ghost" type="button" id="itMore">Show older</button></div>
+</dialog>
 
 <!-- Delete confirmation, and the "no permission" message. -->
 <dialog id="delDialog" aria-labelledby="delTitle">

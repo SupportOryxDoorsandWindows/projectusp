@@ -73,7 +73,7 @@ async function requireStaff(req: Request) {
   if (!jwt) return null;
   const { data, error } = await supabase.auth.getUser(jwt);
   if (error || !data?.user) return null;
-  const { data: p } = await supabase.from("user_profiles").select("user_id, active").eq("user_id", data.user.id).maybeSingle();
+  const { data: p } = await supabase.from("user_profiles").select("user_id, active, email, full_name").eq("user_id", data.user.id).maybeSingle();
   return p && p.active ? p : null;
 }
 
@@ -87,9 +87,13 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return json({ ok: false, error: "method_not_allowed" }, 405);
   }
-  if (!(await requireStaff(req))) {
+  // The signed-in person is recorded on every movement (Activity timeline):
+  // the *_by wrapper stamps them, then runs the unchanged stock function.
+  const staff = await requireStaff(req);
+  if (!staff) {
     return json({ ok: false, error: "sign_in_required" }, 401);
   }
+  const actor = { p_actor_id: staff.user_id, p_actor_name: staff.full_name || staff.email, p_actor_email: staff.email };
 
   let body: any;
   try {
@@ -141,7 +145,8 @@ Deno.serve(async (req: Request) => {
     return json({ ok: false, error: "missing_exchange_rate" }, 400);
   }
 
-  const { data, error } = await supabase.rpc("checkin_transaction", {
+  const { data, error } = await supabase.rpc("checkin_transaction_by", {
+    ...actor,
     p_supplier: supplier ? String(supplier) : null,
     p_invoice_number: invoice_number ? String(invoice_number) : null,
     p_po_number: po_number ? String(po_number) : null,
