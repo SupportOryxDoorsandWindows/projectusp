@@ -1,5 +1,4 @@
-/* Activity timeline (tab "Activity") and item timelines (Master Inventory →
- * Timeline).
+/* Activity timeline (tab "Activity").
  *
  * Reads, never writes:
  *  - inventory_transactions: every Check-out / Check-in / stock adjustment
@@ -229,71 +228,5 @@
   $("#navActivity").addEventListener("click", () => { load(); });
   document.addEventListener("oryx-permissions", () => { if (loaded) load(); });
 
-  /* ------------------------------------------------------------ item timeline */
-  const STEP = 20;
-  let itItem = null, itRows = [], itShown = 0;
-
-  async function openItemTimeline(item) {
-    itItem = item; itRows = []; itShown = 0;
-    $("#itCode").textContent = item.item_code + (item.bar_length_mm ? ` · ${item.bar_length_mm} mm` : "");
-    $("#itTitle").textContent = item.description || "";
-    $("#itFacts").innerHTML = `<div><span>Stock</span><strong>${num(item.current_qty)}</strong></div>
-      <div><span>Unit cost</span><strong>${aed(item.unit_cost)}</strong></div>
-      <div><span>Value</span><strong>${aed(item.current_value)}</strong></div>`;
-    $("#itLast").textContent = "Loading…";
-    $("#itList").innerHTML = "";
-    $("#itMore").hidden = true;
-    $("#itInfo").textContent = "";
-    const dlg = $("#itemTimeline");
-    if (!dlg.open) dlg.showModal();
-    try {
-      const { data, error } = await sb.from("inventory_transactions")
-        .select("type, quantity, unit, value, job_number, client, supplier, invoice_number, po_number, source_document_name, created_at, performed_by_name")
-        .eq("item_id", item.id).order("created_at", { ascending: false }).limit(1000);
-      if (error) throw error;
-      // Stock after each change, worked back from today's stock.
-      let after = Number(item.current_qty) || 0;
-      itRows = data.map((t) => {
-        const delta = (t.type === "check_in" ? 1 : -1) * (Number(t.quantity) || 0);
-        const row = { ...t, delta, after };
-        after -= delta;
-        return row;
-      });
-      const last = itRows[0];
-      $("#itLast").innerHTML = last
-        ? `Last change by <b>${esc(last.performed_by_name || NOT_RECORDED)}</b>, ${esc(new Date(last.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}`
-        : "No changes recorded for this item yet.";
-      itShown = 0;
-      drawItemSteps();
-    } catch (e) {
-      $("#itLast").textContent = "Couldn't load the timeline: " + e.message;
-    }
-  }
-
-  function drawItemSteps() {
-    const next = itRows.slice(itShown, itShown + STEP);
-    itShown += next.length;
-    $("#itList").insertAdjacentHTML("beforeend", next.map((t) => {
-      const manual = isManual(t);
-      const ref = t.type === "check_in" ? (t.invoice_number || t.po_number || "") : (t.job_number || "");
-      const title = manual ? (/^Stock count:/i.test(ref) ? "Stock count" : t.type === "check_in" ? "Added by hand" : "Taken out by hand")
-        : t.type === "check_in" ? "Check-in" : "Check-out";
-      const detail = manual ? (ref ? `Reason: ${ref.replace(/^Stock count:\s*/i, "")}` : "")
-        : t.type === "check_in" ? [t.supplier, ref ? `Invoice ${ref}` : "", t.source_document_name].filter(Boolean).join(" · ")
-        : [ref ? `Job ${ref}` : "", t.client ? `Client ${t.client}` : "", t.source_document_name].filter(Boolean).join(" · ");
-      const when = new Date(t.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-      return `<li class="it-step"><span class="it-rail"><span class="it-dot"></span></span>
-        <div class="it-body"><div><span class="it-chg ${t.delta >= 0 ? "up" : "down"}">${t.delta >= 0 ? "+" : "−"}${num(Math.abs(t.delta))}</span><b>${esc(title)}</b></div>
-        ${detail ? `<div class="small">${esc(detail)}</div>` : ""}
-        <div class="it-meta">${esc(t.performed_by_name || NOT_RECORDED)} · ${esc(when)} · stock after: ${num(t.after)}</div></div></li>`;
-    }).join(""));
-    $("#itMore").hidden = itShown >= itRows.length;
-    $("#itInfo").textContent = itRows.length ? `Showing ${itShown} of ${itRows.length} changes` : "";
-  }
-
-  $("#itMore").addEventListener("click", drawItemSteps);
-  $("#itClose").addEventListener("click", () => $("#itemTimeline").close());
-  $("#itemTimeline").addEventListener("click", (e) => { if (e.target === $("#itemTimeline")) $("#itemTimeline").close(); });
-
-  window.ORYX_ACTIVITY = { openItemTimeline, reload: load };
+  window.ORYX_ACTIVITY = { reload: load };
 })();
