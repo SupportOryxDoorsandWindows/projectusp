@@ -337,4 +337,17 @@ assert.equal(pawNext.qty, 60);                       // 2 rolls × 30 m
 assert.equal(pawNext.invoiceUnitCost, 737.67 / 30);  // per metre
 assert.equal(pawNext.packageInfo.rollCount, 2);
 
+// Not in Master yet, but the roll length is known: shown in metres straight
+// away (still unmatched -- nothing is decided for the person).
+const pawFirst = buildCheckinRows([{ code: "", description: "Paw Lite Mesh 3m wide roll", unit: "", qty: 2, unitCost: 737.67 }], [], itemsMap(kitItems))[0];
+assert.equal(pawFirst.status, "unmatched");
+assert.equal(pawFirst.qty, 60);
+assert.equal(pawFirst.invoiceUnitCost, 737.67 / 30);
+assert.equal(pawFirst.packageInfo.rollCount, 2);
+assert.equal(pawFirst.packageInfo.rollUnitCost, 737.67);
+// An unknown roll length stays as the invoice says.
+const otherRoll = buildCheckinRows([{ code: "", description: "Some Mesh 3m wide roll", unit: "", qty: 2, unitCost: 100 }], [], itemsMap(kitItems))[0];
+assert.equal(otherRoll.qty, 2);
+assert.equal(otherRoll.packageInfo, null);
+
 console.log("check-in core-matching tests passed");
