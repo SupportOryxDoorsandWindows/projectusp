@@ -62,6 +62,19 @@ product lines — never treat one family's item as a match for another's:
   the preview only has to show it. `applyCombinedStock` totals every line of
   the same Master row so duplicates still show the shortage.
 
+## Checking a Check-in change (every time)
+
+- A fix made for one invoice must behave the same on ALL sample invoices.
+  After any Check-in change, run `tests/*.test.js` AND the browser sweep
+  `tests/browser/checkin-sweep.js --pdfs <folder> --libs <folder> --baseline
+  <file>` (usage at the top of the script). It reads every PDF, presses
+  "Use this item" on every Possible match, and captures what Confirm would
+  save (nothing is saved). Run it on the code before the change first
+  (`--update`), then after: every difference must be one the change meant
+  to make; explain each one to the user.
+- The supplier PDFs are NOT committed (public repo); they are the user's
+  uploads (Freedom AU quotes/PIs/order forms, Freedom India proforma).
+
 ## Item photos (Master Inventory)
 
 - One photo per item code (all bar lengths share it), in `assets/items/`
