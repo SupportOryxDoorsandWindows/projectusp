@@ -73,6 +73,12 @@ product lines — never treat one family's item as a match for another's:
   `admin_set_user_access()` (service_role; self/last-Admin guards). Edge
   Functions: `user-admin` (new), and `checkin`/`checkout` require an active
   staff account (`requireStaff`); sources in `supabase/functions/`.
+- Invite/reset links (`?invite=` / `?reset=`) sign the browser in BEFORE a
+  password exists: boot.js marks that (`oryx_password_pending` in
+  localStorage) and only shows "Set your password" until it's saved, and
+  asks first ("It's for me — continue" / "Stay signed in as me") when someone
+  else is already signed in on that browser. Admins can Remove a person
+  (`user-admin` `remove_user`: never yourself, never the last Admin).
 - Every Delete on Check-in/Check-out lines goes through `requestDelete`; never
   remove a line without it. Restore is open to all and only logged.
 - Testing from this sandbox: the egress proxy injects a privileged key into

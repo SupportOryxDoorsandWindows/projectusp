@@ -15,6 +15,7 @@
   const ERRORS = {
     last_admin: "This is the only Admin. Make someone else an Admin first.",
     cannot_remove_own_admin: "You can't remove your own Admin access or turn off your own account. Another Admin has to do that.",
+    cannot_remove_self: "You can't remove your own account. Another Admin has to do that.",
     not_admin: "Only an Admin can do this.",
     sign_in_required: "Your sign-in has expired. Sign in again.",
     invalid_email: "That email address doesn't look right.",
@@ -39,7 +40,7 @@
     const url = `${location.origin}${location.pathname}?${kind === "reset" ? "reset" : "invite"}=${encodeURIComponent(token)}`;
     $("#umLink").value = url;
     $("#umLinkBox").hidden = false;
-    status(`Send this link to ${who}. It works once, for about an hour. When they open it they set their own password.`);
+    status(`Send this link to ${who}. Don't open it yourself — it's for their account. It works once, for about an hour; when they open it they set their own password.`);
     $("#umLink").focus(); $("#umLink").select();
   }
 
@@ -59,7 +60,7 @@
           : `<label class="um-toggle"><input type="checkbox" data-set="can_delete" ${u.can_delete ? "checked" : ""} aria-label="Allow Delete for ${esc(u.full_name || u.email)}"> ${u.can_delete ? "On" : "Off"}</label>`}</td>
         <td class="c"><label class="um-toggle"${self ? ` title="You can't remove your own Admin access"` : ""}><input type="checkbox" data-set="role" ${isAdmin ? "checked" : ""} ${self ? "disabled" : ""} aria-label="Admin"></label></td>
         <td class="c"><label class="um-toggle"${self ? ` title="You can't turn off your own account"` : ""}><input type="checkbox" data-set="active" ${u.active ? "checked" : ""} ${self ? "disabled" : ""} aria-label="Active"></label></td>
-        <td><button class="ghost" type="button" data-link>New password link</button></td>
+        <td class="um-actions"><button class="ghost" type="button" data-link>New password link</button>${self ? "" : `<button class="ghost um-remove" type="button" data-remove>Remove</button>`}</td>
       </tr>`;
     }).join("") : `<tr><td colspan="9" class="muted">No accounts yet.</td></tr>`;
 
@@ -88,6 +89,22 @@
           box.disabled = false;
           status(e.message, true);
         }
+      };
+    });
+    $("#umRows").querySelectorAll("button[data-remove]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.closest("tr").dataset.id;
+        const u = users.find((x) => x.user_id === id);
+        const who = u.full_name || u.email;
+        if (!confirm(`Remove ${who}?\n\nTheir account (${u.email}) is deleted and they can't sign in any more. ` +
+          `Their name stays in the Delete log. You can invite the same email again later.`)) return;
+        btn.disabled = true;
+        try {
+          await call({ action: "remove_user", user_id: id });
+          $("#umLinkBox").hidden = true;
+          status(`${who} was removed.`);
+          await load();
+        } catch (e) { status(e.message, true); btn.disabled = false; }
       };
     });
     $("#umRows").querySelectorAll("button[data-link]").forEach((btn) => {
