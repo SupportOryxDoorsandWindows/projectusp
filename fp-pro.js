@@ -5431,10 +5431,10 @@
   }
 
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="9" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes, aliases, photos, lastChange] = await Promise.all([
+      const [itemsRes, txRes, aliases, photos] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
         // Fetched at line-item grain, then grouped back into one Check-out
         // per (job, client, timestamp) below -- Postgres's now() returns the
@@ -5443,43 +5443,16 @@
         sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(500),
         loadSupplierAliases(),
         loadItemPhotos(),
-        loadLastChangeByItem(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
-      renderMasterInventoryView(itemsRes.data, txRes.data, photos, lastChange);
+      renderMasterInventoryView(itemsRes.data, txRes.data, photos);
       renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="9" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
-  }
-
-  // "Last change" column: the newest movement of each item, and who made it
-  // (performed_by_name -- recorded since the Activity timeline was added).
-  async function loadLastChangeByItem() {
-    const last = new Map();
-    try {
-      const PAGE = 1000;
-      for (let from = 0; from < 20000; from += PAGE) {
-        const { data, error } = await sb.from("inventory_transactions")
-          .select("item_id, created_at, performed_by_name")
-          .order("created_at", { ascending: false }).range(from, from + PAGE - 1);
-        if (error) throw error;
-        for (const t of data) if (t.item_id && !last.has(t.item_id)) last.set(t.item_id, t);
-        if (data.length < PAGE) break;
-      }
-    } catch (e) { console.error("last change", e); }
-    return last;
-  }
-  function lastChangeCell(t) {
-    if (!t) return `<td class="small muted">—</td>`;
-    const when = new Date(t.created_at);
-    const today = new Date().toDateString() === when.toDateString();
-    const w = today ? when.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
-      : when.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-    return `<td class="small">${t.performed_by_name ? `<b>${esc(t.performed_by_name)}</b>` : `<span class="muted">Not recorded</span>`}<div class="muted">${esc(today ? "Today " + w : w)}</div></td>`;
   }
 
   // Remembered matches ("teach once, remember"): every saved link, newest
@@ -5652,8 +5625,7 @@
   let miCurrentItems = [];
   let miFilteredItems = [];
 
-  function renderMasterInventoryView(items, txs, photos, lastChange) {
-    lastChange = lastChange || new Map();
+  function renderMasterInventoryView(items, txs, photos) {
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
     const lowStock = items.filter((it) => it.buffer_level != null && it.current_qty <= it.buffer_level);
     $("#miTally").innerHTML = `
@@ -5691,20 +5663,12 @@
           <td class="num">${money(it.unit_cost)}</td>
           <td class="num">${money(it.current_value)}</td>
           <td>${low ? `<span class="fp-status-short">Low</span>` : it.current_qty <= 0 ? `<span class="fp-status-unmatched">Out</span>` : `<span class="fp-status-ok">OK</span>`}</td>
-          ${lastChangeCell(lastChange.get(it.id))}
-          <td style="white-space:nowrap"><button class="ghost" type="button" data-mi-timeline="${esc(it.id)}">Timeline</button>
-            <button class="ghost" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
+          <td><button class="ghost" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="9" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="8" class="small muted">No items match.</td></tr>`;
 
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-photo]")) {
         btn.onclick = () => openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap);
-      }
-      for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-timeline]")) {
-        btn.onclick = () => {
-          const item = pageItems.find((it) => String(it.id) === btn.dataset.miTimeline);
-          if (item && window.ORYX_ACTIVITY) window.ORYX_ACTIVITY.openItemTimeline(item);
-        };
       }
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-adjust]")) {
         btn.onclick = () => {

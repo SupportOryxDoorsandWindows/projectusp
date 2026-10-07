@@ -949,30 +949,6 @@ nav button[hidden]{display:none}
 .act-items{margin-top:var(--space-3); font-size:12.5px; width:100%; border-collapse:collapse}
 .act-items td{padding:4px 8px; border-top:1px solid var(--line-soft)}
 .act-items td.num{text-align:right}
-/* Item timeline panel */
-#itemTimeline{margin:0 0 0 auto; height:100vh; max-height:100vh; width:min(520px, 100vw); max-width:100vw; border-radius:0; padding:0; display:none; flex-direction:column}
-#itemTimeline[open]{display:flex}
-.it-head{display:flex; justify-content:space-between; gap:var(--space-3); padding:var(--space-5) var(--space-5) var(--space-3)}
-.it-head h3{margin:2px 0 0; font-size:18px}
-.it-code{font-family:var(--font-mono); font-weight:700; color:var(--text-muted)}
-.it-close{width:40px; height:40px; padding:0; flex:none}
-.it-facts{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:var(--space-2); padding:0 var(--space-5)}
-.it-facts div{background:var(--panel); border-radius:var(--r-md); padding:var(--space-2) var(--space-3)}
-.it-facts span{display:block; font-size:11.5px; color:var(--text-muted)}
-.it-facts strong{font-family:var(--font-display); color:var(--brand)}
-.it-sub{padding:var(--space-3) var(--space-5); font-size:12.5px; color:var(--text-muted); border-bottom:1px solid var(--line)}
-.it-list{list-style:none; margin:0; padding:var(--space-3) var(--space-5); overflow:auto; flex:1}
-.it-step{display:grid; grid-template-columns:22px minmax(0,1fr); column-gap:var(--space-3)}
-.it-rail{display:flex; flex-direction:column; align-items:center}
-.it-rail::before{content:""; width:2px; height:10px; background:var(--line)}
-.it-rail::after{content:""; width:2px; flex:1; background:var(--line)}
-.it-step:first-child .it-rail::before{background:transparent}
-.it-dot{width:12px; height:12px; border-radius:50%; border:3px solid var(--brand); background:var(--white); flex:none}
-.it-body{padding:4px 0 14px}
-.it-chg{font-family:var(--font-mono); font-weight:700; font-size:14px; margin-right:6px}
-.it-chg.up{color:#1F6B45} .it-chg.down{color:var(--danger)}
-.it-meta{font-size:12px; color:var(--text-muted)}
-.it-foot{display:flex; justify-content:space-between; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-5); border-top:1px solid var(--line)}
 .um-log > summary{cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:var(--space-3)}
 .um-log > summary::-webkit-details-marker{display:none}
 .um-log > summary h2{display:inline; margin:0}
@@ -1392,7 +1368,7 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
         <thead><tr>
           <th class="fp-photo-col"><span class="sr-only">Photo</span></th>
           <th>Code</th><th>Description</th><th class="num">Qty</th>
-          <th class="num">Unit cost</th><th class="num">Value</th><th>Status</th><th>Last change</th><th></th>
+          <th class="num">Unit cost</th><th class="num">Value</th><th>Status</th><th></th>
         </tr></thead>
         <tbody id="miItemsBody"></tbody>
       </table>
@@ -1558,21 +1534,6 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
 </section>
 
 </main>
-
-<!-- Item timeline (Master Inventory → Timeline): every change to one item. -->
-<dialog id="itemTimeline" aria-labelledby="itTitle">
-  <div class="it-head">
-    <div>
-      <div class="it-code" id="itCode"></div>
-      <h3 id="itTitle"></h3>
-    </div>
-    <button class="ghost it-close" type="button" id="itClose" aria-label="Close">✕</button>
-  </div>
-  <div class="it-facts" id="itFacts"></div>
-  <div class="it-sub" id="itLast"></div>
-  <ol class="it-list" id="itList"></ol>
-  <div class="it-foot"><span class="small muted" id="itInfo"></span><button class="ghost" type="button" id="itMore">Show older</button></div>
-</dialog>
 
 <!-- Delete confirmation, and the "no permission" message. -->
 <dialog id="delDialog" aria-labelledby="delTitle">

@@ -79,8 +79,8 @@ product lines — never treat one family's item as a match for another's:
   asks first ("It's for me — continue" / "Stay signed in as me") when someone
   else is already signed in on that browser. Admins can Remove a person
   (`user-admin` `remove_user`: never yourself, never the last Admin).
-- Activity timeline (`activity.js`, tab "Activity"; Master Inventory "Last
-  change" column + Timeline panel): who did each movement is
+- Activity timeline (`activity.js`, tab "Activity"; the user didn't want a
+  per-item "Last change"/Timeline in Master Inventory): who did each movement is
   `inventory_transactions.performed_by(_name/_email)`, stamped by trigger
   `stamp_transaction_actor` from a transaction-local setting that the
   `checkin_transaction_by` / `checkout_transaction_by` wrappers (service_role)
