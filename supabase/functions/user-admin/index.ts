@@ -17,6 +17,9 @@
 //       remove their own Admin access or deactivate themselves, and the last
 //       active Admin can't be removed. A deactivated account is also blocked
 //       from signing in.
+//   {action: "remove_user", user_id}                   Admin only. Deletes the
+//       account (it can't sign in; the profile goes with it). Never yourself,
+//       never the last active Admin. The delete log keeps their name/email.
 //   {action: "bootstrap", token}                       Creates the FIRST Admin
 //       from a one-time token placed in admin_bootstrap_tokens (SQL editor /
 //       service role only). The token is deleted when used.
@@ -131,6 +134,21 @@ Deno.serve(async (req: Request) => {
         await supabase.auth.admin.updateUserById(id, { ban_duration: body.active ? "none" : "876000h" });
       }
       return json(data);
+    }
+
+    if (action === "remove_user") {
+      const id = typeof body.user_id === "string" && UUID_RE.test(body.user_id) ? body.user_id : null;
+      if (!id) return json({ ok: false, error: "invalid_user" }, 400);
+      if (id === me.user_id) return json({ ok: false, error: "cannot_remove_self" }, 400);
+      const { data: t } = await supabase.from("user_profiles").select("role, active").eq("user_id", id).maybeSingle();
+      if (!t) return json({ ok: false, error: "no_such_user" }, 404);
+      if (t.role === "admin" && t.active) {
+        const { count } = await supabase.from("user_profiles").select("user_id", { count: "exact", head: true }).eq("role", "admin").eq("active", true);
+        if ((count ?? 0) <= 1) return json({ ok: false, error: "last_admin" }, 400);
+      }
+      const { error } = await supabase.auth.admin.deleteUser(id);
+      if (error) throw error;
+      return json({ ok: true });
     }
 
     return json({ ok: false, error: "unknown_action" }, 400);

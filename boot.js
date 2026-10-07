@@ -254,7 +254,9 @@
     $("#gate").hidden = false;
     $("#gateForm").hidden = mode !== "signin";
     $("#gateSetForm").hidden = mode !== "set";
-    $("#gateSub").textContent = mode === "set" ? "Set your password" : "Oryx staff sign-in";
+    $("#gateLinkWarn").hidden = mode !== "linkwarn";
+    $("#gateFoot").hidden = mode === "linkwarn";
+    $("#gateSub").textContent = mode === "set" ? "Set your password" : mode === "linkwarn" ? "Password link" : "Oryx staff sign-in";
     if (mode === "signin") $("#gateEmail").focus();
     if (mode === "set") $("#gateNewPassword").focus();
   }
@@ -295,6 +297,21 @@
     }
   } else {
     $("#gateFoot").hidden = true;
+  }
+
+  // An invite/reset link signs the browser in BEFORE a password exists. Until
+  // the password is saved, that session may only set the password -- a
+  // reload must not open the app (remembered per browser, cleared on save).
+  const PENDING_KEY = "oryx_password_pending";
+  const pending = {
+    get() { try { return localStorage.getItem(PENDING_KEY); } catch (e) { return null; } },
+    set(id) { try { localStorage.setItem(PENDING_KEY, id); } catch (e) {} },
+    clear() { try { localStorage.removeItem(PENDING_KEY); } catch (e) {} },
+  };
+  function askForPassword(user) {
+    $("#gateNewEmail").value = user.email || "";
+    showGate("set");
+    gateStatus("Choose a password to finish setting up this account.");
   }
 
   let started = false;
@@ -343,37 +360,58 @@
     gateStatus("Saving…");
     const { data, error } = await sb.auth.updateUser({ password: a });
     if (error) return gateStatus(error.message, true);
+    pending.clear();
     $("#gateNewPassword").value = $("#gateNewPassword2").value = "";
     gateStatus("");
     enter(data.user);
   });
 
   document.addEventListener("click", (e) => {
-    if (e.target && e.target.id === "signOut") sb.auth.signOut().then(() => location.reload());
+    if (e.target && e.target.id === "signOut") { pending.clear(); sb.auth.signOut().then(() => location.reload()); }
   });
 
   (async () => {
     // An invite or reset link from an Admin: ?invite=<token> / ?reset=<token>.
     const params = new URLSearchParams(location.search);
     const linkToken = params.get("invite") || params.get("reset");
+    const linkType = params.get("invite") ? "invite" : "recovery";
+    const { data: current } = await sb.auth.getSession();
     if (linkToken) {
       history.replaceState(null, "", location.pathname + location.hash);
-      await sb.auth.signOut().catch(() => {});
-      showGate("set");
-      gateStatus("Checking your link…");
-      const { data, error } = await sb.auth.verifyOtp({ token_hash: linkToken, type: params.get("invite") ? "invite" : "recovery" });
-      if (error || !data || !data.user) {
-        showGate("signin");
-        gateStatus("This link has expired or was already used. Ask an Admin for a new one.", true);
+      const useLink = async () => {
+        await sb.auth.signOut().catch(() => {});
+        pending.clear();
+        showGate("set");
+        gateStatus("Checking your link…");
+        const { data, error } = await sb.auth.verifyOtp({ token_hash: linkToken, type: linkType });
+        if (error || !data || !data.user) {
+          showGate("signin");
+          gateStatus("This link has expired or was already used. Ask an Admin for a new one.", true);
+          return;
+        }
+        pending.set(data.user.id);
+        askForPassword(data.user);
+      };
+      // Someone is already signed in on this browser (e.g. an Admin testing
+      // the link they're about to send): don't switch accounts silently.
+      if (current.session && pending.get() !== current.session.user.id) {
+        $("#gateLinkCurrent").textContent = current.session.user.email || "another account";
+        showGate("linkwarn");
+        gateStatus("");
+        $("#gateLinkContinue").onclick = useLink;
+        $("#gateLinkCancel").onclick = () => enter(current.session.user);
         return;
       }
-      $("#gateNewEmail").value = data.user.email || "";
-      gateStatus("");
+      await useLink();
+      return;
+    }
+    // Signed in from a link but the password was never set: finish that first.
+    if (current.session && pending.get() === current.session.user.id) {
+      askForPassword(current.session.user);
       return;
     }
     // Resume an existing session so a reload doesn't ask again.
-    const { data } = await sb.auth.getSession();
-    if (data.session) enter(data.session.user);
+    if (current.session) enter(current.session.user);
     else showGate("signin");
   })();
 })();
