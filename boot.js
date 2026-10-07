@@ -259,13 +259,11 @@
     if (mode === "set") $("#gateNewPassword").focus();
   }
 
-  // "Contact an Admin": a new email to the Admin in config.js, with the
+  // "Get help signing in": a new email to the Admin in config.js, with the
   // person's email (if typed) already in the message. Outlook on the web
-  // (new tab) when outlookWeb is set; "Use my email app" = mailto (desktop
-  // Outlook or whatever the computer's mail app is).
+  // (new tab) when outlookWeb is set, otherwise the computer's mail app.
   const contact = CFG.adminContact || {};
   if (contact.email) {
-    $("#gateContactWho").textContent = `${contact.name ? contact.name + " · " : ""}${contact.email}`;
     const message = () => {
       const mine = ($("#gateEmail").value || $("#gateNewEmail").value || "").trim();
       return {
@@ -294,9 +292,7 @@
     } else {
       btn.removeAttribute("target");
       btn.addEventListener("click", (e) => { e.preventDefault(); location.href = mailtoUrl(); });
-      $("#gateContactAlt").hidden = true;
     }
-    $("#gateContactApp").addEventListener("click", (e) => { e.preventDefault(); location.href = mailtoUrl(); });
   } else {
     $("#gateFoot").hidden = true;
   }
