@@ -864,6 +864,7 @@ dialog::backdrop{background:rgba(2,42,58,0.55)}
 }
 .gate-contact:hover{background:var(--brand); color:var(--white)}
 .gate-contact-who{margin:var(--space-2) 0 0; font-size:11.5px; color:var(--text-muted-light)}
+.gate-contact-who a{color:var(--text-muted)}
 .who-box{display:flex; align-items:center; gap:var(--space-3)}
 .who{font-family:var(--font-display); font-weight:500; font-size:11px; letter-spacing:0.04em; color:var(--silver)}
 #signOut{
@@ -951,8 +952,9 @@ nav button[hidden]{display:none}
     <div id="gateStatus" role="status" aria-live="polite"></div>
     <div class="gate-foot" id="gateFoot">
       <p class="gate-help">No account yet, or forgot your password?</p>
-      <a class="gate-contact" id="gateContact" href="#">Contact an Admin</a>
-      <p class="gate-contact-who" id="gateContactWho"></p>
+      <a class="gate-contact" id="gateContact" href="#" target="_blank" rel="noopener">Contact an Admin</a>
+      <p class="gate-contact-who"><span id="gateContactWho"></span>
+        <span id="gateContactAlt"> · <a href="#" id="gateContactApp">Use my email app</a></span></p>
     </div>
   </div>
 </div>
@@ -1428,10 +1430,10 @@ nav button[hidden]{display:none}
 </div><!-- /#appShell -->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="config.js?v=3"></script>
+<script src="config.js?v=4"></script>
 <!-- boot.js loads the knowledge base from Supabase, then loads app.js and
      fp-pro.js. Bump ?v= when config.js or boot.js change so browsers
      fetch the new file. -->
-<script src="boot.js?v=6"></script>
+<script src="boot.js?v=7"></script>
 </body>
 </html>
