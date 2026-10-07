@@ -5845,7 +5845,7 @@
       styledCells.push([partyRow, 0, STYLE_LABEL]);
 
       const refRow = aoa.length;
-      aoa.push([`${isCheckin ? "Check-in" : "Job"} ${g.reference || "—"}`]);
+      aoa.push([`${isCheckin ? "Check-in" : "Check-out"} · Order Number ${g.reference || "—"}`]);
       styledCells.push([refRow, 0, STYLE_LABEL]);
 
       const summaryRow = aoa.length;
@@ -5880,6 +5880,66 @@
       const addr = window.XLSX.utils.encode_cell({ r, c });
       if (!ws[addr]) ws[addr] = { t: "s", v: "" };
       ws[addr].s = style;
+    }
+    return ws;
+  }
+
+  // "Report" export: one row per transaction (the same groups as the
+  // Transaction History table) with its total value -- no item lines. For
+  // management; the "Detailed transactions" export above keeps the items.
+  const SUMMARY_COLS = ["Date", "Type", "Order Number", "Client / Supplier", "Total Value"];
+
+  function buildSummarySheet(groups) {
+    const n = SUMMARY_COLS.length;
+    const aoa = [
+      ["Oryx Doors & Windows — Transaction Report"],
+      [`Generated ${todayISO()}`],
+      [],
+      SUMMARY_COLS,
+    ];
+    const firstDataRow = aoa.length;
+    const totals = { check_out: [0, 0], check_in: [0, 0] };
+    // Newest transaction first, matching the Transaction History view.
+    for (const g of [...groups].reverse()) {
+      const isCheckin = g.type === "check_in";
+      aoa.push([
+        String(g.created_at).slice(0, 16).replace("T", " "),
+        isCheckin ? "Check-in" : "Check-out",
+        g.reference || "—",
+        g.party || "—",
+        Math.round(g.totalValue * 100) / 100,
+      ]);
+      const t = totals[isCheckin ? "check_in" : "check_out"];
+      t[0] += 1;
+      t[1] += g.totalValue;
+    }
+    const lastDataRow = aoa.length - 1;
+    aoa.push([]);
+    const totalRows = [];
+    for (const [type, label] of [["check_out", "Check-out"], ["check_in", "Check-in"]]) {
+      const [count, value] = totals[type];
+      totalRows.push(aoa.length);
+      aoa.push(["", `${label} total`, `${count} transaction${count === 1 ? "" : "s"}`, "", Math.round(value * 100) / 100]);
+    }
+
+    const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: n - 1 } }];
+    ws["!cols"] = [{ wch: 18 }, { wch: 16 }, { wch: 24 }, { wch: 40 }, { wch: 18 }];
+    ws["!rows"] = [{ hpt: 22 }];
+    ws["!autofilter"] = { ref: window.XLSX.utils.encode_range({ s: { r: firstDataRow - 1, c: 0 }, e: { r: lastDataRow, c: n - 1 } }) };
+    const cell = (r, c) => {
+      const addr = window.XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) ws[addr] = { t: "s", v: "" };
+      return ws[addr];
+    };
+    cell(0, 0).s = STYLE_TITLE;
+    cell(1, 0).s = { font: { italic: true } };
+    for (let c = 0; c < n; c++) cell(firstDataRow - 1, c).s = STYLE_HEADER;
+    for (let r = firstDataRow; r <= lastDataRow; r++) cell(r, 4).z = '"AED" #,##0.00';
+    for (const r of totalRows) {
+      cell(r, 1).s = STYLE_LABEL;
+      cell(r, 4).z = '"AED" #,##0.00';
+      cell(r, 4).s = STYLE_LABEL;
     }
     return ws;
   }
@@ -5970,14 +6030,17 @@
     }
   }
 
-  async function exportCheckoutReport() {
-    const btn = $("#miExportBtn");
+  // kind "detailed": every transaction with its item lines (the original
+  // export). kind "report": one summary row per transaction, no items.
+  async function exportCheckoutReport(kind) {
+    const isReport = kind === "report";
+    const btns = [$("#miExportBtn"), $("#miReportBtn")].filter(Boolean);
     const setStatus = (text, kind) => {
       const el = $("#miExportStatus");
       el.textContent = text || "";
       el.style.color = kind === "err" ? "var(--danger)" : "";
     };
-    btn.disabled = true;
+    btns.forEach((b) => { b.disabled = true; });
     setStatus("Fetching every Check-out and Check-in transaction…");
     try {
       const [txs] = await Promise.all([fetchAllTransactions(), loadXlsxLib()]);
@@ -5986,17 +6049,21 @@
         return;
       }
       const groups = groupTransactions(txs);
-      const ws = buildReportSheet(groups);
+      const ws = isReport ? buildSummarySheet(groups) : buildReportSheet(groups);
       const wb = window.XLSX.utils.book_new();
-      window.XLSX.utils.book_append_sheet(wb, ws, "Transactions");
-      const outName = `Oryx Transaction Report - ${todayISO()}.xlsx`;
+      window.XLSX.utils.book_append_sheet(wb, ws, isReport ? "Report" : "Transactions");
+      const outName = isReport
+        ? `Oryx Transaction Summary - ${todayISO()}.xlsx`
+        : `Oryx Transaction Report - ${todayISO()}.xlsx`;
       window.XLSX.writeFile(wb, outName);
-      setStatus(`Exported ${groups.length} transaction${groups.length === 1 ? "" : "s"} (${txs.length} items) as ${outName}.`);
+      setStatus(isReport
+        ? `Exported a report of ${groups.length} transaction${groups.length === 1 ? "" : "s"} as ${outName}.`
+        : `Exported ${groups.length} transaction${groups.length === 1 ? "" : "s"} (${txs.length} items) as ${outName}.`);
     } catch (err) {
       console.error(err);
       setStatus("Could not export: " + err.message, "err");
     } finally {
-      btn.disabled = false;
+      btns.forEach((b) => { b.disabled = false; });
     }
   }
 
@@ -6035,7 +6102,9 @@
     const miNavBtn = document.querySelector('nav button[data-v="master-inventory"]');
     if (miNavBtn) miNavBtn.addEventListener("click", loadMasterInventoryView);
     const exportBtn = $("#miExportBtn");
-    if (exportBtn) exportBtn.addEventListener("click", exportCheckoutReport);
+    if (exportBtn) exportBtn.addEventListener("click", () => exportCheckoutReport("detailed"));
+    const reportBtn = $("#miReportBtn");
+    if (reportBtn) reportBtn.addEventListener("click", () => exportCheckoutReport("report"));
     const extractBtn = $("#miExtractBtn");
     if (extractBtn) extractBtn.addEventListener("click", exportInventoryList);
 
