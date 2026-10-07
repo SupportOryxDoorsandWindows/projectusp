@@ -326,4 +326,15 @@ assert.equal(kitRow("230034", "SMB1 Slide Lock WHT").suggestedItem.code, "230032
 assert.equal(kitRow("23003", "Something").suggestedItem, null);          // part of a code is not a code
 assert.equal(kitRow("230032", "SMB1 Slide Bolt WHT").itemId, "bolt-wht"); // own code still matches exactly
 
+// A roll item created as a New item gets its length in the name ("(30M)"),
+// so the next invoice for it converts rolls to metres by itself.
+const pawItems = [{ id: "paw", item_code: "PAWLITE", description: "Paw Lite Mesh 3m wide roll (30M)", current_qty: 60, unit_of_measure: "m", unit_cost: 60 }];
+const pawAliases = buildAliasIndex([{ supplier: "Freedom", supplier_key: "freedom screens australia", match_kind: "description",
+  match_key: aliasDescriptionKey("Paw Lite Mesh 3m wide roll"), item_id: "paw", times_confirmed: 1 }]);
+const pawNext = buildCheckinRows([{ code: "", description: "Paw Lite Mesh 3m wide roll", unit: "", qty: 2, unitCost: 737.67 }], [], itemsMap(pawItems), pawAliases, "Freedom Screens of Australia")[0];
+assert.equal(pawNext.status, "ok");                 // "3m wide" is a width, not a clashing 3 m length
+assert.equal(pawNext.qty, 60);                       // 2 rolls × 30 m
+assert.equal(pawNext.invoiceUnitCost, 737.67 / 30);  // per metre
+assert.equal(pawNext.packageInfo.rollCount, 2);
+
 console.log("check-in core-matching tests passed");

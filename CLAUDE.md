@@ -38,6 +38,12 @@ product lines — never treat one family's item as a match for another's:
   Edit and "Use this item" start from the invoice's own roll count and
   per-roll price (`ciInvoiceQty`, `packageInfo.rollUnitCost`), so editing a
   converted row never converts it twice (250 m must not become 250 rolls).
+- "3m wide" is a width, never a roll length (`withoutWidths`). A roll line
+  with no stated length that becomes a **New item** gets a "Metres per roll"
+  box (prefilled from `KNOWN_ROLL_LENGTHS_M`: Paw Lite = 30 m, per the stock
+  team; Paw Lite is NOT the same item as PET MESH). Filled in, the stock is
+  kept in metres (2 rolls × 30 m = 60 m, price ÷ 30 per metre) and "(30M)"
+  is added to the new item's name so later invoices convert by themselves.
 - Master sometimes keeps two supplier parts as one item, with the second
   code inside the name: 230031 "SMB1 Slide Bolt BLK-230033-SMB1 Slide Lock
   BLK", 230032 "…WHT-230034-…". An invoice line coded 230033/230034 is only
