@@ -229,6 +229,10 @@
       const a = document.createElement("script");
       a.src = "admin.js?v=" + Date.now();
       document.body.appendChild(a);
+      // Activity timeline + item timelines (everyone).
+      const t = document.createElement("script");
+      t.src = "activity.js?v=" + Date.now();
+      document.body.appendChild(t);
     };
     s.onerror = () => fail("Could not load app.js.");
     document.body.appendChild(s);

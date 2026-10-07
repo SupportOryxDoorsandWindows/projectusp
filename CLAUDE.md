@@ -79,6 +79,15 @@ product lines — never treat one family's item as a match for another's:
   asks first ("It's for me — continue" / "Stay signed in as me") when someone
   else is already signed in on that browser. Admins can Remove a person
   (`user-admin` `remove_user`: never yourself, never the last Admin).
+- Activity timeline (`activity.js`, tab "Activity"; Master Inventory "Last
+  change" column + Timeline panel): who did each movement is
+  `inventory_transactions.performed_by(_name/_email)`, stamped by trigger
+  `stamp_transaction_actor` from a transaction-local setting that the
+  `checkin_transaction_by` / `checkout_transaction_by` wrappers (service_role)
+  set before calling the UNCHANGED stock functions; the Edge Functions call
+  the wrappers with the signed-in person. Rows before 2026-10-07 have no name
+  ("Not recorded"). Account changes go to `account_activity_log` (written by
+  `user-admin`, Admin-only read); deleted lines come from `delete_audit_log`.
 - Every Delete on Check-in/Check-out lines goes through `requestDelete`; never
   remove a line without it. Restore is open to all and only logged.
 - Testing from this sandbox: the egress proxy injects a privileged key into
