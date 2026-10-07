@@ -44,6 +44,10 @@ product lines — never treat one family's item as a match for another's:
   team; Paw Lite is NOT the same item as PET MESH). Filled in, the stock is
   kept in metres (2 rolls × 30 m = 60 m, price ÷ 30 per metre) and "(30M)"
   is added to the new item's name so later invoices convert by themselves.
+  An UNMATCHED roll line whose length is known (stated, or in
+  `KNOWN_ROLL_LENGTHS_M`) is already shown in metres when the file is read
+  (still unmatched; Edit / Use this item / New item restart from the kept
+  roll count and per-roll price).
 - Master sometimes keeps two supplier parts as one item, with the second
   code inside the name: 230031 "SMB1 Slide Bolt BLK-230033-SMB1 Slide Lock
   BLK", 230032 "…WHT-230034-…". An invoice line coded 230033/230034 is only
