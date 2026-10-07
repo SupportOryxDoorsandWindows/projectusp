@@ -437,6 +437,27 @@
     const rl = t.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${METRE_UNIT}\\s+rolls?\\b`, "i"));
     return rl ? parseFloat(rl[1]) : null;
   }
+  // "3m wide" is a width, never a length -- removed before any length
+  // token is read from a line ("Paw Lite Mesh 3m wide roll" is not a 3 m roll).
+  function withoutWidths(text) {
+    return String(text || "").replace(new RegExp(`\\d+(?:\\.\\d+)?\\s*${METRE_UNIT}\\s+wide\\b`, "gi"), " ");
+  }
+  // Roll lengths the supplier doesn't print but the stock team confirmed.
+  // Only ever a prefilled, editable value in the New item form -- never
+  // applied without a person seeing it.
+  const KNOWN_ROLL_LENGTHS_M = [
+    { re: /\bpaw\s*-?\s*lite\b/i, metres: 30 }, // Paw Lite Mesh: "usually 30m" (Oct 2026)
+  ];
+  function knownRollLengthM(text) {
+    const hit = KNOWN_ROLL_LENGTHS_M.find((k) => k.re.test(String(text || "")));
+    return hit ? hit.metres : null;
+  }
+  // A line the supplier counts in rolls whose length isn't converted yet.
+  function ciIsUnconvertedRollLine(r) {
+    if (r.packageInfo) return false;
+    return /\b(rolls?|coils?|reels?)\b/i.test(`${r.unit || ""} ${r.description || ""} ${(r.source && r.source.description) || ""}`);
+  }
+
   // Width: the first figure of feet "9' x 100'", or "3m wide"; on a Master
   // description, a metre figure OUTSIDE brackets ("Patio Mesh 2.7m (30M)").
   function invoiceWidthM(text) {
@@ -3291,7 +3312,7 @@
       // Only flag when BOTH sides state one and they disagree -- this
       // can't misfire on the common case where neither side claims a
       // length at all.
-      const invoiceLen = parseLengthToken(`${l.unit || ""} ${pdfDescription || ""}`);
+      const invoiceLen = parseLengthToken(withoutWidths(`${l.unit || ""} ${pdfDescription || ""}`));
       const masterLen = parseBundleLengthM(item.description);
       if (invoiceLen != null && masterLen != null && invoiceLen !== masterLen) {
         rows.push({
@@ -3455,7 +3476,7 @@
     // lost: 8 rolls of 25 m are 200 m, not 8 x Master's 200 m roll.
     const invoiceText = `${newUnit || ""} ${newDescription || ""} ${(row.source && row.source.description) || ""}`;
     const statedRollM = invoiceRollLengthM(invoiceText);
-    const editedInvoiceLen = statedRollM != null ? statedRollM : parseLengthToken(`${newUnit || ""} ${newDescription || ""}`);
+    const editedInvoiceLen = statedRollM != null ? statedRollM : parseLengthToken(withoutWidths(`${newUnit || ""} ${newDescription || ""}`));
     if (bundleLenM != null && (editedInvoiceLen == null || editedInvoiceLen === bundleLenM || statedRollM != null)) {
       const perRollM = statedRollM != null ? statedRollM : bundleLenM;
       const rollCount = invoiceQty;
@@ -3827,6 +3848,11 @@
       // is just clearing the decision, same as any other row reset.
       r.status = "unmatched"; r.action = "pending"; r.decided = false;
       r.current = null; r.newQty = null; r.newItemData = null;
+      if (r.beforeNewItem) {
+        Object.assign(r, r.beforeNewItem);
+        r.beforeNewItem = null;
+        r.packageInfo = null;
+      }
       // A code typed into the New item form (the document had none) was
       // never the document's own -- put the row back exactly as it was read.
       if (r.typedNewCode) { r.code = ""; r.typedNewCode = false; }
@@ -3881,17 +3907,39 @@
         return;
       }
 
+      const rollEl = document.getElementById(`ciNewRollM${idx}`);
+      const rollM = rollEl && rollEl.value.trim() ? parseFloat(rollEl.value) : null;
+      if (rollM != null && !(isFinite(rollM) && rollM > 0)) {
+        ciStatus("Metres per roll must be a number greater than zero, or left blank.", "err");
+        return;
+      }
+
+      // Kept so Undo puts the row back exactly as read.
+      r.beforeNewItem = { qty: r.qty, unit: r.unit, invoiceUnitCost: r.invoiceUnitCost, description: r.description };
       if (typedCode) { r.code = code; r.typedNewCode = true; }
-      r.description = description;
-      r.unit = unit;
-      r.invoiceUnitCost = cost;
+      if (rollM != null) {
+        // 2 rolls × 30 m = 60 m at (price per roll ÷ 30) per metre. The
+        // length goes into the Master name too -- "(30M)", like Patio Mesh --
+        // so the next invoice for this item converts by itself.
+        const rollCount = r.qty;
+        r.qty = Math.round(rollCount * rollM * 100) / 100;
+        r.unit = "m";
+        r.invoiceUnitCost = cost / rollM;
+        r.packageInfo = { type: "Roll", qtyPerPackage: rollM, unit: "m", rollCount, rollUnitCost: cost };
+        r.description = parseBundleLengthM(description) == null ? `${description} (${rollM}M)` : description;
+        r.newItemData = { code: r.code, description: r.description, category: category || null, unit: "m", bufferLevel: buffer, approvedBy: approver };
+      } else {
+        r.description = description;
+        r.unit = unit;
+        r.invoiceUnitCost = cost;
+      }
       r.current = null;
       r.newQty = r.qty;
       r.status = "new";
       r.action = "create-new";
       r.decided = true;
       r.creatingNew = false;
-      r.newItemData = { code: r.code, description, category: category || null, unit, bufferLevel: buffer, approvedBy: approver };
+      if (rollM == null) r.newItemData = { code: r.code, description, category: category || null, unit, bufferLevel: buffer, approvedBy: approver };
       r.personResolved = true;
     }
     ciRender();
@@ -4111,6 +4159,17 @@
     const rowsHtml = ciState.rows.map((r, i) => {
       if (r.creatingNew) {
         const suggestions = findSimilarMasterInventoryItems(r, ciState.itemsByCode);
+        // Counted in rolls on the invoice: the stock is kept in metres, so ask
+        // for one roll's length (prefilled when the invoice or the stock team
+        // states it) and show what it works out to.
+        const rollLine = ciIsUnconvertedRollLine(r);
+        const rollText = `${r.description || ""} ${(r.source && r.source.description) || ""}`;
+        const rollM = rollLine ? (invoiceRollLengthM(rollText) || knownRollLengthM(rollText)) : null;
+        const rollHint = (m) => m > 0
+          ? `${fmt(r.qty)} roll${r.qty === 1 ? "" : "s"} × ${fmt(m)} m = ${fmt(Math.round(r.qty * m * 100) / 100)} m` +
+            (r.invoiceUnitCost != null ? ` at ${curLabel} ${(Math.round(r.invoiceUnitCost / m * 10000) / 10000)}/m` : "") +
+            ". Stock is kept in metres. Leave blank to count whole rolls instead."
+          : "Enter one roll's length to keep the stock in metres, or leave blank to count whole rolls.";
         const warn = suggestions.length ? `
           <div class="fp-newitem-warn">
             <strong>Possible existing matches — check before creating a new item:</strong>
@@ -4135,10 +4194,13 @@
                 <div class="field"><label>Category</label>
                   <select id="ciNewCategory${i}"><option value="">Select…</option><option>Accessory</option><option>Profile</option><option>Hardware</option></select>
                 </div>
-                <div class="field"><label>Unit of measure</label><input id="ciNewUnit${i}" value="${esc(r.unit || "pcs")}"></div>
-                <div class="field"><label>Opening quantity</label><input value="${fmt(r.qty)}" readonly>
-                  <span class="hint">= the Check-in quantity for this line.</span></div>
-                <div class="field"><label>Unit cost (${esc(curLabel)})</label>
+                ${rollLine ? `<div class="field full fp-newitem-roll"><label for="ciNewRollM${i}">Metres per roll</label>
+                  <input id="ciNewRollM${i}" type="number" step="any" min="0" value="${rollM != null ? rollM : ""}" placeholder="e.g. 30">
+                  <span class="hint" id="ciNewRollHint${i}">${esc(rollHint(rollM))}</span></div>` : ""}
+                <div class="field"><label>Unit of measure</label><input id="ciNewUnit${i}" value="${esc(rollLine && rollM != null ? "m" : (r.unit || "pcs"))}"></div>
+                <div class="field"><label>Opening quantity</label><input value="${fmt(r.qty)}${rollLine ? " roll" + (r.qty === 1 ? "" : "s") : ""}" readonly>
+                  <span class="hint">= the Check-in quantity for this line${rollLine ? " (as on the invoice)" : ""}.</span></div>
+                <div class="field"><label>${rollLine ? "Price per roll" : "Unit cost"} (${esc(curLabel)})</label>
                   <input id="ciNewCost${i}" type="number" step="any" min="0" value="${r.invoiceUnitCost != null ? r.invoiceUnitCost : ""}" placeholder="e.g. 4.80">
                   <span class="hint">Required — never guessed for a new item.</span></div>
                 <div class="field full"><label>Buffer / low-stock level <span class="opt">(optional)</span></label>
@@ -4536,6 +4598,31 @@
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
     restoreOpenEdits(keptEdits, ciState.rows);
+    // New item for a roll line: the "2 rolls × 30 m = 60 m" hint and the
+    // unit follow the Metres per roll box as it's typed.
+    ciState.rows.forEach((r, i) => {
+      const rollEl = r.creatingNew && document.getElementById(`ciNewRollM${i}`);
+      if (!rollEl) return;
+      const hintEl = document.getElementById(`ciNewRollHint${i}`);
+      const unitEl = document.getElementById(`ciNewUnit${i}`);
+      const costEl = document.getElementById(`ciNewCost${i}`);
+      const update = () => {
+        const m = parseFloat(rollEl.value);
+        const price = parseFloat(costEl && costEl.value);
+        const rolls = `${fmt(r.qty)} roll${r.qty === 1 ? "" : "s"}`;
+        hintEl.textContent = m > 0
+          ? `${rolls} × ${fmt(m)} m = ${fmt(Math.round(r.qty * m * 100) / 100)} m` +
+            (price > 0 ? ` at ${ciState.currency || "$"} ${Math.round(price / m * 10000) / 10000}/m` : "") +
+            ". Stock is kept in metres. Leave blank to count whole rolls instead."
+          : "Enter one roll's length to keep the stock in metres, or leave blank to count whole rolls.";
+        unitEl.readOnly = m > 0;
+        if (m > 0) unitEl.value = "m";
+        else if (unitEl.value === "m") unitEl.value = r.unit && r.unit !== "m" ? r.unit : "roll";
+      };
+      rollEl.addEventListener("input", update);
+      if (costEl) costEl.addEventListener("input", update);
+      update();
+    });
     ciState.rows.forEach((r, i) => { if (r.editing) wireCodePicker("ciEdit", ciState.itemsByCode, i); });
     document.querySelectorAll("#ciOut [data-mi-photo]").forEach((b) => {
       b.onclick = () => openItemPhoto(b.dataset.miPhoto, b.dataset.miPhotoCap);
@@ -4660,10 +4747,17 @@
           // Unlike an existing item, there's no Master Inventory unit_cost
           // to fall back on, so the front-end already required this to be
           // a positive number before the row could reach this state.
-          const landedUnitCost = r.invoiceUnitCost + shipAllocForRow;
+          // Same landed-cost rule as the preview (a roll's shipping share is
+          // spread over its metres).
+          const landedUnitCost = ciLandedUnitCost(i, shipAlloc);
           return {
             item_id: null, quantity: r.qty, unit: r.unit,
-            unit_cost: landedUnitCost * rate,
+            unit_cost: storedInventoryUnitCostAed(r, landedUnitCost, rate),
+            package_type: r.packageInfo ? r.packageInfo.type : null,
+            package_qty: r.packageInfo ? r.packageInfo.rollCount : null,
+            qty_per_package: r.packageInfo ? r.packageInfo.qtyPerPackage : null,
+            package_unit: r.packageInfo ? r.packageInfo.unit : null,
+            package_cost: r.packageInfo ? r.packageInfo.rollUnitCost * rate : null,
             original_unit_cost: r.invoiceUnitCost,
             shipping_cost_total: shippingCostTotal,
             shipping_allocated: shipAllocForRow > 0 ? shipAllocForRow : null,
