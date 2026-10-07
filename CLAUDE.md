@@ -62,6 +62,25 @@ product lines — never treat one family's item as a match for another's:
   the preview only has to show it. `applyCombinedStock` totals every line of
   the same Master row so duplicates still show the shortage.
 
+## User permissions (sign-in, Delete)
+
+- Everyone signs in (`boot.js` → `window.ORYX_AUTH`: shared Supabase client,
+  `profile`, `canDelete()`, `isAdmin()`, `fnHeaders()` = the person's own token
+  for Edge Functions, `requestDelete()` = dialog + server check). Admin screen:
+  `admin.js` (tab "User Management"). Tables `user_profiles`,
+  `delete_audit_log`, `admin_bootstrap_tokens`; functions `is_admin()`,
+  `record_line_delete()` (authenticated; the ONLY way a line Delete happens),
+  `admin_set_user_access()` (service_role; self/last-Admin guards). Edge
+  Functions: `user-admin` (new), and `checkin`/`checkout` require an active
+  staff account (`requireStaff`); sources in `supabase/functions/`.
+- Every Delete on Check-in/Check-out lines goes through `requestDelete`; never
+  remove a line without it. Restore is open to all and only logged.
+- Testing from this sandbox: the egress proxy injects a privileged key into
+  every request to *.supabase.co (even with no key), so live REST/RPC calls
+  from here do NOT run as the signed-in user. Test the rules in SQL with
+  `set local role authenticated` + `request.jwt.claims` (rolled back), and the
+  screens against a stand-in backend (Playwright `page.route`).
+
 ## Checking a Check-in change (every time)
 
 - A fix made for one invoice must behave the same on ALL sample invoices.
