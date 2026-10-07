@@ -913,6 +913,14 @@ nav button[hidden]{display:none}
 .um-status{font-size:12.5px; min-height:18px; margin-top:var(--space-3)}
 .um-status.err{color:var(--danger)}
 .um-scroll{overflow-x:auto}
+.um-log > summary{cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:var(--space-3)}
+.um-log > summary::-webkit-details-marker{display:none}
+.um-log > summary h2{display:inline; margin:0}
+.um-log > summary::before{content:"▸"; color:var(--text-muted); font-size:14px}
+.um-log[open] > summary::before{content:"▾"}
+.um-log > summary:hover h2{text-decoration:underline}
+.um-log-count{font-size:12.5px; color:var(--text-muted)}
+.um-log-filters{margin:var(--space-3) 0}
 .um-actions{white-space:nowrap}
 .um-actions button + button{margin-left:var(--space-2)}
 button.ghost.um-remove{color:var(--danger)}
@@ -1406,14 +1414,47 @@ button.ghost.um-remove:hover{background:var(--danger-bg-hover); border-color:var
   </div>
 
   <div class="card">
-    <h2>Delete log</h2>
-    <p class="lede">Every line deleted (and restored) on Check-in and Check-out, newest first.</p>
-    <div class="um-scroll">
-      <table class="um-grid">
-        <thead><tr><th>When</th><th>Who</th><th>What</th><th>Where</th><th>Reason</th></tr></thead>
-        <tbody id="umLog"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
-      </table>
-    </div>
+    <!-- Collapsed by default: open it when you need to look something up. -->
+    <details class="um-log" id="umLogBox">
+      <summary><h2>Delete log</h2> <span class="um-log-count" id="umLogCount"></span></summary>
+      <p class="lede">Every line deleted (and restored) on Check-in and Check-out, newest first.</p>
+      <div class="fp-jobrow um-log-filters">
+        <div class="fp-jobrow-field" style="flex:1; min-width:220px">
+          <label class="field-label" for="umLogSearch">Search</label>
+          <input id="umLogSearch" type="search" autocomplete="off" placeholder="Item code, description, job, file or reason">
+        </div>
+        <div class="fp-jobrow-field">
+          <label class="field-label" for="umLogWho">Person</label>
+          <select id="umLogWho"><option value="">Everyone</option></select>
+        </div>
+        <div class="fp-jobrow-field">
+          <label class="field-label" for="umLogArea">Where</label>
+          <select id="umLogArea"><option value="">Check-in and Check-out</option><option value="checkin">Check-in</option><option value="checkout">Check-out</option></select>
+        </div>
+        <div class="fp-jobrow-field">
+          <label class="field-label" for="umLogFrom">From</label>
+          <input id="umLogFrom" type="date">
+        </div>
+        <div class="fp-jobrow-field">
+          <label class="field-label" for="umLogTo">To</label>
+          <input id="umLogTo" type="date">
+        </div>
+      </div>
+      <div class="um-scroll">
+        <table class="um-grid">
+          <thead><tr><th>When</th><th>Who</th><th>What</th><th>Where</th><th>Reason</th></tr></thead>
+          <tbody id="umLog"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="fp-pager">
+        <span class="small muted" id="umLogInfo"></span>
+        <div class="fp-pager-controls">
+          <button class="ghost" id="umLogPrev" type="button">Prev</button>
+          <span class="small" id="umLogPage"></span>
+          <button class="ghost" id="umLogNext" type="button">Next</button>
+        </div>
+      </div>
+    </details>
   </div>
 </section>
 

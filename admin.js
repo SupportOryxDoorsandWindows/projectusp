@@ -121,23 +121,80 @@
     });
   }
 
-  function renderLog(rows) {
-    $("#umLog").innerHTML = rows.length ? rows.map((r) => {
-      const d = r.record_detail || {};
-      const when = new Date(r.happened_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
-      const what = [d.code, d.description].filter(Boolean).join(" — ") || r.record_ref || "—";
-      const qty = d.qty != null ? ` (${d.qty}${d.unit ? " " + d.unit : ""})` : "";
-      const where = (r.area === "checkin" ? "Check-in" : "Check-out") + (r.document_name ? ` · ${r.document_name}` : "") + (d.job_number ? ` · job ${d.job_number}` : "") + (d.invoice_number ? ` · inv. ${d.invoice_number}` : "");
-      return `<tr><td>${esc(when)}</td><td>${esc(r.user_name || r.user_email)}</td>
-        <td>${r.action === "restore" ? "<b>Restored</b> " : "<b>Deleted</b> "}${esc(what + qty)}</td><td>${esc(where)}</td><td>${esc(r.reason || "")}</td></tr>`;
-    }).join("") : `<tr><td colspan="5" class="muted">Nothing deleted yet.</td></tr>`;
+  // Delete log: collapsed by default; search, person, where and date filters,
+  // 20 lines per page (filtered here, newest first).
+  const LOG_PAGE = 20;
+  let logRows = [], logPage = 0;
+  const logWhen = (r) => new Date(r.happened_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const logWhat = (r) => {
+    const d = r.record_detail || {};
+    const what = [d.code, d.description].filter(Boolean).join(" — ") || r.record_ref || "—";
+    return what + (d.qty != null ? ` (${d.qty}${d.unit ? " " + d.unit : ""})` : "");
+  };
+  const logWhere = (r) => {
+    const d = r.record_detail || {};
+    return (r.area === "checkin" ? "Check-in" : "Check-out") + (r.document_name ? ` · ${r.document_name}` : "") +
+      (d.job_number ? ` · job ${d.job_number}` : "") + (d.invoice_number ? ` · inv. ${d.invoice_number}` : "");
+  };
+  const logWho = (r) => r.user_name || r.user_email;
+
+  function filteredLog() {
+    const q = $("#umLogSearch").value.trim().toLowerCase();
+    const who = $("#umLogWho").value, area = $("#umLogArea").value;
+    const from = $("#umLogFrom").value, to = $("#umLogTo").value;
+    return logRows.filter((r) => {
+      if (who && r.user_email !== who) return false;
+      if (area && r.area !== area) return false;
+      const day = new Date(r.happened_at).toLocaleDateString("en-CA"); // yyyy-mm-dd, local
+      if (from && day < from) return false;
+      if (to && day > to) return false;
+      if (q && ![logWhat(r), logWhere(r), r.reason || "", logWho(r)].join(" ").toLowerCase().includes(q)) return false;
+      return true;
+    });
   }
+
+  function drawLog() {
+    const rows = filteredLog();
+    const pages = Math.max(1, Math.ceil(rows.length / LOG_PAGE));
+    logPage = Math.min(logPage, pages - 1);
+    const shown = rows.slice(logPage * LOG_PAGE, (logPage + 1) * LOG_PAGE);
+    $("#umLog").innerHTML = shown.length ? shown.map((r) => `<tr><td>${esc(logWhen(r))}</td><td>${esc(logWho(r))}</td>
+        <td>${r.action === "restore" ? "<b>Restored</b> " : "<b>Deleted</b> "}${esc(logWhat(r))}</td><td>${esc(logWhere(r))}</td><td>${esc(r.reason || "")}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="muted">${logRows.length ? "Nothing matches these filters." : "Nothing deleted yet."}</td></tr>`;
+    $("#umLogInfo").textContent = rows.length
+      ? `Showing ${logPage * LOG_PAGE + 1}–${logPage * LOG_PAGE + shown.length} of ${rows.length}${rows.length !== logRows.length ? ` (filtered from ${logRows.length})` : ""}`
+      : "";
+    $("#umLogPage").textContent = `Page ${logPage + 1} of ${pages}`;
+    $("#umLogPrev").disabled = logPage === 0;
+    $("#umLogNext").disabled = logPage >= pages - 1;
+  }
+
+  const logCountText = () => {
+    const el = $("#umLogCount");
+    el.textContent = (el.dataset.n || "") + (!$("#umLogBox").open && logRows.length ? " · click to open" : "");
+  };
+  $("#umLogBox").addEventListener("toggle", logCountText);
+
+  function renderLog(rows) {
+    logRows = rows;
+    $("#umLogCount").dataset.n = rows.length ? `${rows.length} ${rows.length === 1 ? "entry" : "entries"}` : "nothing yet";
+    logCountText();
+    const pick = $("#umLogWho"), keep = pick.value;
+    const people = [...new Map(rows.map((r) => [r.user_email, logWho(r)])).entries()].sort((x, y) => x[1].localeCompare(y[1]));
+    pick.innerHTML = `<option value="">Everyone</option>` + people.map(([email, name]) => `<option value="${esc(email)}">${esc(name)}</option>`).join("");
+    if (people.some(([email]) => email === keep)) pick.value = keep;
+    drawLog();
+  }
+  ["#umLogSearch", "#umLogWho", "#umLogArea", "#umLogFrom", "#umLogTo"].forEach((sel) =>
+    $(sel).addEventListener("input", () => { logPage = 0; drawLog(); }));
+  $("#umLogPrev").addEventListener("click", () => { logPage = Math.max(0, logPage - 1); drawLog(); });
+  $("#umLogNext").addEventListener("click", () => { logPage += 1; drawLog(); });
 
   async function load() {
     if (!AUTH.isAdmin()) return;
     const [{ data: u, error: e1 }, { data: log, error: e2 }] = await Promise.all([
       AUTH.sb.from("user_profiles").select("*").order("role").order("full_name"),
-      AUTH.sb.from("delete_audit_log").select("*").order("happened_at", { ascending: false }).limit(300),
+      AUTH.sb.from("delete_audit_log").select("*").order("happened_at", { ascending: false }).limit(5000),
     ]);
     if (e1) { status("Couldn't load the accounts: " + e1.message, true); return; }
     users = u || [];
