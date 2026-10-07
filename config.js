@@ -12,4 +12,7 @@ window.ORYX_CONFIG = {
   supabaseUrl: "https://ylhdsvwzqcshffwohhfy.supabase.co",
   supabaseKey: "sb_publishable_-8lQTmwPyAsmJXKATTcbpg_OtKG9qJF",
   drawingsBucket: "drawings",
+  // Shown on the sign-in screen ("Contact an Admin"): who staff email for an
+  // account, a new password link, or access problems.
+  adminContact: { name: "Lharyl", email: "lharyl@oryxdoors.com" },
 };

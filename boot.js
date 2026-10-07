@@ -259,6 +259,22 @@
     if (mode === "set") $("#gateNewPassword").focus();
   }
 
+  // "Contact an Admin": an email to the Admin in config.js, with the
+  // person's email (if typed) already in the message.
+  const contact = CFG.adminContact || {};
+  if (contact.email) {
+    $("#gateContactWho").textContent = `${contact.name ? contact.name + " · " : ""}${contact.email}`;
+    $("#gateContact").addEventListener("click", (e) => {
+      e.preventDefault();
+      const mine = ($("#gateEmail").value || $("#gateNewEmail").value || "").trim();
+      const body = `Hello${contact.name ? " " + contact.name : ""},\n\nI need help signing in to the Oryx Product Selector ` +
+        `(new account / new password link).\n\nMy work email: ${mine || "(please write it here)"}\n\nThank you.`;
+      location.href = `mailto:${contact.email}?subject=${encodeURIComponent("Product Selector - sign-in help")}&body=${encodeURIComponent(body)}`;
+    });
+  } else {
+    $("#gateFoot").hidden = true;
+  }
+
   let started = false;
   async function enter(user) {
     AUTH.user = user;
