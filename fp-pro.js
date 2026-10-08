@@ -118,7 +118,10 @@
       const content = await page.getTextContent();
       itemsPerPage.push(content.items
         .filter((it) => it.transform && it.str && it.str.trim())
-        .map((it) => ({ str: it.str.trim(), x: it.transform[4], y: it.transform[5] })));
+        .map((it) => ({ str: it.str.trim(), x: it.transform[4], y: it.transform[5],
+          // Horizontal text only: the header reader pairs a label with the
+          // value printed to its right, which means nothing on a rotated page.
+          upright: it.transform[0] > 0 && !it.transform[1] && !it.transform[2] })));
       let lastY = null;
       let pageText = "";
       for (const item of content.items) {
@@ -1975,7 +1978,44 @@
     return "Supplier document";
   }
 
-  function parseCheckinHeader(text) {
+  // "Invoice No:" / "PO No:" / "Your Ref:" and the value printed to the
+  // right of it, read by page position. Freedom's quotes and invoices store
+  // their header labels and values as separate blocks, so in the plain text
+  // the label is followed by other labels and the text-only rules below
+  // picked up the wrong words (the "19" of the date after "Quote", the label
+  // "PO No" itself). Only horizontal text on the first page; a value must not
+  // be another label. Returns {} when no positions are available (OCR).
+  const HEADER_INVOICE_LABEL_RE = /^(?:(?:tax\s+|commercial\s+|pro-?forma\s+)?invoice|quote|quotation)(?:\s*(?:no\.?|number|#))?\s*:?$/i;
+  const HEADER_PO_LABEL_RE = /^(?:p\.?o\.?|purchase\s+order)\s*(?:no\.?|number|#)\s*:?$|^your\s+ref(?:erence)?\s*:?$/i;
+  const HEADER_INVOICE_VALUE_RE = /^[A-Za-z]{0,4}[-\/]?\d[\w\/-]{0,24}$/;
+  function headerFieldsFromPositions(pageItems) {
+    const items = (pageItems && pageItems[0] || []).filter((it) => it.upright);
+    const valueRightOf = (label, ok) => {
+      let best = null;
+      for (const it of items) {
+        const dx = it.x - label.x;
+        if (it === label || Math.abs(it.y - label.y) > 4 || dx <= 0 || dx > 260) continue;
+        if (/:\s*$/.test(it.str) || !ok(it.str)) continue;
+        if (!best || dx < best.x - label.x) best = it;
+      }
+      return best ? best.str : "";
+    };
+    const find = (labelRe, ok) => {
+      for (const label of items) {
+        if (!labelRe.test(label.str)) continue;
+        const v = valueRightOf(label, ok);
+        if (v) return v;
+      }
+      return "";
+    };
+    return {
+      invoiceNumber: find(HEADER_INVOICE_LABEL_RE, (v) => HEADER_INVOICE_VALUE_RE.test(v)),
+      poNumber: find(HEADER_PO_LABEL_RE, (v) => v.length <= 40 && /[A-Za-z0-9]/.test(v)),
+    };
+  }
+
+  function parseCheckinHeader(text, pageItems) {
+    const placed = headerFieldsFromPositions(pageItems);
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     // "Oryx" is always the recipient in these documents, never the supplier
     // -- excluding it stops the (usually earlier, on-page) "ORYX DOOR
@@ -1999,17 +2039,20 @@
     // actual values on the next line, too far from the label for the
     // generic labelled-number pattern below to bridge safely -- but the
     // "FSI/" prefix itself is distinctive enough to match directly.
-    const invoiceNumber = (text.match(/\b(?:SI|SO|SQ|INV|DN)-\d+\b/i) || [])[0]
+    // A value read beside its own label (above) wins over every text rule.
+    const invoiceNumber = placed.invoiceNumber
+      || (text.match(/\b(?:SI|SO|SQ|INV|DN)-\d+\b/i) || [])[0]
       || (text.match(/\bFSI\/[^\s,;]+/i) || [])[0]
-      || (text.match(/(?:pro-?forma\s+invoice|commercial\s+invoice|tax\s+invoice|supplier\s+invoice|invoice|quotation|quote|delivery\s+note)\s*#?\s*:?\s*\n?\s*([A-Za-z]{0,4}\d[A-Za-z0-9-]{0,19})\b/i) || [])[1]
+      || (text.match(/(?:pro-?forma\s+invoice|commercial\s+invoice|tax\s+invoice|supplier\s+invoice|invoice|quotation|quote|delivery\s+note)\s*#?\s*:?\s*\n?\s*([A-Za-z]{0,4}\d[A-Za-z0-9-]{2,19})\b(?![\/.]\d)/i) || [])[1]
       || "";
     // Strict "PO-1234" first (existing behaviour, unchanged), then a
     // labelled "Your Reference" value, then a looser "PO 1234"/"PO26-1139"
     // mention -- in that order, so a stricter/more-certain match always
     // wins over a broader guess.
-    const poNumber = (text.match(/\bPO-[\w-]+\b/i) || [])[0]
+    const poNumber = placed.poNumber
+      || (text.match(/\bPO-[\w-]+\b/i) || [])[0]
       || ((text.match(/your\s+reference\s*\n?\s*([^\n]{2,40})/i) || [])[1] || "").trim()
-      || (text.match(/\bPO[\s-][A-Za-z0-9-]{2,20}\b/i) || [])[0]
+      || (text.match(/\bPO[\s-](?=[A-Za-z-]*\d)[A-Za-z0-9-]{2,20}\b/i) || [])[0]
       || "";
     // Prefer a date sitting right next to an explicit "Issued/Invoice/
     // Document Date" label; fall back to the first date-shaped token found
@@ -5021,7 +5064,7 @@
       let pdfText = pages.join("\n\n");
       ciState.itemsByCode = itemsByCode;
       ciState.pdfHash = hash;
-      ciState.header = parseCheckinHeader(pdfText);
+      ciState.header = parseCheckinHeader(pdfText, ciState.usedOcr ? null : pages.items);
       ciState.ratesByCurrency = ratesByCurrency;
       const currencyInfo = detectDocumentCurrencyInfo(pdfText);
       ciState.currency = currencyInfo.currency;
