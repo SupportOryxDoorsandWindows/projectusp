@@ -144,6 +144,12 @@ product lines — never treat one family's item as a match for another's:
   Amount; rates often without decimals; sizes in feet, e.g. 9' x 100'). Its
   packing charge is a bare "Packing 120", picked up by the last-resort rule
   at the end of `detectShippingCharge`.
+- Header fields: Freedom's quotes/invoices store "Invoice No:" / "PO No:" /
+  "Your Ref:" apart from their values in the text, so `parseCheckinHeader`
+  first reads the value printed to the right of the label by page position
+  (`headerFieldsFromPositions`, horizontal text only); the text rules are the
+  fallback (OCR) and never take a date fragment, a street number or the
+  label itself (Quote 47457 used to show invoice "19", PO "PO No").
 - Colour splits ("75 White 75 Black", "50 white /25 black") become one row
   per colour. Detached notes are re-attached by page position
   (`pages.items` from `extractPdfTextPerPage`); without positions (OCR) they

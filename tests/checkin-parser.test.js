@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync("fp-pro.js", "utf8").replace(
   /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo };\n})();`
+  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader };\n})();`
 );
 
 const fakeEl = {
@@ -41,7 +41,7 @@ const context = {
 };
 
 vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader } = context.window.__ciTest;
 
 const freedomApproval = `
 COMMON PARTS
@@ -415,5 +415,36 @@ assert.equal(bareDollar.needsChoice, false);
 assert.equal(cur("GSTIN 27AAB Freedom Screens India\nZIP49 Brake Adjuster $738.00 GST 18%").currency, "AUD");
 assert.equal(cur("Nylon Cord 10 4.50 45.00").currency, "AED");
 assert.equal(cur("Price AED 12.00").currency, "AED");
+
+// Header: Freedom's quote/invoice keeps each label ("Invoice No:", "PO No:")
+// apart from its value in the text, so the value is read beside the label by
+// page position (Quote 47457: was "19" from the date and the label "PO No").
+const freedomQuoteHeaderText = " Invoice No:\n Terms:\n Oryx Door Systems LLC\n Date:\n Quote\n 19/03/2024\n PO No:\n 00047457\n March 2024\n FREEDOM SCREENS OF AUSTRALIA PTY LTD";
+const at = (str, x, y) => ({ str, x, y, upright: true });
+const headerQuoteItems = [[
+  at("FREEDOM SCREENS OF AUSTRALIA PTY LTD", 199, 785), at("Invoice No:", 384, 753), at("00047457", 489, 755),
+  at("Date:", 384, 739), at("19/03/2024", 483, 739), at("PO No:", 384, 722), at("March 2024", 481, 722),
+  at("Terms:", 384, 688), at("Quote", 44, 687),
+]];
+const fqh = parseCheckinHeader(freedomQuoteHeaderText, headerQuoteItems);
+assert.equal(fqh.invoiceNumber, "00047457");
+assert.equal(fqh.poNumber, "March 2024");
+assert.equal(fqh.isoDate, "2024-03-19");
+// "Invoice" / "#:" split over two lines, "Your Ref:" as the reference (PI 46810).
+const fpi = parseCheckinHeader("PROFORMA INVOICE\n13 Blue Rock Drive,", [[
+  at("Invoice", 382, 755), at("00046810", 489, 755), at("#:", 382, 743), at("Your Ref:", 381, 722), at("Sanoop Email", 473, 722),
+]]);
+assert.equal(fpi.invoiceNumber, "00046810");
+assert.equal(fpi.poNumber, "Sanoop Email");
+// A value is never another label, and rotated text is never paired.
+assert.equal(parseCheckinHeader("x", [[at("PO No:", 384, 722), at("Terms:", 450, 722)]]).poNumber, "");
+assert.equal(parseCheckinHeader("x", [[{ str: "Purchase Order No:", x: 132, y: 372, upright: false }, { str: "No. Per", x: 328, y: 372, upright: false }]]).poNumber, "");
+// Without positions (OCR): no date fragment, street number or bare label.
+const ocr = parseCheckinHeader(freedomQuoteHeaderText);
+assert.equal(ocr.invoiceNumber, "");
+assert.equal(ocr.poNumber, "");
+assert.equal(parseCheckinHeader("PROFORMA INVOICE\n13 Blue Rock Drive,").invoiceNumber, "");
+assert.equal(parseCheckinHeader("Quote # SQ-1042\nPO 26-1139").invoiceNumber, "SQ-1042");
+assert.equal(parseCheckinHeader("Quote # SQ-1042\nPO 26-1139").poNumber, "PO 26-1139");
 
 console.log("check-in parser tests passed");
