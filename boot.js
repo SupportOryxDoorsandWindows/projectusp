@@ -48,6 +48,12 @@
       }
       return this.profile;
     },
+    // "Paulo Averil" -> "PA", "lharyl@oryxdoors.com" -> "LH" (sidebar, Activity, User Management).
+    initials(name) {
+      const n = String(name || "").replace(/@.*/, "").trim();
+      const parts = n.split(/[\s._-]+/).filter(Boolean);
+      return (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : n.slice(0, 2)).toUpperCase() || "?";
+    },
     deleteDeniedMessage: "You don't have permission to delete this record. Please contact an administrator.",
     /* The Delete flow for one line. `what` = a short label, `area` =
      * "checkin" | "checkout", `ref`/`detail`/`documentName` go to the delete
@@ -229,7 +235,11 @@
       const a = document.createElement("script");
       a.src = "admin.js?v=" + Date.now();
       document.body.appendChild(a);
-      // Activity timeline + item timelines (everyone).
+      // Master Inventory item panel (timeline of one item).
+      const it = document.createElement("script");
+      it.src = "item-timeline.js?v=" + Date.now();
+      document.body.appendChild(it);
+      // Activity timeline (everyone).
       const t = document.createElement("script");
       t.src = "activity.js?v=" + Date.now();
       document.body.appendChild(t);
@@ -260,7 +270,8 @@
     $("#gateSetForm").hidden = mode !== "set";
     $("#gateLinkWarn").hidden = mode !== "linkwarn";
     $("#gateFoot").hidden = mode === "linkwarn";
-    $("#gateSub").textContent = mode === "set" ? "Set your password" : mode === "linkwarn" ? "Password link" : "Oryx staff sign-in";
+    $("#gateTitle").textContent = mode === "set" ? "Set your password" : mode === "linkwarn" ? "Password link" : "Sign in";
+    $("#gateSub").textContent = mode === "set" ? "Choose a password for your Oryx account." : mode === "linkwarn" ? "Check who this link is for." : "Use your Oryx work email.";
     if (mode === "signin") $("#gateEmail").focus();
     if (mode === "set") $("#gateNewPassword").focus();
   }
@@ -329,7 +340,9 @@
       gateStatus("This account doesn't have access to the system. Please contact an administrator.", true);
       return;
     }
-    $("#whoami").textContent = (profile.full_name || profile.email) + (AUTH.isAdmin() ? " · Admin" : "");
+    $("#whoami").textContent = profile.full_name || profile.email;
+    $("#whoRole").textContent = AUTH.isAdmin() ? "Admin" : (profile.can_delete ? "User · Allow Delete" : "User");
+    $("#whoAvatar").textContent = AUTH.initials(profile.full_name || profile.email);
     $("#navAdmin").hidden = !AUTH.isAdmin();
     $("#gate").hidden = true;
     $("#loading").hidden = false;

@@ -44,48 +44,58 @@
     $("#umLink").focus(); $("#umLink").select();
   }
 
+  let lastActive = new Map();
+  function lastActiveText(id) {
+    const iso = lastActive.get(id);
+    if (!iso) return `<span class="muted">Never signed in</span>`;
+    return esc(window.ORYX_ITEM ? window.ORYX_ITEM.when(iso).long : new Date(iso).toLocaleString("en-GB"));
+  }
+
   function render() {
     const me = AUTH.user && AUTH.user.id;
     $("#umRows").innerHTML = users.length ? users.map((u) => {
       const self = u.user_id === me;
       const isAdmin = u.role === "admin";
+      const name = u.full_name || u.email;
       return `<tr data-id="${esc(u.user_id)}">
-        <td><div class="um-name">${esc(u.full_name || "—")}${self ? " <span class=\"muted\">(you)</span>" : ""}</div><div class="um-email">${esc(u.email)}</div></td>
-        <td><span class="um-badge ${isAdmin ? "admin" : ""} ${u.active ? "" : "off"}">${u.active ? (isAdmin ? "Admin" : "User") : "Turned off"}</span></td>
-        <td class="c um-fixed" title="Every signed-in person">✅</td>
-        <td class="c um-fixed" title="Every signed-in person">✅</td>
-        <td class="c um-fixed" title="Every signed-in person">✅</td>
-        <td class="c">${isAdmin
-          ? `<span class="um-fixed" title="Admins can always delete">✅ Always</span>`
-          : `<label class="um-toggle"><input type="checkbox" data-set="can_delete" ${u.can_delete ? "checked" : ""} aria-label="Allow Delete for ${esc(u.full_name || u.email)}"> ${u.can_delete ? "On" : "Off"}</label>`}</td>
-        <td class="c"><label class="um-toggle"${self ? ` title="You can't remove your own Admin access"` : ""}><input type="checkbox" data-set="role" ${isAdmin ? "checked" : ""} ${self ? "disabled" : ""} aria-label="Admin"></label></td>
-        <td class="c"><label class="um-toggle"${self ? ` title="You can't turn off your own account"` : ""}><input type="checkbox" data-set="active" ${u.active ? "checked" : ""} ${self ? "disabled" : ""} aria-label="Active"></label></td>
-        <td class="um-actions"><button class="ghost" type="button" data-link>New password link</button>${self ? "" : `<button class="ghost um-remove" type="button" data-remove>Remove</button>`}</td>
+        <td><div class="um-person"><span class="avatar ${self ? "me" : ""}" aria-hidden="true">${esc(AUTH.initials(name))}</span>
+          <div><div class="um-name">${esc(u.full_name || "—")}${self ? " (you)" : ""}</div><div class="um-email">${esc(u.email)}</div></div></div></td>
+        <td>${self ? `<span class="badge dark" title="You can't remove your own Admin access">Admin</span>`
+          : `<select class="um-pick ${isAdmin ? "admin" : ""}" data-set="role" aria-label="Role for ${esc(name)}"><option value="user" ${isAdmin ? "" : "selected"}>User</option><option value="admin" ${isAdmin ? "selected" : ""}>Admin</option></select>`}</td>
+        <td>${isAdmin
+          ? `<label class="um-toggle" title="Admins can always delete"><input type="checkbox" checked disabled> Always</label>`
+          : `<label class="um-toggle"><input type="checkbox" data-set="can_delete" ${u.can_delete ? "checked" : ""} aria-label="Allow Delete for ${esc(name)}"> ${u.can_delete ? "On" : "Off"}</label>`}</td>
+        <td class="um-last">${lastActiveText(u.user_id)}</td>
+        <td>${self ? `<span class="badge ok">Active</span>`
+          : `<select class="um-pick status ${u.active ? "" : "off"}" data-set="active" aria-label="Status for ${esc(name)}"><option value="true" ${u.active ? "selected" : ""}>Active</option><option value="false" ${u.active ? "" : "selected"}>Turned off</option></select>`}</td>
+        <td class="um-actions"><button class="btn-outline btn-sm" type="button" data-link>New password link</button>${self ? "" : `<button class="btn-outline btn-sm um-remove" type="button" data-remove>Remove</button>`}</td>
       </tr>`;
-    }).join("") : `<tr><td colspan="9" class="muted">No accounts yet.</td></tr>`;
+    }).join("") : `<tr><td colspan="6" class="muted">No accounts yet.</td></tr>`;
 
-    $("#umRows").querySelectorAll("input[data-set]").forEach((box) => {
+    $("#umRows").querySelectorAll("[data-set]").forEach((box) => {
       box.onchange = async () => {
         const id = box.closest("tr").dataset.id;
         const u = users.find((x) => x.user_id === id);
         const field = box.dataset.set;
+        const on = box.type === "checkbox" ? box.checked : field === "role" ? box.value === "admin" : box.value === "true";
+        const undo = () => { if (box.type === "checkbox") box.checked = !on; else box.value = field === "role" ? (on ? "user" : "admin") : String(!on); };
         const body = { action: "set_access", user_id: id };
-        if (field === "can_delete") body.can_delete = box.checked;
-        if (field === "role") body.role = box.checked ? "admin" : "user";
-        if (field === "active") body.active = box.checked;
-        if (field === "role" && !box.checked && !confirm(`Remove Admin access from ${u.full_name || u.email}?`)) { box.checked = true; return; }
-        if (field === "active" && !box.checked && !confirm(`Turn off ${u.full_name || u.email}'s account? They will be signed out and can't sign in.`)) { box.checked = true; return; }
+        if (field === "can_delete") body.can_delete = on;
+        if (field === "role") body.role = on ? "admin" : "user";
+        if (field === "active") body.active = on;
+        if (field === "role" && !on && !confirm(`Remove Admin access from ${u.full_name || u.email}?`)) { undo(); return; }
+        if (field === "active" && !on && !confirm(`Turn off ${u.full_name || u.email}'s account? They will be signed out and can't sign in.`)) { undo(); return; }
         box.disabled = true;
         try {
           await call(body);
-          const label = { can_delete: box.checked ? "can now delete" : "can no longer delete",
-                          role: box.checked ? "is now an Admin" : "is no longer an Admin",
-                          active: box.checked ? "can sign in again" : "is turned off" }[field];
+          const label = { can_delete: on ? "can now delete" : "can no longer delete",
+                          role: on ? "is now an Admin" : "is no longer an Admin",
+                          active: on ? "can sign in again" : "is turned off" }[field];
           status(`${u.full_name || u.email} ${label}.`);
           await load();
           await AUTH.refreshProfile();
         } catch (e) {
-          box.checked = !box.checked;
+          undo();
           box.disabled = false;
           status(e.message, true);
         }
@@ -192,11 +202,14 @@
 
   async function load() {
     if (!AUTH.isAdmin()) return;
-    const [{ data: u, error: e1 }, { data: log, error: e2 }] = await Promise.all([
+    const [{ data: u, error: e1 }, { data: log, error: e2 }, { data: seen, error: e3 }] = await Promise.all([
       AUTH.sb.from("user_profiles").select("*").order("role").order("full_name"),
       AUTH.sb.from("delete_audit_log").select("*").order("happened_at", { ascending: false }).limit(5000),
+      AUTH.sb.rpc("admin_user_last_active"),
     ]);
     if (e1) { status("Couldn't load the accounts: " + e1.message, true); return; }
+    if (e3) console.error("last active", e3);
+    lastActive = new Map((seen || []).map((r) => [r.user_id, r.last_sign_in_at]));
     users = u || [];
     render();
     renderLog(e2 ? [] : log || []);
@@ -210,13 +223,16 @@
     btn.disabled = true;
     try {
       const d = await call({ action: "invite", email, full_name: name, can_delete: $("#umCanDelete").checked });
+      $("#umInviteDialog").close();
       showLink(d.kind, d.token, name);
       if (d.existed) status(`${email} already has an account; this link lets them set a new password. Their permissions weren't changed.`);
       $("#umName").value = ""; $("#umEmail").value = ""; $("#umCanDelete").checked = false;
       await load();
-    } catch (err) { status(err.message, true); }
+    } catch (err) { status(err.message, true); $("#umInviteErr").textContent = err.message; }
     btn.disabled = false;
   });
+  $("#umInviteOpen").addEventListener("click", () => { $("#umInviteErr").textContent = ""; $("#umInviteDialog").showModal(); $("#umName").focus(); });
+  $("#umInviteCancel").addEventListener("click", () => $("#umInviteDialog").close());
   $("#umCopy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($("#umLink").value); $("#umCopy").textContent = "Copied"; }
     catch (e) { $("#umLink").select(); }

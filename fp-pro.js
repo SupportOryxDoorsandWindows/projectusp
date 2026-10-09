@@ -814,8 +814,8 @@
     return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   }
   function statusChip(status) {
-    if (status === "ok") return `<span class="fp-status-ok">OK</span>`;
-    if (status === "shortage") return `<span class="fp-status-short">Shortage</span>`;
+    if (status === "ok") return `<span class="fp-status-ok">Matched</span>`;
+    if (status === "shortage") return `<span class="fp-status-short">Below zero, allowed</span>`;
     if (status === "unmatched") return `<span class="fp-status-unmatched">Unmatched</span>`;
     if (status === "skipped") return `<span class="fp-status-skip">Skipped</span>`;
     return `<span class="fp-status-skip">${esc(status)}</span>`;
@@ -5474,10 +5474,10 @@
   }
 
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes, aliases, photos] = await Promise.all([
+      const [itemsRes, txRes, aliases, photos, lastChange] = await Promise.all([
         sb.from("inventory_items").select("*").order("item_code"),
         // Fetched at line-item grain, then grouped back into one Check-out
         // per (job, client, timestamp) below -- Postgres's now() returns the
@@ -5486,16 +5486,40 @@
         sb.from("inventory_transactions").select("*").order("created_at", { ascending: false }).limit(500),
         loadSupplierAliases(),
         loadItemPhotos(),
+        loadLastChangeByItem(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
-      renderMasterInventoryView(itemsRes.data, txRes.data, photos);
+      renderMasterInventoryView(itemsRes.data, txRes.data, photos, lastChange);
       renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
+  }
+
+  // "Last change" column (proposal page 7): each item's newest movement and
+  // who made it (performed_by_name, recorded since 2026-10-07).
+  async function loadLastChangeByItem() {
+    const last = new Map();
+    try {
+      const PAGE = 1000;
+      for (let from = 0; from < 50000; from += PAGE) {
+        const { data, error } = await sb.from("inventory_transactions")
+          .select("item_id, created_at, performed_by_name")
+          .order("created_at", { ascending: false }).range(from, from + PAGE - 1);
+        if (error) throw error;
+        for (const t of data) if (t.item_id && !last.has(t.item_id)) last.set(t.item_id, t);
+        if (data.length < PAGE) break;
+      }
+    } catch (e) { console.error("last change", e); }
+    return last;
+  }
+  function lastChangeCell(t) {
+    if (!t) return `<td class="mi-last muted">—</td>`;
+    const w = window.ORYX_ITEM ? window.ORYX_ITEM.when(t.created_at).long : new Date(t.created_at).toLocaleString("en-GB");
+    return `<td class="mi-last"><b>${esc(t.performed_by_name || "Before sign-in")}</b><div>${esc(w)}</div></td>`;
   }
 
   // Remembered matches ("teach once, remember"): every saved link, newest
@@ -5652,6 +5676,8 @@
         }
         dlg.close();
         await loadMasterInventoryView();
+        // An open item panel shows the new stock and the new line straight away.
+        if (window.ORYX_ITEM && window.ORYX_ITEM.currentItemId() === item.id) window.ORYX_ITEM.open(item);
       } catch (err) {
         console.error(err);
         showErr(err.message);
@@ -5668,70 +5694,119 @@
   let miCurrentItems = [];
   let miFilteredItems = [];
 
-  function renderMasterInventoryView(items, txs, photos) {
-    const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
-    const lowStock = items.filter((it) => it.buffer_level != null && it.current_qty <= it.buffer_level);
-    $("#miTally").innerHTML = `
-      <div class="fp-tally-item"><strong>${items.length}</strong><span>Items</span></div>
-      <div class="fp-tally-item"><strong>${money(totalValue)}</strong><span>Total value (Freedom)</span></div>
-      <div class="fp-tally-item"><strong>${lowStock.length}</strong><span>Low stock</span></div>
-    `;
+  // Status shown in the list (and used by the filter chips).
+  function miStatus(it) {
+    if (!(Number(it.current_qty) > 0)) return { key: "out", html: `<span class="badge no">Out of stock</span>` };
+    if (!(Number(it.unit_cost) > 0)) return { key: "nocost", html: `<span class="badge warn">No cost</span>` };
+    if (it.buffer_level != null && it.current_qty <= it.buffer_level) return { key: "low", html: `<span class="badge warn">Low stock</span>` };
+    return { key: "ok", html: `<span class="badge ok">In stock</span>` };
+  }
 
-    const PAGE_SIZE = 25;
-    let page = 0;
+  let miPage = 0;
+  function renderMasterInventoryView(items, txs, photos, lastChange) {
+    lastChange = lastChange || new Map();
+    const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
+    const codes = new Set(items.map((it) => String(it.item_code).toUpperCase()));
+    const hasPhoto = (it) => photos && photos.has(String(it.item_code).toUpperCase());
+    const noPhotoCodes = [...codes].filter((c) => !(photos && photos.has(c))).length;
+    $("#miTally").innerHTML = `
+      <span class="mi-kpi"><b>${esc(money(totalValue).replace(/\.\d\d$/, ""))}</b> stock value</span>
+      <span class="mi-kpi"><b>${items.length}</b> items in ${codes.size} codes</span>`;
+
+    const FILTERS = {
+      all: { label: "All", test: () => true },
+      out: { label: "Out of stock", test: (it) => miStatus(it).key === "out" },
+      nocost: { label: "No cost", test: (it) => miStatus(it).key === "nocost" },
+      nophoto: { label: "No photo", test: (it) => !hasPhoto(it), count: `${noPhotoCodes} codes` },
+      low: { label: "Low stock", test: (it) => miStatus(it).key === "low" },
+    };
+    const drawChips = () => {
+      const cur = $("#miFilter").value || "all";
+      $("#miChips").innerHTML = Object.entries(FILTERS).map(([k, f]) => {
+        const n = items.filter(f.test).length;
+        if (k === "low" && !n) return "";
+        return `<button type="button" class="pill ${k === cur ? "on" : ""}" data-mi-chip="${k}">${f.label} · ${f.count || n}</button>`;
+      }).join("");
+    };
+
+    const PAGE_SIZE = 10;
     miCurrentItems = items;
 
     function draw() {
       const q = ($("#miSearch").value || "").trim().toLowerCase();
-      const onlyLow = $("#miFilter").value === "low";
+      const f = FILTERS[$("#miFilter").value] || FILTERS.all;
       const filtered = items.filter((it) => {
-        if (onlyLow && !(it.buffer_level != null && it.current_qty <= it.buffer_level)) return false;
+        if (!f.test(it)) return false;
         if (!q) return true;
         return it.item_code.toLowerCase().includes(q) || (it.description || "").toLowerCase().includes(q);
       });
 
       miFilteredItems = filtered;
       const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-      page = Math.min(page, pageCount - 1);
-      const start = page * PAGE_SIZE;
+      miPage = Math.min(miPage, pageCount - 1);
+      const start = miPage * PAGE_SIZE;
       const pageItems = filtered.slice(start, start + PAGE_SIZE);
+      const openId = window.ORYX_ITEM && window.ORYX_ITEM.currentItemId();
 
       $("#miItemsBody").innerHTML = pageItems.map((it) => {
-        const low = it.buffer_level != null && it.current_qty <= it.buffer_level;
-        return `<tr>
-          ${itemPhotoCell(photos, it)}
-          <td class="code">${esc(it.item_code)}</td>
-          <td>${esc(it.description)}${it.bar_length_mm ? `<div class="small muted">${esc(it.bar_length_mm)} mm</div>` : ""}</td>
-          <td class="num">${fmt(it.current_qty)}</td>
-          <td class="num">${money(it.unit_cost)}</td>
-          <td class="num">${money(it.current_value)}</td>
-          <td>${low ? `<span class="fp-status-short">Low</span>` : it.current_qty <= 0 ? `<span class="fp-status-unmatched">Out</span>` : `<span class="fp-status-ok">OK</span>`}</td>
-          <td><button class="ghost" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
+        const sub = [esc(it.item_code), it.bar_length_mm ? `${esc(fmt(it.bar_length_mm))} mm` : "", hasPhoto(it) ? "" : "no photo yet"].filter(Boolean).join(" · ");
+        return `<tr class="mi-row ${it.id === openId ? "sel" : ""}" data-mi-row="${esc(it.id)}">
+          <td><div class="mi-item">${itemPhotoButton(photos, it)}<div><div class="mi-name">${esc(it.description || it.item_code)}</div><div class="mi-code mono">${sub}</div></div></div></td>
+          <td class="num mono">${fmt(it.current_qty)}</td>
+          <td class="num mono">${Number(it.unit_cost || 0).toFixed(2)}</td>
+          <td class="num mono">${Number(it.current_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td>${miStatus(it).html}</td>
+          ${lastChangeCell(lastChange.get(it.id))}
+          <td class="mi-actions"><button class="btn-outline btn-sm" type="button" data-mi-timeline="${esc(it.id)}">Timeline</button>
+            <button class="btn-outline btn-sm" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="8" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="7" class="small muted">No items match.</td></tr>`;
 
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-photo]")) {
-        btn.onclick = () => openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap);
+        btn.onclick = (e) => { e.stopPropagation(); openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap); };
+      }
+      const openTimeline = (id) => {
+        const item = pageItems.find((it) => String(it.id) === id);
+        if (!item || !window.ORYX_ITEM) return;
+        window.ORYX_ITEM.open(item, { onAdjust: (fresh) => openMiAdjustDialog(fresh || item) });
+        for (const tr of $("#miItemsBody").querySelectorAll("tr[data-mi-row]")) tr.classList.toggle("sel", tr.dataset.miRow === id);
+      };
+      for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-timeline]")) {
+        btn.onclick = (e) => { e.stopPropagation(); openTimeline(btn.dataset.miTimeline); };
+      }
+      for (const tr of $("#miItemsBody").querySelectorAll("tr[data-mi-row]")) {
+        tr.onclick = (e) => { if (!e.target.closest("button")) openTimeline(tr.dataset.miRow); };
       }
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-adjust]")) {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
           const item = pageItems.find((it) => String(it.id) === btn.dataset.miAdjust);
           if (item) openMiAdjustDialog(item);
         };
       }
 
       $("#miItemsPagerInfo").textContent = filtered.length
-        ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, filtered.length)} of ${filtered.length}`
+        ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, filtered.length)} of ${filtered.length} · tap a photo to enlarge`
         : "No items match.";
-      $("#miItemsPageLabel").textContent = `Page ${page + 1} of ${pageCount}`;
-      $("#miItemsPrev").disabled = page === 0;
-      $("#miItemsNext").disabled = page >= pageCount - 1;
+      $("#miItemsPageLabel").textContent = `Page ${miPage + 1} of ${pageCount}`;
+      $("#miItemsPrev").disabled = miPage === 0;
+      $("#miItemsNext").disabled = miPage >= pageCount - 1;
     }
+    drawChips();
     draw();
-    $("#miSearch").oninput = () => { page = 0; draw(); };
-    $("#miFilter").onchange = () => { page = 0; draw(); };
-    $("#miItemsPrev").onclick = () => { page = Math.max(0, page - 1); draw(); };
-    $("#miItemsNext").onclick = () => { page = page + 1; draw(); };
+    $("#miChips").onclick = (e) => {
+      const b = e.target.closest("[data-mi-chip]"); if (!b) return;
+      $("#miFilter").value = b.dataset.miChip; miPage = 0; drawChips(); draw();
+    };
+    $("#miSearch").oninput = () => { miPage = 0; draw(); };
+    $("#miItemsPrev").onclick = () => { miPage = Math.max(0, miPage - 1); draw(); };
+    $("#miItemsNext").onclick = () => { miPage = miPage + 1; draw(); };
+    if (!renderMasterInventoryView.wired) {
+      renderMasterInventoryView.wired = true;
+      document.addEventListener("oryx-item-closed", () => {
+        for (const tr of document.querySelectorAll("#miItemsBody tr.sel")) tr.classList.remove("sel");
+      });
+    }
 
     renderTransactionHistory(txs);
   }
@@ -6055,9 +6130,9 @@
     try {
       await loadXlsxLib();
       const q = ($("#miSearch").value || "").trim();
-      const onlyLow = $("#miFilter").value === "low";
+      const filterKey = $("#miFilter").value || "all";
       const notes = [];
-      if (onlyLow) notes.push("low stock only");
+      if (filterKey !== "all") notes.push(({ out: "out of stock", nocost: "no cost", nophoto: "no photo", low: "low stock" })[filterKey] + " only");
       if (q) notes.push(`search "${q}"`);
       const filterNote = notes.length ? `filtered: ${notes.join(", ")} (${items.length} of ${miCurrentItems.length} items)` : "";
       const wb = window.XLSX.utils.book_new();
@@ -6110,8 +6185,47 @@
     }
   }
 
+  // Header stepper (Upload → Review → Confirm) and, on Check-in, the
+  // Supplier / Invoice / Currency / Exchange rate strip (proposal pages 5-6).
+  // Purely a read-out of what the page already shows; nothing here acts.
+  function updateFlowUi() {
+    const step = (pre) => {
+      const done = !!($(`#${pre}Done`) && $(`#${pre}Done`).textContent.trim());
+      const review = !done && (!$(`#${pre}ConfirmBar`).hidden || !!$(`#${pre}Out`).querySelector("table"));
+      const now = done ? 3 : review ? 2 : 1;
+      for (const st of document.querySelectorAll(`#${pre}Stepper .st`)) {
+        const n = Number(st.dataset.step);
+        st.classList.toggle("done", n < now || (done && n === 3));
+        st.classList.toggle("now", n === now && !(done && n === 3));
+        st.querySelector(".st-dot").textContent = n < now || (done && n === 3) ? "✓" : String(n);
+      }
+    };
+    step("fp"); step("ci");
+    const box = $("#ciSummary");
+    if (!box) return;
+    const shown = !$("#ciConfirmBar").hidden || !!$("#ciOut").querySelector("table");
+    box.hidden = !shown || !ciState.rows;
+    if (box.hidden) return;
+    const cur = ciState.currency || "—";
+    const basis = ciState.currencyBasis ? String(ciState.currencyBasis) : "";
+    const d = ($("#ciDocDate").value || "").trim();
+    const day = d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "No date found";
+    const rate = cur === "AED" ? "No conversion" : ciState.exchangeRate ? `1 ${esc(cur)} = ${Number(ciState.exchangeRate).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")} AED` : "Rate needed";
+    box.innerHTML = `
+      <div><span>Supplier</span><b>${esc(($("#ciSupplier").value || "").trim() || "Not found — type it below")}</b><small>${esc(ciState.header && ciState.header.docType ? ciState.header.docType : "")}</small></div>
+      <div><span>Invoice</span><b class="mono">${esc(($("#ciInvoiceNumber").value || "").trim() || "—")}</b><small>${esc(day)}</small></div>
+      <div><span>Currency</span><b>${esc(cur)}</b><small>${esc(({ stated: "Written on the invoice", "dollar-australian-details": "\"$\" with Australian details", "dollar-us-details": "\"$\" with US details", "dollar-default-aud": "\"$\" read as AUD", "dollar-chosen": "Chosen by you", none: "No foreign currency found" })[basis] || "Change it below if wrong")}</small></div>
+      <div><span>Exchange rate</span><b class="mono">${rate}</b><small>${esc(ciState.rateDate ? "Rate for " + ciState.rateDate : ciState.rateSource && ciState.rateSource !== "n/a" ? ciState.rateSource : "")}</small></div>`;
+  }
+
   function init() {
     if (!$("#fpExtract")) { setTimeout(init, 50); return; }
+    const flowObserver = new MutationObserver(() => updateFlowUi());
+    for (const id of ["#fpOut", "#fpDone", "#fpConfirmBar", "#ciOut", "#ciDone", "#ciConfirmBar"]) {
+      if ($(id)) flowObserver.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
+    }
+    for (const id of ["#ciSupplier", "#ciInvoiceNumber", "#ciDocDate"]) if ($(id)) $(id).addEventListener("input", updateFlowUi);
+    updateFlowUi();
     wireDrop($("#fpDrop"), $("#fpPdf"), "pdf");
     $("#fpExtract").addEventListener("click", analyse);
     $("#fpReset").addEventListener("click", resetAll);

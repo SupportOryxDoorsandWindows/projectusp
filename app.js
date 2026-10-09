@@ -990,21 +990,49 @@ $("#chips").addEventListener("click", e => {
 // First paint: a fresh, unsaved chat with the sidebar alongside it.
 startNewChat();
 
-// ---- tabs ----
-document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => {
-  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + b.dataset.v));
-}));
+// ---- tabs (sidebar) ----
+function showView(v) {
+  document.querySelectorAll("nav button[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === v));
+  document.querySelectorAll(".view").forEach(el => el.classList.toggle("on", el.id === "v-" + v));
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll("nav button[data-v]").forEach(b => b.addEventListener("click", () => showView(b.dataset.v)));
+window.ORYX_SHOW_VIEW = showView;
 
-// ---- checker ----
+// ---- checker (proposal page 2) ----
 const ALL_THRESHOLDS = [...new Set(SYS.flatMap(s => Object.keys(s.thresholds)))];
 $("#thr").innerHTML = `<option value="">Any</option>` +
   ALL_THRESHOLDS.map(t => `<option>${esc(t)}</option>`).join("");
 
+// Family buttons and the "Needs automation" tick drive the same hidden
+// fields the check (and saved checks) already read.
+function setFamily(f) {
+  $("#fam").value = f || "";
+  $("#famSeg").querySelectorAll("button").forEach(b => b.classList.toggle("on", (b.dataset.fam || "") === (f || "")));
+}
+$("#famSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-fam]"); if (b) setFamily(b.dataset.fam);
+});
+$("#automChk").addEventListener("change", () => { $("#autom").value = $("#automChk").checked ? "yes" : ""; });
+
+// Plain opening diagram: n equal panels in one frame.
+function openingSVG(n) {
+  const w = 146, h = 92, k = Math.max(1, Math.min(n || 1, 12));
+  let lines = "";
+  for (let i = 1; i < k; i++) { const x = 3 + (i * (w - 6)) / k; lines += `<line x1="${x}" y1="3" x2="${x}" y2="${h - 3}" stroke="#4a5b66" stroke-width="2"/>`; }
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><rect x="2" y="2" width="${w - 4}" height="${h - 4}" fill="#EAF3FB" stroke="#4a5b66" stroke-width="3"/>${lines}</svg>`;
+}
+const sysSpecLine = s => [
+  s.tracks.length ? `${s.tracks.length > 1 ? s.tracks.slice(0, -1).join(", ") + " or " + s.tracks.slice(-1) : s.tracks[0]} track${s.tracks.length === 1 && s.tracks[0] === "1" ? "" : "s"}` : "",
+  s.locking && !/^n\/?a$/i.test(s.locking) ? s.locking : "",
+  /^yes$/i.test(s.automation || "") ? "Automation available" : "",
+  s.glass ? `Glass ${s.glass} mm` : "",
+].filter(Boolean).join(" · ");
+
 $("#chkForm").addEventListener("submit", e => {
   e.preventDefault();
   const W = +$("#ow").value, H = +$("#oh").value;
-  if (!W || !H) { $("#chkOut").innerHTML = `<div class="card">Enter both the width and the height.</div>`; return; }
+  if (!W || !H) { $("#chkOut").innerHTML = `<div class="chk-empty">Enter both the width and the height.</div>`; return; }
   const opt = {
     family: $("#fam").value || null,
     threshold: $("#thr").value || null,
@@ -1012,27 +1040,40 @@ $("#chkForm").addEventListener("submit", e => {
     maxPanels: +$("#maxp").value || null
   };
   const r = checkOpening(W, H, opt);
-  let out = `<div class="card"><h2>Opening ${fmt(W)} × ${fmt(H)} mm — ${r.fits.length} suitable system${r.fits.length === 1 ? "" : "s"}</h2>`;
-  if (!r.fits.length) out += `<p class="muted">No system in the range covers this opening under the constraints selected.</p>`;
+  const total = r.fits.length + r.misses.length;
+  const fam = opt.family ? opt.family.toLowerCase() + " " : "";
+  let out = `<div class="chk-head"><b>${r.fits.length} of ${total} ${fam}system${total === 1 ? "" : "s"} fit</b>
+    <span>${fmt(W)} × ${fmt(H)} mm · ${(W * H / 1e6).toFixed(2)} m²</span></div>`;
+  if (!r.fits.length) out += `<div class="chk-empty">No system in the range covers this opening with the options chosen.</div>`;
   out += r.fits.map(v => `
-    <div class="result fit">
-      <h4>${esc(v.sys.name)} <span class="tag ok">SUITABLE</span> <span class="tag n">${v.panels.n} panels</span></h4>
-      <div class="small">Panel size ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm · ${v.panels.area.toFixed(2)} m² per panel</div>
-      <div class="small muted" style="margin-top:5px">${esc(v.configs.join(" · "))}</div>
-      ${configVisual(v.sys, v.configs)}
-      ${optionLine(v.sys)}
+    <div class="chk-res">
+      <div class="chk-vis">${openingSVG(v.panels.n)}</div>
+      <div class="chk-main">
+        <div class="chk-name">${esc(v.sys.name)} <span class="badge ok">Fits</span></div>
+        <div>${v.panels.n} panel${v.panels.n === 1 ? "" : "s"} of ${fmt(v.panels.sw)} × ${fmt(v.panels.sh)} mm · ${v.panels.area.toFixed(2)} m² each${v.sys.sash_sqm_max ? ` (max ${v.sys.sash_sqm_max} m²)` : ""}</div>
+        <div class="muted small">${esc(sysSpecLine(v.sys))}</div>
+        <div class="muted small">Configurations: ${esc(v.configs.join(" · "))}</div>
+      </div>
+      <button class="link-btn chk-details" type="button" data-sys="${esc(v.sys.id)}">Details</button>
     </div>`).join("");
-  if (r.misses.length) {
-    out += `<h3>Not suitable</h3>` + r.misses.map(v => `
-      <div class="result no">
-        <h4>${esc(v.sys.name)} <span class="tag no">NO</span></h4>
-        <div class="small muted">${esc(v.reasons.join(" "))}</div>
-      </div>`).join("");
-  }
+  out += r.misses.map(v => `
+    <div class="chk-res">
+      <div class="chk-vis no">${openingSVG(2)}</div>
+      <div class="chk-main">
+        <div class="chk-name">${esc(v.sys.name)} <span class="badge no">Doesn’t fit</span></div>
+        <div>${esc(v.reasons.join(" "))}</div>
+        <div class="muted small">${esc(sysSpecLine(v.sys))}</div>
+      </div>
+      <button class="link-btn chk-details" type="button" data-sys="${esc(v.sys.id)}">Details</button>
+    </div>`).join("");
   if (r.excluded.length)
-    out += `<p class="small muted">${r.excluded.length} system(s) excluded by the filters you set.</p>`;
-  out += `</div>`;
+    out += `<p class="small muted">${r.excluded.length} system${r.excluded.length === 1 ? "" : "s"} left out by the options you chose.</p>`;
   $("#chkOut").innerHTML = out;
+});
+$("#chkOut").addEventListener("click", e => {
+  const b = e.target.closest("[data-sys]"); if (!b) return;
+  const i = SYS.findIndex(s => s.id === b.dataset.sys);
+  if (i >= 0) { showView("systems"); showSystem(i); }
 });
 
 /* ---- saved opening checks ------------------------------------------ *
@@ -1061,9 +1102,9 @@ function chkSummary(c) {
 }
 
 function renderChecks() {
-  const wrap = $("#chkSavedWrap"), list = $("#chkSaved");
-  if (!store.ok || !savedChecks.length) { wrap.hidden = true; return; }
-  wrap.hidden = false;
+  const list = $("#chkSaved");
+  $("#chkSavedCount").textContent = savedChecks.length;
+  $("#chkSavedEmpty").hidden = savedChecks.length > 0;
   list.innerHTML = savedChecks.slice().sort((a, b) => b.savedAt - a.savedAt).map(c => `
     <div class="history-item" data-id="${c.id}" role="button" tabindex="0" title="Load and run this check">
       <div class="hi-main">
@@ -1073,24 +1114,33 @@ function renderChecks() {
       <button class="hi-del" data-del="${c.id}" type="button" title="Delete this saved check" aria-label="Delete this saved check">×</button>
     </div>`).join("");
 }
+function toggleSavedChecks(open) {
+  const wrap = $("#chkSavedWrap");
+  wrap.hidden = open === undefined ? !wrap.hidden : !open;
+  $("#chkSavedBtn").setAttribute("aria-expanded", String(!wrap.hidden));
+}
+$("#chkSavedBtn").addEventListener("click", () => toggleSavedChecks());
+$("#chkSavedClose").addEventListener("click", () => toggleSavedChecks(false));
 
 function loadCheck(id) {
   const c = savedChecks.find(x => x.id === id);
   if (!c) return;
   $("#ow").value = c.W || "";
   $("#oh").value = c.H || "";
-  $("#fam").value = c.family || "";
+  setFamily(c.family || "");
   $("#thr").value = c.threshold || "";
   $("#autom").value = c.automation || "";
+  $("#automChk").checked = c.automation === "yes";
   $("#maxp").value = c.maxPanels || "";
   $("#chkTitle").value = c.title || "";
+  toggleSavedChecks(false);
   $("#chkForm").requestSubmit();
 }
 
 $("#chkSave").addEventListener("click", () => {
   const W = +$("#ow").value, H = +$("#oh").value;
   if (!W || !H) {
-    $("#chkOut").innerHTML = `<div class="card">Enter a width and a height before saving.</div>`;
+    $("#chkOut").innerHTML = `<div class="chk-empty">Enter a width and a height before saving.</div>`;
     return;
   }
   const title = $("#chkTitle").value.trim();
@@ -1127,36 +1177,57 @@ $("#chkSaved").addEventListener("keydown", e => {
 });
 
 // If the browser blocks storage, hide the save controls entirely.
-if (!store.ok) $("#chkSaveRow").hidden = true;
+if (!store.ok) { $("#chkSave").hidden = true; $("#chkSavedBtn").hidden = true; }
 renderChecks();
 
-// ---- systems browser ----
-$("#sysnav").innerHTML = SYS.map((s, i) =>
-  `<button class="ghost" data-i="${i}">${esc(s.name)}</button>`).join("");
+// ---- systems browser (proposal page 3) ----
+const FAMILIES = [...new Set(SYS.map(s => s.family))];
+let sysCurrent = 0, sysDrawKind = null;
+function renderSysNav() {
+  const q = ($("#sysSearch").value || "").trim().toLowerCase();
+  const hit = s => !q || s.name.toLowerCase().includes(q) || s.family.toLowerCase().includes(q);
+  $("#sysnav").innerHTML = FAMILIES.map(f => {
+    const list = SYS.map((s, i) => [s, i]).filter(([s]) => s.family === f && hit(s));
+    if (!list.length) return "";
+    return `<div class="sys-fam">${esc(f)} · ${SYS.filter(s => s.family === f).length}</div>` +
+      list.map(([s, i]) => `<button type="button" data-i="${i}" class="${i === sysCurrent ? "on" : ""}">${esc(s.name)}</button>`).join("");
+  }).join("") || `<p class="small muted">No system matches “${esc(q)}”.</p>`;
+}
+$("#sysSearch").addEventListener("input", renderSysNav);
 $("#sysnav").addEventListener("click", e => {
-  const b = e.target.closest("button"); if (!b) return;
+  const b = e.target.closest("button[data-i]"); if (!b) return;
   showSystem(+b.dataset.i);
 });
 
+const DRAW_KINDS = [["configuration", "Configuration"], ["threshold", "Threshold"], ["drainage", "Drainage"], ["sightline", "Sightline"], ["size", "Size"]];
 function showSystem(i) {
   const s = SYS[i];
-  $("#sysnav").querySelectorAll("button").forEach((b, idx) => b.classList.toggle("on", idx === i));
-  const flags = o => Object.entries(o).map(([k, v]) =>
-    `<span class="${v === true ? "yes" : "nope"}">${MARK(v)} ${esc(k)}${v === null ? " <i>(not recorded)</i>" : ""}</span>`)
-    .join("<br>") || "<span class='nope'>—</span>";
-  let h = `<h3 style="margin-top:0">${esc(s.name)} <span class="tag fam">${s.family}</span></h3>
-    <dl class="kv">
-      <dt>Maximum sash</dt><dd>${fmt(s.sash_w_max)} × ${fmt(s.sash_h_max)} mm</dd>
-      ${s.sash_w_min ? `<dt>Minimum sash</dt><dd>${fmt(s.sash_w_min)} × ${fmt(s.sash_h_min)} mm</dd>` : ""}
-      <dt>Maximum sash area</dt><dd>${s.sash_sqm_max ? s.sash_sqm_max + " m²" : "<span class='muted'>Not stated in the source data</span>"}</dd>
-      <dt>Glass thickness</dt><dd>${esc(s.glass)} mm</dd>
-      <dt>Tracks</dt><dd>${s.tracks.length ? esc(s.tracks.join(", ")) : "<span class='muted'>—</span>"}</dd>
-      <dt>Locking</dt><dd>${esc(s.locking || "—")}</dd>
-      <dt>Automation</dt><dd>${esc(s.automation || "—")}</dd>
-      <dt>Thresholds</dt><dd>${flags(s.thresholds)}</dd>
-      <dt>Drainage</dt><dd>${flags(s.drainage)}</dd>
-      <dt>Configurations</dt><dd>${s.configs.map(c => esc(c.label) + (c.tracks ? ` <span class="muted">(${esc(c.tracks)} tracks)</span>` : "")).join("<br>")}</dd>
-    </dl>`;
+  sysCurrent = i;
+  renderSysNav();
+  const chips = o => {
+    const e = Object.entries(o || {});
+    if (!e.length) return `<span class="opt-chip none">Not recorded</span>`;
+    return e.map(([k, v]) => `<span class="opt-chip ${v === true ? "yes" : v === false ? "no" : "none"}">${v === true ? "✓" : v === false ? "✕" : "?"} ${esc(k)}${v === null ? " (not recorded)" : ""}</span>`).join("");
+  };
+  const spec = (label, value) => `<div class="spec"><div class="spec-l">${label}</div><div class="spec-v">${value}</div></div>`;
+  const auto = /^yes$/i.test(s.automation || "") ? "Available" : "Not available";
+  let h = `<div class="sys-title"><h2>${esc(s.name)}</h2><span class="badge fam">${esc(s.family)}</span></div>
+    <div class="spec-grid">
+      ${spec("Maximum sash", `${fmt(s.sash_w_max)} × ${fmt(s.sash_h_max)} mm`)}
+      ${s.sash_w_min ? spec("Minimum sash", `${fmt(s.sash_w_min)} × ${fmt(s.sash_h_min)} mm`) : ""}
+      ${spec("Maximum sash area", s.sash_sqm_max ? s.sash_sqm_max + " m²" : "Not stated")}
+      ${spec("Glass thickness", esc(s.glass) + " mm")}
+      ${spec("Tracks", s.tracks.length ? esc(s.tracks.join(", ")) : "—")}
+      ${spec("Locking", esc(s.locking || "—"))}
+      ${spec("Automation", auto)}
+    </div>
+    <div class="sys-opts">
+      <div><h3>Thresholds</h3><div class="opt-chips">${chips(s.thresholds)}</div></div>
+      <div><h3>Drainage and sightlines</h3><div class="opt-chips">${chips(s.drainage)}${Object.keys(s.sightlines || {}).length ? chips(s.sightlines) : ""}</div></div>
+    </div>
+    <h3>Configurations · ${s.configs.length} <span class="muted" style="font-weight:400">(S sliding, F fixed)</span></h3>
+    <div class="cfg-tiles">${s.configs.map(c => `<div class="cfg-tile">${c.label === "Any configuration" ? anyConfigSVG() : panelSVG(c.label.split(/\s*\+\s*/))}
+      <div class="cap">${esc(c.label)}${c.tracks ? ` · ${esc(c.tracks)} tracks` : ""}</div></div>`).join("") || `<span class="muted">—</span>`}</div>`;
 
   const eng = KB.engineering[s.id];
   if (eng) {
@@ -1164,34 +1235,89 @@ function showSystem(i) {
       Object.entries(eng).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") + `</dl>`;
   }
 
-  for (const kind of ["configuration", "threshold", "drainage", "sightline", "size"]) {
-    const g = s.drawings.filter(d => d.kind === kind);
-    if (!g.length) continue;
-    h += `<h3>${kind[0].toUpperCase() + kind.slice(1)} drawings</h3>` + figures(g);
+  const kinds = DRAW_KINDS.filter(([k]) => s.drawings.some(d => d.kind === k));
+  if (kinds.length) {
+    if (!kinds.some(([k]) => k === sysDrawKind)) sysDrawKind = (kinds.find(([k]) => k !== "configuration") || kinds[0])[0];
+    h += `<div class="draw-head"><h3>Drawings · ${s.drawings.length}</h3><div class="seg seg-sm" id="drawTabs">` +
+      kinds.map(([k, l]) => `<button type="button" data-kind="${k}" class="${k === sysDrawKind ? "on" : ""}">${l} ${s.drawings.filter(d => d.kind === k).length}</button>`).join("") +
+      `</div></div><div id="drawBody">${figures(s.drawings.filter(d => d.kind === sysDrawKind))}</div>`;
   }
   $("#sysBody").innerHTML = h;
 }
+$("#sysBody").addEventListener("click", e => {
+  const b = e.target.closest("#drawTabs button[data-kind]"); if (!b) return;
+  sysDrawKind = b.dataset.kind;
+  showSystem(sysCurrent);
+});
 showSystem(0);
 
-// ---- header counts ----
+// ---- header counts (Systems subtitle) ----
 $("#sysCount").textContent = SYS.length;
+$("#famCount").textContent = FAMILIES.length;
 $("#drwCount").textContent = SYS.reduce((n, s) => n + s.drawings.length, 0);
 
-// ---- comparison ----
+// ---- comparison (proposal page 4) ----
 $("#srcName").textContent = KB.source;
+const MAX_AREA = Math.max(...SYS.map(s => s.sash_sqm_max || 0)) || 1;
+$("#cmpMaxArea").textContent = MAX_AREA;
+let cmpFamily = "", cmpPicked = [];
+const yesNoBadge = s => /^yes$/i.test(s.automation || "") ? `<span class="badge ok">Yes</span>` : `<span class="badge grey">No</span>`;
+function renderComparison() {
+  $("#cmpFams").innerHTML = [["", `All · ${SYS.length}`], ...FAMILIES.map(f => [f, `${f} · ${SYS.filter(s => s.family === f).length}`])]
+    .map(([f, l]) => `<button type="button" class="pill ${f === cmpFamily ? "on" : ""}" data-fam="${esc(f)}">${esc(l)}</button>`).join("");
+  const rows = SYS.filter(s => !cmpFamily || s.family === cmpFamily);
+  $("#matrix").innerHTML = `<thead><tr><th class="c"><span class="sr-only">Compare</span></th><th>System</th><th>Family</th><th class="num">Max sash (mm)</th><th>Max sash area</th>
+    <th>Glass (mm)</th><th>Tracks</th><th>Locking</th><th>Automation</th></tr></thead><tbody>` +
+    rows.map(s => {
+      const on = cmpPicked.includes(s.id);
+      const pct = s.sash_sqm_max ? Math.round((s.sash_sqm_max / MAX_AREA) * 100) : 0;
+      return `<tr class="${on ? "picked" : ""}">
+        <td class="c"><input type="checkbox" data-pick="${esc(s.id)}" ${on ? "checked" : ""} aria-label="Compare ${esc(s.name)}"></td>
+        <td><b>${esc(s.name)}</b></td><td class="muted">${esc(s.family)}</td>
+        <td class="num mono">${fmt(s.sash_w_max)} × ${fmt(s.sash_h_max)}</td>
+        <td><div class="area-cell"><span class="area-bar"><span style="width:${pct}%"></span></span><span class="mono">${s.sash_sqm_max ? s.sash_sqm_max + " m²" : "—"}</span></div></td>
+        <td class="mono">${esc(s.glass)}</td><td>${esc(s.tracks.join(", ") || "—")}</td>
+        <td>${esc(s.locking && !/^n\/?a$/i.test(s.locking) ? s.locking : "—")}</td><td>${yesNoBadge(s)}</td></tr>`;
+    }).join("") + `</tbody>`;
+  $("#cmpCount").textContent = cmpPicked.length;
+  $("#cmpBtn").disabled = cmpPicked.length < 2;
+}
+$("#cmpFams").addEventListener("click", e => {
+  const b = e.target.closest("[data-fam]"); if (!b) return;
+  cmpFamily = b.dataset.fam; renderComparison();
+});
+$("#matrix").addEventListener("change", e => {
+  const id = e.target.dataset && e.target.dataset.pick; if (!id) return;
+  if (e.target.checked) {
+    if (cmpPicked.length >= 3) { e.target.checked = false; return; }
+    cmpPicked.push(id);
+  } else cmpPicked = cmpPicked.filter(x => x !== id);
+  renderComparison();
+});
 const MCOLS = [
-  ["System", s => s.name], ["Family", s => s.family],
-  ["Max sash W", s => fmt(s.sash_w_max) + " mm"], ["Max sash H", s => fmt(s.sash_h_max) + " mm"],
-  ["Max area", s => s.sash_sqm_max ? s.sash_sqm_max + " m²" : "—"],
+  ["Family", s => s.family],
+  ["Maximum sash", s => `${fmt(s.sash_w_max)} × ${fmt(s.sash_h_max)} mm`],
+  ["Minimum sash", s => s.sash_w_min ? `${fmt(s.sash_w_min)} × ${fmt(s.sash_h_min)} mm` : "—"],
+  ["Maximum sash area", s => s.sash_sqm_max ? s.sash_sqm_max + " m²" : "—"],
   ["Glass", s => s.glass + " mm"], ["Tracks", s => s.tracks.join(", ") || "—"],
-  ["Locking", s => s.locking || "—"], ["Automation", s => s.automation || "—"],
+  ["Locking", s => s.locking || "—"], ["Automation", s => /^yes$/i.test(s.automation || "") ? "Yes" : "No"],
   ["Thresholds", s => Object.entries(s.thresholds).filter(([, v]) => v === true).map(([k]) => k).join(", ") || "Not recorded"],
   ["Drainage", s => Object.entries(s.drainage).filter(([, v]) => v === true).map(([k]) => k).join(", ") || "Not recorded"],
+  ["Configurations", s => s.configs.map(c => c.label).join(" · ") || "—"],
 ];
-$("#matrix").innerHTML =
-  `<thead><tr>${MCOLS.map(c => `<th>${c[0]}</th>`).join("")}</tr></thead><tbody>` +
-  SYS.map(s => `<tr>${MCOLS.map(c => `<td>${esc(c[1](s))}</td>`).join("")}</tr>`).join("") +
-  `</tbody>`;
+$("#cmpBtn").addEventListener("click", () => {
+  const picked = cmpPicked.map(id => SYS.find(s => s.id === id)).filter(Boolean);
+  if (picked.length < 2) return;
+  $("#cmpOut").innerHTML = `<div class="card cmp-close">
+    <div class="history-head"><span class="card-title" style="margin:0">${picked.map(s => esc(s.name)).join(" vs ")}</span>
+      <button class="link-btn" type="button" id="cmpCloseBtn">Close</button></div>
+    <div class="wrap-x"><table class="cmp-table cmp-side"><thead><tr><th></th>${picked.map(s => `<th>${esc(s.name)}</th>`).join("")}</tr></thead><tbody>` +
+    MCOLS.map(([label, f]) => `<tr><th>${label}</th>${picked.map(s => `<td>${esc(f(s))}</td>`).join("")}</tr>`).join("") +
+    `</tbody></table></div></div>`;
+  $("#cmpOut").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("#cmpOut").addEventListener("click", e => { if (e.target.id === "cmpCloseBtn") $("#cmpOut").innerHTML = ""; });
+renderComparison();
 
 // ---- lightbox ----
 function zoom(src, cap) { $("#lbImg").src = src; $("#lbCap").textContent = cap; $("#lightbox").showModal(); }

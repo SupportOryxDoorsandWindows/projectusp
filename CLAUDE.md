@@ -79,8 +79,7 @@ product lines — never treat one family's item as a match for another's:
   asks first ("It's for me — continue" / "Stay signed in as me") when someone
   else is already signed in on that browser. Admins can Remove a person
   (`user-admin` `remove_user`: never yourself, never the last Admin).
-- Activity timeline (`activity.js`, tab "Activity"; the user didn't want a
-  per-item "Last change"/Timeline in Master Inventory): who did each movement is
+- Activity timeline (`activity.js`, tab "Activity"): who did each movement is
   `inventory_transactions.performed_by(_name/_email)`, stamped by trigger
   `stamp_transaction_actor` from a transaction-local setting that the
   `checkin_transaction_by` / `checkout_transaction_by` wrappers (service_role)
@@ -95,6 +94,28 @@ product lines — never treat one family's item as a match for another's:
   from here do NOT run as the signed-in user. Test the rules in SQL with
   `set local role authenticated` + `request.jwt.claims` (rolled back), and the
   screens against a stand-in backend (Playwright `page.route`).
+
+## UI layout (approved "Oryx Inventory — New UI Proposal", 12 pages)
+
+- Shell: left sidebar (`.side`, `nav.side-nav`; Products / Stock / Admin,
+  Dashboard and Reports are disabled "Soon" items) and a `.page-head` band
+  (title, subtitle, action) + `.page-body` per view. Tabs are still
+  `nav button[data-v]` → `#v-<name>`; `window.ORYX_SHOW_VIEW(name)` switches.
+  The approved-UI CSS is the block at the end of `index.html`'s `<style>`.
+- Master Inventory (pages 7 + 11): chips All / Out of stock / No cost /
+  No photo / Low (hidden `#miFilter` holds the choice), 10 per page, Last
+  change column (`loadLastChangeByItem`). The item panel is
+  `item-timeline.js` (`window.ORYX_ITEM.open(item, {onAdjust})`): re-reads
+  the item by id, then its `inventory_transactions` 6 at a time ("Show
+  older"); "stock after" is worked back from the current stock
+  (`withStockAfter`, tested in `tests/item-timeline.test.js`). Read-only;
+  "Adjust stock" opens the same Adjust dialog.
+- Check-out / Check-in: header stepper and the Check-in summary strip are a
+  read-out (`updateFlowUi` in fp-pro.js, driven by a MutationObserver).
+- User Management "Last active" comes from `admin_user_last_active()`
+  (security definer, Admins only, reads auth.users.last_sign_in_at).
+- Status badges are sentence case now ("Matched", "Unmatched", "Below zero,
+  allowed"); the Check-in sweep baseline was refreshed for that (case only).
 
 ## Checking a Check-in change (every time)
 
