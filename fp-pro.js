@@ -913,6 +913,9 @@
 
   // One line, same order on every row: [Skip / Undo / Acknowledge] · Edit ·
   // Delete -- Delete always last, set slightly apart as the destructive one.
+  // Delete as a red trash icon (approved UI proposal, page 5). The word
+  // "Delete" stays for screen readers; permission handling is unchanged.
+  const TRASH_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13h12l1-13M9 7V4h6v3"/></svg><span class="sr-only">Delete</span>`;
   function renderRowActionButtons(idx, row) {
     const on = (yes) => yes ? "on" : "";
     let first = "";
@@ -926,7 +929,7 @@
     return `<div class="fp-row-actions fp-row-actions-line">
         ${first}
         <button data-act="edit" data-i="${idx}">Edit</button>
-        <button data-act="delete" data-i="${idx}" class="fp-row-delete"${deleteBtnAttrs() || ` title="Remove this item from the Check-out"`}>Delete</button>
+        <button data-act="delete" data-i="${idx}" class="fp-row-delete" aria-label="Delete"${deleteBtnAttrs() || ` title="Remove this item from the Check-out"`}>${TRASH_ICON}</button>
       </div>`;
   }
 
@@ -3739,7 +3742,7 @@
 
   function ciRenderRowActionButtons(idx, row) {
     // Delete is always the last button, whatever the row's status.
-    const deleteBtn = `<button data-act="delete" data-i="${idx}" class="fp-row-delete"${deleteBtnAttrs() || ` title="Remove this line from the Check-in"`}>Delete</button>`;
+    const deleteBtn = `<button data-act="delete" data-i="${idx}" class="fp-row-delete" aria-label="Delete"${deleteBtnAttrs() || ` title="Remove this line from the Check-in"`}>${TRASH_ICON}</button>`;
     const on = (yes) => yes ? "on" : "";
     const editBtn = `<button data-act="edit" data-i="${idx}">Edit</button>`;
     if (row.status === "ok") {

@@ -653,7 +653,7 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
   box-shadow:0 1px 0 #eef2f6;
 }
 .fp-checkin-table th:nth-child(1){width:8%}
-.fp-checkin-table th:nth-child(2){width:22%}
+.fp-checkin-table th:nth-child(2){width:17%}
 .fp-checkin-table th:nth-child(3){width:6%}
 .fp-checkin-table th:nth-child(4){width:7%}
 .fp-checkin-table th:nth-child(5){width:6%}
@@ -662,7 +662,7 @@ button.fp-drop-alt{font:inherit; text-align:left; appearance:none; -webkit-appea
 .fp-checkin-table th:nth-child(8){width:9%}
 .fp-checkin-table th:nth-child(9){width:9%}
 .fp-checkin-table th:nth-child(10){width:8%}
-.fp-checkin-table th:nth-child(11){width:9%}
+.fp-checkin-table th:nth-child(11){width:14%}
 .fp-checkin-table td.num{white-space:normal}
 .fp-checkin-code-cell,.fp-checkin-description-cell{
   display:flex; align-items:center; gap:8px; min-width:0;
@@ -1293,6 +1293,22 @@ body.drawer-open{overflow:hidden}
   .gate-hero-foot{display:none}
   .gate-card{padding:28px 20px 40px}
 }
+
+/* Row actions (Check-out / Check-in), as on proposal page 5: outlined
+   buttons, Delete as a red trash icon at the end. */
+.fp-row-actions{align-items:center}
+.fp-row-actions button{background:var(--white); border:1px solid #C5D0D4; border-radius:10px; color:var(--brand);
+  font-family:var(--font-body); font-weight:500; font-size:13.5px; padding:7px 13px; text-transform:none; letter-spacing:0}
+.fp-row-actions button:hover{border-color:var(--brand); background:var(--white)}
+.fp-row-actions button.on{background:var(--brand); border-color:var(--brand); color:var(--white)}
+.fp-row-actions button.fp-row-delete,.fp-checkin-table td .fp-row-actions button.fp-row-delete{border:none; background:none; color:#A23A33; padding:6px; margin-left:2px; line-height:0; min-width:0}
+.fp-row-actions button.fp-row-delete svg{width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round}
+.fp-row-actions button.fp-row-delete:hover{background:#FBE7E6; border-radius:8px}
+.fp-row-actions button.fp-row-delete[aria-disabled="true"]{color:#B9C3C8; background:none; opacity:1}
+.fp-checkin-table td:nth-child(11) .fp-row-actions{flex-direction:row; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:6px}
+.fp-checkin-table td:nth-child(11) .fp-row-actions{gap:4px}
+.fp-checkin-table td:nth-child(11) .fp-row-actions button{min-width:0; padding:6px 10px}
+.fp-checkin-table td:nth-child(11) .fp-row-actions button.fp-row-delete{padding:5px; margin:0}
 </style>
 </head>
 <body>
