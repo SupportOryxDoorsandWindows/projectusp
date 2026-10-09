@@ -26,7 +26,7 @@
     return d.toDateString() === today.toDateString() ? `Today · ${base}` : d.toDateString() === y.toDateString() ? `Yesterday · ${base}` : base;
   };
   const initials = (name) => (name || "").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?";
-  const NOT_RECORDED = "Not recorded";
+  const NOT_RECORDED = "Before sign-in";
 
   /* ------------------------------------------------------------ data */
   async function pagedSelect(table, cols, orderCol, max) {
@@ -155,7 +155,7 @@
   function drawTypes() {
     const admin = AUTH.isAdmin();
     $("#actTypes").innerHTML = TYPES.filter(([k]) => admin || (k !== "del" && k !== "acc"))
-      .map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${k === type}">${l}</button>`).join("");
+      .map(([k, l]) => `<button type="button" class="pill ${k === type ? "on" : ""}" data-type="${k}" aria-pressed="${k === type}">${l}</button>`).join("");
     $("#actTypes").querySelectorAll("button").forEach((b) => { b.onclick = () => { type = b.dataset.type; page = 0; drawTypes(); draw(); }; });
   }
 
@@ -180,9 +180,10 @@
     const today = dayKey(new Date());
     const t = list.filter((e) => dayKey(e.at) === today);
     const c = (k) => t.filter((e) => e.kind === k).length;
-    const stats = [["Check-outs today", c("out")], ["Check-ins today", c("in")], ["Adjustments today", c("adj")]];
-    if (AUTH.isAdmin()) stats.push(["Deleted lines today", t.filter((e) => e.kind === "del" && e.tag === "Deleted line").reduce((s, e) => s + e.lines.length, 0)]);
-    $("#actStats").innerHTML = stats.map(([l, n]) => `<div class="act-stat"><span>${l}</span><strong>${n}</strong></div>`).join("");
+    const jobs = c("out");
+    const stats = [["Check-outs today", `${jobs} job${jobs === 1 ? "" : "s"}`], ["Check-ins today", c("in")], ["Stock adjustments today", c("adj")]];
+    if (AUTH.isAdmin()) stats.push(["Deleted lines today", t.filter((e) => e.kind === "del" && e.tag === "Deleted line").reduce((s, e) => s + e.lines.length, 0), "red"]);
+    $("#actStats").innerHTML = stats.map(([l, n, cls]) => `<div class="act-stat ${cls || ""}"><span>${l}</span><strong>${n}</strong></div>`).join("");
   }
 
   function eventHtml(e) {
@@ -195,10 +196,12 @@
       ${e.detail ? `<div class="act-detail">${esc(e.detail)}</div>` : ""}`;
     return `<li class="act-ev">
       <span class="act-time">${esc(timeOf(e.at))}</span>
-      <span class="act-rail"><span class="act-dot ${e.who ? "" : "none"}" aria-hidden="true">${e.who ? esc(initials(e.who)) : "?"}</span></span>
+      <span class="act-rail"><span class="act-dot ${e.who ? "" : "none"} ${isMe(e) ? "me" : ""}" aria-hidden="true">${e.who ? esc(AUTH.initials ? AUTH.initials(e.who) : initials(e.who)) : "?"}</span></span>
       ${lines ? `<details class="act-card"><summary>${head}</summary>${lines}</details>` : `<div class="act-card">${head}</div>`}
     </li>`;
   }
+
+  const isMe = (e) => !!(e.whoEmail && AUTH.profile && e.whoEmail === AUTH.profile.email);
 
   function draw() {
     if (!loaded) return;
@@ -208,9 +211,16 @@
     page = Math.min(page, pages - 1);
     const shown = list.slice(page * PAGE, (page + 1) * PAGE);
     let html = "", day = null;
+    const perDay = new Map();
+    for (const e of list) perDay.set(dayKey(e.at), (perDay.get(dayKey(e.at)) || 0) + 1);
     for (const e of shown) {
       const d = dayKey(e.at);
-      if (d !== day) { if (day) html += "</ol>"; html += `<div class="act-day">${esc(dayLabel(e.at))}</div><ol>`; day = d; }
+      if (d !== day) {
+        if (day) html += "</ol>";
+        const n = perDay.get(d);
+        html += `<div class="act-day"><span>${esc(dayLabel(e.at))}</span><span class="act-day-n">${n} event${n === 1 ? "" : "s"}</span></div><ol>`;
+        day = d;
+      }
       html += eventHtml(e);
     }
     if (day) html += "</ol>";
@@ -220,6 +230,43 @@
     $("#actPrev").disabled = page === 0;
     $("#actNext").disabled = page >= pages - 1;
   }
+
+  // Export (.xlsx): exactly what the filters show (every page), one row per event.
+  async function exportActivity() {
+    const btn = $("#actExport"), st = $("#actExportStatus");
+    const list = filtered();
+    if (!loaded) { st.textContent = "The activity hasn't loaded yet — try again in a moment."; return; }
+    if (!list.length) { st.textContent = "Nothing matches these filters — nothing to export."; return; }
+    btn.disabled = true; st.textContent = "Preparing the Excel file…";
+    try {
+      if (!window.XLSX) await new Promise((res, rej) => {
+        const sc = document.createElement("script");
+        sc.src = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
+        sc.onload = res; sc.onerror = () => rej(new Error("couldn't load the Excel library"));
+        document.head.appendChild(sc);
+      });
+      const head = ["Date", "Time", "Type", "Person", "What", "Details", "Items", "Value (AED)"];
+      const rows = list.map((e) => [dayKey(e.at), timeOf(e.at), e.tag, e.who || NOT_RECORDED, e.did, e.detail || "",
+        (e.lines || []).length || "", e.value != null ? Math.round(e.value * 100) / 100 : ""]);
+      const ws = window.XLSX.utils.aoa_to_sheet([["Oryx Doors & Windows — Activity"], [`Exported ${dayKey(new Date())}`], [], head, ...rows]);
+      ws["!cols"] = [{ wch: 12 }, { wch: 7 }, { wch: 14 }, { wch: 20 }, { wch: 40 }, { wch: 60 }, { wch: 7 }, { wch: 14 }];
+      ws["!autofilter"] = { ref: window.XLSX.utils.encode_range({ s: { r: 3, c: 0 }, e: { r: 3 + rows.length, c: head.length - 1 } }) };
+      for (let c = 0; c < head.length; c++) {
+        const a = window.XLSX.utils.encode_cell({ r: 3, c });
+        ws[a].s = { fill: { fgColor: { rgb: "A9A9A9" } }, font: { bold: true, color: { rgb: "FFFFFF" } } };
+      }
+      ws.A1.s = { font: { bold: true, sz: 14 } };
+      for (let r = 4; r < 4 + rows.length; r++) { const a = window.XLSX.utils.encode_cell({ r, c: 7 }); if (ws[a] && typeof ws[a].v === "number") ws[a].z = '"AED" #,##0.00'; }
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, ws, "Activity");
+      const name = `Oryx Activity - ${dayKey(new Date())}.xlsx`;
+      window.XLSX.writeFile(wb, name);
+      st.textContent = `Exported ${list.length} event${list.length === 1 ? "" : "s"} as ${name}.`;
+    } catch (err) {
+      console.error(err); st.textContent = "Could not export: " + err.message;
+    } finally { btn.disabled = false; }
+  }
+  $("#actExport").addEventListener("click", exportActivity);
 
   ["#actSearch", "#actWho", "#actFrom", "#actTo"].forEach((s) => $(s).addEventListener("input", () => { page = 0; draw(); }));
   $("#actPrev").addEventListener("click", () => { page = Math.max(0, page - 1); draw(); $("#v-activity").scrollIntoView({ block: "start" }); });
