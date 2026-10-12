@@ -5,6 +5,8 @@
  *    line. Since the timeline was added, each row carries performed_by_name
  *    (stamped on the server from the signed-in person); older rows have none
  *    and show "Not recorded".
+ *  - transaction_documents: which Check-ins/Check-outs have their original
+ *    PDF kept (documents.js, matched by source_document_hash) -> View PDF.
  *  - delete_audit_log and account_activity_log: Admins only (row-level
  *    security returns nothing to everyone else).
  * Lines written by one save share one timestamp, so they are grouped back into
@@ -52,9 +54,10 @@
       let g = groups.get(key);
       if (!g) {
         g = { key, at: new Date(t.created_at), txType: t.type, ref, party, doc: t.source_document_name || "", lines: [],
-          who: t.performed_by_name || null, whoEmail: t.performed_by_email || "", value: 0 };
+          who: t.performed_by_name || null, whoEmail: t.performed_by_email || "", value: 0, hash: null };
         groups.set(key, g);
       }
+      if (!g.hash && t.source_document_hash) g.hash = t.source_document_hash;
       g.lines.push(t);
       g.value += Number(t.value) || 0;
     }
@@ -119,6 +122,14 @@
   const PAGE = 25;
   const TYPES = [["", "All"], ["out", "Check-out"], ["in", "Check-in"], ["adj", "Adjustments"], ["del", "Deleted lines"], ["acc", "Accounts"]];
   let events = [], page = 0, type = "", loaded = false, loading = null;
+  let keptDocs = new Map(); // source_document_hash -> kept original PDF
+
+  async function loadKeptDocs() {
+    if (!window.ORYX_DOCS) return;
+    try {
+      keptDocs = await window.ORYX_DOCS.lookup(events.filter((e) => e.hash).map((e) => e.hash));
+    } catch (err) { console.error("kept PDFs", err); }
+  }
 
   async function load() {
     if (loading) return loading;
@@ -128,7 +139,7 @@
       $("#actAdminNote").hidden = !admin;
       try {
         const [txs, dels, accs] = await Promise.all([
-          pagedSelect("inventory_transactions", "type, item_id, item_code, description, quantity, unit, value, job_number, client, supplier, invoice_number, po_number, source_document_name, created_at, performed_by_name, performed_by_email", "created_at", 20000),
+          pagedSelect("inventory_transactions", "type, item_id, item_code, description, quantity, unit, value, job_number, client, supplier, invoice_number, po_number, source_document_name, source_document_hash, created_at, performed_by_name, performed_by_email", "created_at", 20000),
           admin ? pagedSelect("delete_audit_log", "*", "happened_at", 10000).catch(() => []) : [],
           admin ? pagedSelect("account_activity_log", "*", "happened_at", 5000).catch(() => []) : [],
         ]);
@@ -137,6 +148,8 @@
         fillPeople();
         drawTypes();
         draw();
+        // View PDF links follow as soon as the kept files are known.
+        loadKeptDocs().then(() => { if (keptDocs.size) draw(); });
       } catch (e) {
         console.error(e);
         $("#actList").innerHTML = `<p class="small" style="color:var(--danger)">Couldn't load the activity: ${esc(e.message)}</p>`;
@@ -192,12 +205,20 @@
         <td class="code">${esc(l.item_code || "")}</td><td>${esc(l.description || "")}</td>
         <td class="num">${l.quantity != null ? (e.kind === "out" || (e.kind === "adj" && e.txType === "check_out") ? "−" : e.kind === "del" ? "" : "+") + num(l.quantity) + (l.unit ? " " + esc(l.unit) : "") : ""}</td>
         <td class="num">${l.value != null ? aed(l.value) : ""}</td></tr>`).join("")}</tbody></table>` : "";
+    // Check-ins/Check-outs read from a PDF: View/Download it, or attach it if
+    // only its fingerprint is on record (before 2026-10-12, or a failed keep).
+    // The "attach" offer sits inside the opened card, so older entries don't
+    // all carry it on the list.
+    const docs = window.ORYX_DOCS;
+    const hasDoc = docs && e.hash && (e.kind === "in" || e.kind === "out");
+    const viewDoc = hasDoc && keptDocs.has(e.hash) ? `<div class="act-doc">${docs.links(e.hash)}</div>` : "";
+    const attachDoc = hasDoc && !keptDocs.has(e.hash) ? `<div class="act-doc">${docs.attachLink(e.hash, e.txType)}</div>` : "";
     const head = `<div class="act-line"><span class="act-tag ${e.kind}">${esc(e.tag)}</span>${who}<span>${esc(e.did)}</span></div>
-      ${e.detail ? `<div class="act-detail">${esc(e.detail)}</div>` : ""}`;
+      ${e.detail ? `<div class="act-detail">${esc(e.detail)}</div>` : ""}${viewDoc}`;
     return `<li class="act-ev">
       <span class="act-time">${esc(timeOf(e.at))}</span>
       <span class="act-rail"><span class="act-dot ${e.who ? "" : "none"} ${isMe(e) ? "me" : ""}" aria-hidden="true">${e.who ? esc(AUTH.initials ? AUTH.initials(e.who) : initials(e.who)) : "?"}</span></span>
-      ${lines ? `<details class="act-card"><summary>${head}</summary>${lines}</details>` : `<div class="act-card">${head}</div>`}
+      ${lines ? `<details class="act-card"><summary>${head}</summary>${lines}${attachDoc}</details>` : `<div class="act-card">${head}${attachDoc}</div>`}
     </li>`;
   }
 
@@ -274,6 +295,7 @@
   // Fresh every time the tab is opened.
   $("#navActivity").addEventListener("click", () => { load(); });
   document.addEventListener("oryx-permissions", () => { if (loaded) load(); });
+  document.addEventListener("oryx-doc-kept", async () => { if (loaded) { await loadKeptDocs(); draw(); } });
 
   window.ORYX_ACTIVITY = { reload: load };
 })();

@@ -117,6 +117,31 @@ product lines — never treat one family's item as a match for another's:
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,
   allowed"); the Check-in sweep baseline was refreshed for that (case only).
 
+## Original PDFs kept with each transaction
+
+- Confirm (Check-out and Check-in) sends the PDF with the lines as
+  multipart/form-data: "payload" = the same JSON as before, "document" = the
+  file (`confirmRequest` in fp-pro.js; no PDF / hand entry / over 25 MB =
+  plain JSON as before). The Edge Function checks the file BEFORE the stock
+  (PDF header, SHA-256 must equal `pdf_hash`) and keeps it only AFTER the
+  stock function succeeded; failing to keep it never fails the stock -- the
+  answer says `document: {saved: false, error}` and the done message offers
+  "Try again" (`{action: "attach_document"}` with the same file).
+- Storage: PRIVATE bucket `transaction-documents` (PDF only, 25 MB),
+  `check-in/<sha256>.pdf` / `check-out/<sha256>.pdf`, never overwritten,
+  never deleted automatically. Listed in table `transaction_documents`
+  (document_hash = `inventory_transactions.source_document_hash`). Only the
+  service_role (the two Edge Functions) writes; signed-in ACTIVE staff read
+  (`is_active_staff()`), and open files through a 5-minute signed link.
+  SQL: `supabase/sql/transaction_documents.sql`.
+- Browser: `documents.js` (`window.ORYX_DOCS`): View PDF / Download in
+  Activity, the item panel and Transaction History; "Attach the original
+  PDF" on older transactions that only have the fingerprint -- the server
+  accepts only the exact file (same SHA-256) a saved transaction was
+  confirmed from.
+- Before redeploying checkin/checkout run `node tests/edge/keep-pdf.js
+  --deno <deno>` (runs the real function sources against a local stand-in).
+
 ## Checking a Check-in change (every time)
 
 - A fix made for one invoice must behave the same on ALL sample invoices.

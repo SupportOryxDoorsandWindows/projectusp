@@ -41,6 +41,54 @@
     if (window.ORYX_AUTH) return window.ORYX_AUTH.fnHeaders();
     return { "Content-Type": "application/json", "Authorization": "Bearer " + window.ORYX_CONFIG.supabaseKey, "apikey": window.ORYX_CONFIG.supabaseKey };
   }
+  // Confirm sends the original PDF along with the lines (multipart) so the
+  // server keeps it with the transaction -- after the stock is saved, never
+  // instead of it. No PDF (hand entry) or over 25 MB: the same JSON as before.
+  const DOC_MAX_BYTES = 25 * 1024 * 1024;
+  async function confirmRequest(payload, file) {
+    const headers = await fnHeaders();
+    if (!file || file.size > DOC_MAX_BYTES) return { method: "POST", headers, body: JSON.stringify(payload) };
+    delete headers["Content-Type"]; // the browser sets the multipart boundary
+    const form = new FormData();
+    form.append("payload", JSON.stringify(payload));
+    form.append("document", file, file.name);
+    return { method: "POST", headers, body: form };
+  }
+
+  // The line under "Check-out/Check-in confirmed" about the original PDF.
+  // Not kept -> says why and offers "Try again" with the same file.
+  function keptDocNote(answer, file, hash, kind) {
+    if (!file) return "";
+    const what = kind === "check_in" ? "Check-in" : "Check-out";
+    if (file.size > DOC_MAX_BYTES) {
+      return `<p class="small doc-note warn">The original PDF is over 25 MB, so it wasn't kept with this ${what}.</p>`;
+    }
+    const doc = answer && answer.document;
+    if (doc && doc.saved) {
+      return `<p class="small doc-note ok">The original PDF is kept with this ${what}. Open it from Activity, the Transaction History or an item's history.</p>`;
+    }
+    if (!doc) return "";
+    const why = window.ORYX_DOCS ? window.ORYX_DOCS.reason(doc.error, doc.detail) : doc.error;
+    return `<p class="small doc-note warn" data-doc-retry-wrap>The stock is saved, but the original PDF wasn't kept (${esc(why)}).
+      <button type="button" class="doc-btn" data-doc-retry>Try again</button> <span class="doc-msg" role="status"></span></p>`;
+  }
+  function wireDocRetry(container, kind, file, hash) {
+    const btn = container.querySelector("[data-doc-retry]");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      const msg = container.querySelector("[data-doc-retry-wrap] .doc-msg");
+      if (!window.ORYX_DOCS) { msg.textContent = "Reload the page and try again."; return; }
+      btn.disabled = true; msg.textContent = "Keeping the PDF…";
+      try {
+        await window.ORYX_DOCS.attach(kind, file, hash);
+        container.querySelector("[data-doc-retry-wrap]").outerHTML = keptDocNote({ document: { saved: true } }, file, hash, kind);
+      } catch (err) {
+        msg.textContent = "Still not kept: " + err.message + ".";
+        btn.disabled = false;
+      }
+    });
+  }
+
   // Delete permission (Admin, or Allow Delete). The server checks again.
   const canDeleteLines = () => !window.ORYX_AUTH || window.ORYX_AUTH.canDelete();
   const deleteBtnAttrs = () => canDeleteLines()
@@ -1214,17 +1262,14 @@
       .filter((r) => r.action === "deduct" && r.itemId)
       .map((r) => ({ item_id: r.itemId, quantity: r.requiredQty, unit: r.unit }));
 
-    const res = await fetch(CHECKOUT_FN_URL, {
-      method: "POST",
-      headers: await fnHeaders(),
-      body: JSON.stringify({
-        job_number: jobRef,
-        client,
-        pdf_hash: state.pdfHash,
-        source_document_name: state.pdfFile ? state.pdfFile.name : null,
-        lines,
-      }),
-    });
+    const pdfFile = state.pdfFile, pdfHash = state.pdfHash;
+    const res = await fetch(CHECKOUT_FN_URL, await confirmRequest({
+      job_number: jobRef,
+      client,
+      pdf_hash: pdfHash,
+      source_document_name: pdfFile ? pdfFile.name : null,
+      lines,
+    }, pdfHash ? pdfFile : null));
     const data = await readFnJson(res);
 
     if (!data.ok) {
@@ -1245,10 +1290,12 @@
         <h3>Check-out confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} deducted</h3>
         <p class="small">Job <code>${esc(jobRef)}</code> for <b>${esc(client)}</b>. The Master Inventory
         and the Inventory tab now reflect this. A permanent Check-out transaction has been recorded for each item.</p>
+        ${keptDocNote(data, pdfHash ? pdfFile : null, pdfHash, "check_out")}
         <div class="fp-done-actions">
           <button class="ghost" id="fpNew">Start another Check-out</button>
         </div>
       </div>`;
+    wireDocRetry($("#fpDone"), "check_out", pdfFile, pdfHash);
     $("#fpNew").addEventListener("click", resetAll);
   }
 
@@ -4931,18 +4978,15 @@
       lines[k].remember = { supplier_key: supplierKeyForLinks, code_key: codeKey || null, description_key: descriptionKey || null, example: r.source.description || ownCode };
     });
 
-    const res = await fetch(CHECKIN_FN_URL, {
-      method: "POST",
-      headers: await fnHeaders(),
-      body: JSON.stringify({
-        supplier, invoice_number: invoiceNumber, po_number: poNumber, document_date: docDate,
-        pdf_hash: ciState.pdfHash,
-        source_document_name: ciState.pdfFile ? ciState.pdfFile.name : null,
-        currency: ciState.currency, exchange_rate: rate,
-        rate_date: ciState.rateDate, rate_source: ciState.rateSource,
-        lines,
-      }),
-    });
+    const pdfFile = ciState.pdfFile, pdfHash = ciState.pdfHash;
+    const res = await fetch(CHECKIN_FN_URL, await confirmRequest({
+      supplier, invoice_number: invoiceNumber, po_number: poNumber, document_date: docDate,
+      pdf_hash: pdfHash,
+      source_document_name: pdfFile ? pdfFile.name : null,
+      currency: ciState.currency, exchange_rate: rate,
+      rate_date: ciState.rateDate, rate_source: ciState.rateSource,
+      lines,
+    }, pdfHash ? pdfFile : null));
     const data = await readFnJson(res);
 
     if (!data.ok) {
@@ -4973,10 +5017,12 @@
         <p class="small">Invoice <code>${esc(invoiceNumber || "—")}</code> from <b>${esc(supplier || "—")}</b>. The Master
         Inventory and the Transaction History now reflect this. A permanent Check-in transaction has been recorded for each item.${currencyNote}${shippingNote}${
           data.remembered > 0 ? ` Lines you matched by hand will match automatically next time.` : ""}</p>
+        ${keptDocNote(data, pdfHash ? pdfFile : null, pdfHash, "check_in")}
         <div class="fp-done-actions">
           <button class="ghost" id="ciNew">Start another Check-in</button>
         </div>
       </div>`;
+    wireDocRetry($("#ciDone"), "check_in", pdfFile, pdfHash);
     $("#ciNew").addEventListener("click", ciResetAll);
   }
 
@@ -5835,11 +5881,12 @@
       const key = `${tx.type}|${reference}|${party}|${tx.created_at}`;
       let g = groups.get(key);
       if (!g) {
-        g = { key, type: tx.type, created_at: tx.created_at, reference, party, lines: [], totalValue: 0 };
+        g = { key, type: tx.type, created_at: tx.created_at, reference, party, lines: [], totalValue: 0, hash: null, docName: "" };
         groups.set(key, g);
       }
       g.lines.push(tx);
       g.totalValue += tx.value || 0;
+      if (!g.hash && tx.source_document_hash) { g.hash = tx.source_document_hash; g.docName = tx.source_document_name || ""; }
     }
     const groupList = [...groups.values()].slice(0, 20);
 
@@ -5856,6 +5903,7 @@
       <tr class="fp-tx-detail" data-detail-for="${esc(g.key)}" hidden>
         <td></td>
         <td colspan="6">
+          ${g.hash ? `<div class="tx-doc small muted" data-tx-doc="${esc(g.hash)}" data-tx-kind="${esc(g.type)}" data-tx-name="${esc(g.docName || "PDF")}">${esc(g.docName || "PDF")}</div>` : ""}
           <table class="fp-table fp-tx-detail-table">
             <thead><tr><th>Code</th><th>Description</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
             <tbody>
@@ -5880,6 +5928,22 @@
         btn.textContent = open ? "▸" : "▾";
       });
     });
+    fillTxDocs();
+  }
+
+  // Original PDF of each transaction (kept since 2026-10-12): View / Download,
+  // or "Attach the original PDF" when only its fingerprint is on record.
+  async function fillTxDocs() {
+    const cells = [...document.querySelectorAll("#miTxBody [data-tx-doc]")];
+    if (!cells.length || !window.ORYX_DOCS) return;
+    let keptByHash;
+    try { keptByHash = await window.ORYX_DOCS.lookup(cells.map((c) => c.dataset.txDoc)); } catch (err) { console.error("kept PDFs", err); return; }
+    for (const c of cells) {
+      const name = c.dataset.txName;
+      c.innerHTML = `<span class="tx-doc-name">${esc(name)}</span> ` + (keptByHash.has(c.dataset.txDoc)
+        ? window.ORYX_DOCS.links(c.dataset.txDoc)
+        : window.ORYX_DOCS.attachLink(c.dataset.txDoc, c.dataset.txKind));
+    }
   }
 
   /* --------------------------- Check-out report export --------- */
@@ -6223,6 +6287,8 @@
 
   function init() {
     if (!$("#fpExtract")) { setTimeout(init, 50); return; }
+    // A PDF attached elsewhere (Activity, item panel) shows here too.
+    document.addEventListener("oryx-doc-kept", () => fillTxDocs());
     const flowObserver = new MutationObserver(() => updateFlowUi());
     for (const id of ["#fpOut", "#fpDone", "#fpConfirmBar", "#ciOut", "#ciDone", "#ciConfirmBar"]) {
       if ($(id)) flowObserver.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
