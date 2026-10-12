@@ -1181,6 +1181,20 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .tl-err{color:var(--danger); margin:0 0 8px}
 .drawer-foot{display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 26px; border-top:1px solid #DCE3E6}
 body.drawer-open{overflow:hidden}
+.min-box{margin:12px 26px 0; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--white)}
+.min-box .min-top{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap}
+.min-box .min-label{font-weight:600; color:var(--brand); font-size:14px}
+.min-box .min-admin{font-size:12px; color:var(--text-muted-light); font-weight:400}
+.min-box .min-val{font-family:var(--font-display); font-weight:700; color:var(--brand)}
+.min-box .min-in{display:flex; align-items:center; gap:8px}
+.min-box input{width:90px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; font-size:15px; text-align:right}
+.min-box input:focus{outline:2px solid var(--brand); outline-offset:1px}
+.min-box .unit{color:var(--text-muted); font-size:14px}
+.min-box p{margin:6px 0 0; font-size:13px; color:var(--text-muted)}
+.min-box .min-warn{margin-top:8px; display:flex; align-items:center; gap:8px; color:#8A5A0F}
+.min-box .min-who{color:var(--text-muted-light)}
+.min-box .min-msg{color:var(--new-deep)}
+.min-box .min-msg.err{color:var(--danger)}
 @media (max-width:620px){ .drawer-kpis{grid-template-columns:1fr 1fr} }
 
 .fp-table th,.um-grid th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--text-muted)}
