@@ -77,6 +77,8 @@ assert.deepEqual({ ...parseMinimum("  ") }, { ok: true, level: null });
 assert.equal(parseMinimum("10").level, 10);
 assert.equal(parseMinimum("1,200").level, 1200);
 assert.equal(parseMinimum("2.5").level, 2.5);
-for (const bad of ["0", "-5", "abc", "10 pcs", "1e12"]) assert.equal(parseMinimum(bad).ok, false, bad);
+assert.deepEqual({ ...parseMinimum("0") }, { ok: true, level: null }); // 0 = remove it
+assert.deepEqual({ ...parseMinimum("0.0") }, { ok: true, level: null });
+for (const bad of ["-5", "abc", "10 pcs", "1e12"]) assert.equal(parseMinimum(bad).ok, false, bad);
 
 console.log("item timeline tests passed");

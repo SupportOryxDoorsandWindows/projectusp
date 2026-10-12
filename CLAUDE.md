@@ -126,6 +126,9 @@ product lines — never treat one family's item as a match for another's:
 - Set in the item panel's "Minimum level" box (`item-timeline.js`), Admins
   only: `set_item_minimum(item_id, level)` (security definer, checks
   `is_admin()`, level > 0 or null to clear, logs to `item_minimum_log`).
+  In the box, empty or 0 = remove (people type 0 to mean "none"; it used to
+  be refused with a small message and nothing was saved), and a Remove
+  button shows once a level is set.
   Others see the number read-only. No other way to write it (no write
   policy on inventory_items). A save fires `oryx-item-changed`; fp-pro.js
   re-reads the list so the badge and Low filter update.
