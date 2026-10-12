@@ -44,6 +44,10 @@ the URL — not only Oryx staff.
 That was a deliberate choice to keep the tool frictionless for the team. Nothing
 can be *changed* by an outsider, only read.
 
+The original Check-in / Check-out PDFs are the exception: they sit in a
+**private** bucket (`transaction-documents`) that only signed-in, active staff
+can open, through a link that expires after 5 minutes.
+
 ### Restoring the sign-in
 
 Two steps, if you later want it staff-only:

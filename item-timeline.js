@@ -6,6 +6,8 @@
  *    Stock / Unit cost / Value are exactly what Master Inventory stores.
  *  - inventory_transactions: every Check-in, Check-out and stock adjustment
  *    line for this item, newest first, 6 at a time ("Show older").
+ *  - transaction_documents (documents.js): a "View PDF" link on movements
+ *    whose original PDF is kept.
  * "Stock after" is worked back from the current stock: the newest movement
  * ends at today's quantity, and each older one ends where the next began.
  * Reads only; nothing here changes stock.
@@ -158,6 +160,7 @@
       ${r.kind === "count" ? `<div class="tl-detail">Set to a counted ${num(r.stockAfter)} (was ${num(r.stockBefore)})${r.detail ? " · " + esc(r.detail) : ""}</div>`
         : r.detail ? `<div class="tl-detail">${esc(r.detail)}</div>` : ""}
       <div class="tl-meta">${esc(r.who || "Before sign-in")} · ${esc(w.long)} · stock after: ${num(r.stockAfter)}</div>
+      ${r.keptPdf && window.ORYX_DOCS ? `<div class="tl-doc">${window.ORYX_DOCS.links(r.t.source_document_hash)}</div>` : ""}
     </li>`;
   }
 
@@ -200,7 +203,7 @@
         s.item = data; s.fresh = true; s.nextAfter = Number(data.current_qty); setKpis(data);
       }
       const { data, error } = await sb.from("inventory_transactions")
-        .select("id,type,quantity,unit,value,unit_cost_used,job_number,client,supplier,invoice_number,po_number,source_document_name,is_new_item,created_at,performed_by_name")
+        .select("id,type,quantity,unit,value,unit_cost_used,job_number,client,supplier,invoice_number,po_number,source_document_name,source_document_hash,is_new_item,created_at,performed_by_name")
         .eq("item_id", s.item.id)
         .order("created_at", { ascending: false }).order("id", { ascending: false })
         .range(s.offset, s.offset + PAGE); // one extra row says whether there's more
@@ -209,6 +212,7 @@
       const page = data.slice(0, PAGE);
       const { list, next } = withStockAfter(page, s.nextAfter);
       s.rows.push(...list); s.nextAfter = next; s.offset += page.length; s.done = data.length <= PAGE;
+      markKeptPdfs(s, list, token);
     } catch (err) {
       if (token !== s.token) return;
       console.error("item timeline", err);
@@ -216,6 +220,20 @@
     } finally {
       if (token === s.token) { s.loading = false; paint(); }
     }
+  }
+
+  // "View PDF" on movements whose original PDF is kept. Looked up after the
+  // rows are shown; a failure only leaves the links out.
+  async function markKeptPdfs(s, list, token) {
+    const docs = window.ORYX_DOCS;
+    const hashes = list.map((r) => r.t.source_document_hash).filter(Boolean);
+    if (!docs || !hashes.length) return;
+    try {
+      const kept = await docs.lookup(hashes);
+      if (token !== s.token || !kept.size) return;
+      list.forEach((r) => { r.keptPdf = kept.has(r.t.source_document_hash); });
+      if (!s.loading) paint();
+    } catch (err) { console.error("kept PDFs", err); }
   }
 
   function open(item, opts = {}) {

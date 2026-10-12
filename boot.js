@@ -235,6 +235,10 @@
       const a = document.createElement("script");
       a.src = "admin.js?v=" + Date.now();
       document.body.appendChild(a);
+      // Original PDFs kept with each Check-in / Check-out (View PDF links).
+      const d = document.createElement("script");
+      d.src = "documents.js?v=" + Date.now();
+      document.body.appendChild(d);
       // Master Inventory item panel (timeline of one item).
       const it = document.createElement("script");
       it.src = "item-timeline.js?v=" + Date.now();

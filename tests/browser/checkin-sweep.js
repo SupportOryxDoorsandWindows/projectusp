@@ -72,9 +72,15 @@ async function sweepFile(browser, file) {
     return body({ ok: true, id: 1 });
   });
   const sent = [];
-  await p.route("**/functions/v1/**", (route) => {
-    sent.push(JSON.parse(route.request().postData() || "{}"));
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, lines: [] }) });
+  await p.route("**/functions/v1/**", async (route) => {
+    // Confirm sends multipart ("payload" JSON + the original PDF as
+    // "document") when the lines came from a PDF; only the payload is compared.
+    const req = route.request(), type = req.headers()["content-type"] || "";
+    if (/multipart\/form-data/.test(type)) {
+      const form = await new Response(req.postDataBuffer(), { headers: { "content-type": type } }).formData();
+      sent.push(JSON.parse(form.get("payload") || "{}"));
+    } else sent.push(JSON.parse(req.postData() || "{}"));
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, lines: [], document: { saved: true } }) });
   });
   await p.goto("https://app.local/", { waitUntil: "networkidle" });
   await p.fill("#gateEmail", "sweep@example.test");

@@ -1313,6 +1313,26 @@ body.drawer-open{overflow:hidden}
 .fp-table th.num,.um-grid th.num,.mi-table th:last-child{text-align:right}
 /* Check-in: Action heading lines up with the buttons (right). */
 .fp-checkin-table th:nth-child(11),.fp-checkin-table td:nth-child(11){text-align:right}
+/* Original PDF kept with a Check-in / Check-out (documents.js) */
+.doc-links{display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px 10px}
+.doc-btn{background:var(--white); color:var(--brand); border:1px solid #C5D0D4; border-radius:8px;
+  font-family:var(--font-display); font-weight:600; font-size:12.5px; padding:5px 10px; cursor:pointer; line-height:1.2}
+.doc-btn:hover{border-color:var(--brand)}
+.doc-btn:disabled{opacity:.6; cursor:wait}
+.doc-btn.quiet{border-color:transparent; background:none; padding:5px 4px; text-decoration:underline; text-underline-offset:2px}
+.doc-btn.quiet:hover{border-color:transparent; color:var(--brand-hover)}
+.doc-none{font-size:12.5px; color:var(--text-muted)}
+.doc-msg{font-size:12.5px; color:var(--text-muted)}
+.doc-msg:empty{display:none}
+.act-doc{margin-top:8px}
+details.act-card > .act-doc{margin-top:10px}
+.tl-doc{margin-top:6px}
+.tx-doc{display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin:2px 0 8px}
+.tx-doc-name{color:var(--brand)}
+.doc-note{margin:10px 0 0; padding:8px 12px; border-radius:8px}
+.doc-note.ok{background:#EEF6F0; color:#24613A}
+.doc-note.warn{background:#FDF4E3; color:#7A5310}
+.doc-note .doc-btn{margin-left:6px}
 </style>
 </head>
 <body>
@@ -1972,6 +1992,6 @@ body.drawer-open{overflow:hidden}
 <!-- boot.js loads the knowledge base from Supabase, then loads app.js and
      fp-pro.js. Bump ?v= when config.js or boot.js change so browsers
      fetch the new file. -->
-<script src="boot.js?v=10"></script>
+<script src="boot.js?v=11"></script>
 </body>
 </html>
