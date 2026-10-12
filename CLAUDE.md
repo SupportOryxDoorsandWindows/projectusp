@@ -117,6 +117,20 @@ product lines — never treat one family's item as a match for another's:
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,
   allowed"); the Check-in sweep baseline was refreshed for that (case only).
 
+## Minimum level (Low stock)
+
+- Each item's minimum is `inventory_items.buffer_level` (empty = not set; all
+  were empty on 2026-10-12 -- the stock team doesn't know the numbers yet).
+  Low stock = stock <= minimum (`miStatus` in fp-pro.js, `minimumState` in
+  item-timeline.js); it never changes the stock itself.
+- Set in the item panel's "Minimum level" box (`item-timeline.js`), Admins
+  only: `set_item_minimum(item_id, level)` (security definer, checks
+  `is_admin()`, level > 0 or null to clear, logs to `item_minimum_log`).
+  Others see the number read-only. No other way to write it (no write
+  policy on inventory_items). A save fires `oryx-item-changed`; fp-pro.js
+  re-reads the list so the badge and Low filter update.
+  SQL: `supabase/sql/item_minimum_level.sql`.
+
 ## Original PDFs kept with each transaction
 
 - Confirm (Check-out and Check-in) sends the PDF with the lines as

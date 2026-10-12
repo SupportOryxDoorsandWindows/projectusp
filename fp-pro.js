@@ -5855,6 +5855,9 @@
       document.addEventListener("oryx-item-closed", () => {
         for (const tr of document.querySelectorAll("#miItemsBody tr.sel")) tr.classList.remove("sel");
       });
+      // A new minimum level (item panel, Admins) changes the Low stock badge
+      // and the Low filter: re-read the list.
+      document.addEventListener("oryx-item-changed", () => { loadMasterInventoryView(); });
     }
 
     renderTransactionHistory(txs);

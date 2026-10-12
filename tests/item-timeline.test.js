@@ -6,7 +6,7 @@ const vm = require("vm");
 
 const context = { window: {}, console };
 vm.runInNewContext(fs.readFileSync("item-timeline.js", "utf8"), context);
-const { describeTx, withStockAfter } = context.window.ORYX_ITEM;
+const { describeTx, withStockAfter, minimumState, parseMinimum } = context.window.ORYX_ITEM;
 
 // Real 190012 history (newest first), as stored in inventory_transactions.
 const rows = [
@@ -62,5 +62,21 @@ assert.equal(p2.next, 149); // stock before the oldest movement shown
 // Fractional metres don't drift.
 const m = withStockAfter([{ type: "check_out", quantity: 0.1 }, { type: "check_out", quantity: 0.2 }], 3147.23).list;
 assert.deepEqual(m.map((r) => r.stockAfter), [3147.23, 3147.33]);
+
+// "Minimum level" box: same rule as the Low stock badge (stock <= level).
+assert.equal(minimumState({ current_qty: 20, buffer_level: null }).state, "unset");
+assert.equal(minimumState({ current_qty: 20, buffer_level: 25 }).state, "low");
+assert.equal(minimumState({ current_qty: 25, buffer_level: 25 }).state, "low");
+assert.equal(minimumState({ current_qty: 26, buffer_level: 25 }).state, "ok");
+assert.equal(minimumState({ current_qty: 0, buffer_level: 25 }).state, "out");
+assert.equal(minimumState({ current_qty: -3, buffer_level: 25 }).state, "out");
+assert.equal(minimumState({ current_qty: 20, buffer_level: "25" }).level, 25);
+// Typed values: empty clears it; only numbers above 0.
+assert.deepEqual({ ...parseMinimum("") }, { ok: true, level: null });
+assert.deepEqual({ ...parseMinimum("  ") }, { ok: true, level: null });
+assert.equal(parseMinimum("10").level, 10);
+assert.equal(parseMinimum("1,200").level, 1200);
+assert.equal(parseMinimum("2.5").level, 2.5);
+for (const bad of ["0", "-5", "abc", "10 pcs", "1e12"]) assert.equal(parseMinimum(bad).ok, false, bad);
 
 console.log("item timeline tests passed");
