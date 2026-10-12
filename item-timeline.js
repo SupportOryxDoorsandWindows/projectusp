@@ -87,12 +87,14 @@
     return { level, state: qty <= level ? "low" : "ok" };
   }
 
-  // What was typed: "" = clear it, otherwise a number above 0.
+  // What was typed: "" or 0 = remove it (people type 0 to mean "none"),
+  // otherwise a number above 0.
   function parseMinimum(text) {
     const t = String(text == null ? "" : text).trim().replace(/,/g, "");
     if (t === "") return { ok: true, level: null };
     const n = Number(t);
-    if (!Number.isFinite(n) || n <= 0) return { ok: false, error: "Type a number above 0, or leave it empty." };
+    if (n === 0) return { ok: true, level: null };
+    if (!Number.isFinite(n) || n < 0) return { ok: false, error: "Not saved — type a number above 0, or leave it empty." };
     if (n > 1e9) return { ok: false, error: "That number is too big." };
     return { ok: true, level: n };
   }
@@ -204,13 +206,16 @@
     }
     box.innerHTML = `<div class="min-top"><label class="min-label" for="idMinIn">Minimum level <span class="min-admin">· Admins only</span></label>
       <span class="min-in"><input id="idMinIn" type="text" inputmode="decimal" autocomplete="off" placeholder="Not set" value="${level == null ? "" : esc(String(level))}" aria-describedby="idMinHelp">
-      <span class="unit">${unit}</span><button class="btn-outline" type="button" id="idMinSave"${s.minSaving ? " disabled" : ""}>${s.minSaving ? "Saving…" : "Save"}</button></span></div>
-      <p class="min-help" id="idMinHelp">${level == null ? "Leave empty if you don't know yet. " : ""}When stock drops to this number, the item shows <b>Low stock</b>.${level == null ? "" : " Empty the box and Save to remove it."}</p>
+      <span class="unit">${unit}</span><button class="btn-outline" type="button" id="idMinSave"${s.minSaving ? " disabled" : ""}>${s.minSaving ? "Saving…" : "Save"}</button>
+      ${level == null ? "" : `<button class="btn-outline min-remove" type="button" id="idMinRemove"${s.minSaving ? " disabled" : ""}>Remove</button>`}</span></div>
+      <p class="min-help" id="idMinHelp">${level == null ? "Leave empty if you don't know yet. " : ""}When stock drops to this number, the item shows <b>Low stock</b>.</p>
       ${warn}${level == null ? "" : last}${msg}`;
     const input = box.querySelector("#idMinIn");
     input.addEventListener("input", () => { s.minDirty = true; });
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveMin(); } });
-    box.querySelector("#idMinSave").addEventListener("click", saveMin);
+    box.querySelector("#idMinSave").addEventListener("click", () => saveMin());
+    const remove = box.querySelector("#idMinRemove");
+    if (remove) remove.addEventListener("click", () => { input.value = ""; s.minDirty = true; saveMin(); });
   }
 
   async function saveMin() {
@@ -230,7 +235,7 @@
       s.minDirty = false;
       if (data.changed) {
         if (data.set_by_name) s.minLog = { set_by_name: data.set_by_name, set_at: data.set_at };
-        s.minMsg = { text: data.buffer_level == null ? "Saved — no minimum for this item." : "Saved." };
+        s.minMsg = { text: data.buffer_level == null ? "Removed — this item has no minimum now." : "Saved." };
         document.dispatchEvent(new CustomEvent("oryx-item-changed", { detail: { id: s.item.id, buffer_level: data.buffer_level } }));
       } else {
         s.minMsg = { text: "No change — that's already the minimum." };
