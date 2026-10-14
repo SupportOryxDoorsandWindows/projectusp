@@ -117,22 +117,38 @@ product lines — never treat one family's item as a match for another's:
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,
   allowed"); the Check-in sweep baseline was refreshed for that (case only).
 
-## Minimum level (Low stock)
+## Kanban replenishment (was "Minimum level")
 
-- Each item's minimum is `inventory_items.buffer_level` (empty = not set; all
-  were empty on 2026-10-12 -- the stock team doesn't know the numbers yet).
-  Low stock = stock <= minimum (`miStatus` in fp-pro.js, `minimumState` in
-  item-timeline.js); it never changes the stock itself.
-- Set in the item panel's "Minimum level" box (`item-timeline.js`), Admins
-  only: `set_item_minimum(item_id, level)` (security definer, checks
-  `is_admin()`, level > 0 or null to clear, logs to `item_minimum_log`).
-  In the box, empty or 0 = remove (people type 0 to mean "none"; it used to
-  be refused with a small message and nothing was saved), and a Remove
-  button shows once a level is set.
-  Others see the number read-only. No other way to write it (no write
-  policy on inventory_items). A save fires `oryx-item-changed`; fp-pro.js
-  re-reads the list so the badge and Low filter update.
-  SQL: `supabase/sql/item_minimum_level.sql`.
+- ONE rule, in `kanban.js` (`window.ORYX_KANBAN.kanbanState`, loaded from
+  index.html before boot.js; tests in `tests/kanban.test.js`). Everything
+  reads it: row colour, status badge, chips and Extract (fp-pro.js
+  `kanbanOf`/`miStatus`/`inventoryStatus`) and the item panel
+  (item-timeline.js). Never add a second copy of the rule.
+- Kanban trigger level = `inventory_items.buffer_level` (same column and
+  values as the old "Minimum level"; not renamed). Critical level =
+  `inventory_items.critical_level` (added 2026-10-14, optional; check
+  constraint: only with a trigger, > 0 and below it).
+  No trigger -> "unset" (default row); stock > trigger -> "normal";
+  critical set and stock <= critical -> "critical" (whole row #FEE2E2 /
+  text #991B1B); else stock <= trigger -> "low" (#FEF3C7 / #92400E).
+  No critical level = never critical (never invent one, e.g. "2").
+  Stock = the stored `current_qty`; nothing is ordered, stock never changes.
+- Badge order: Out of stock (stock <= 0) first, then Critical / Low stock,
+  then No cost. So an out-of-stock item with no critical level is a yellow
+  row with the "Out of stock" badge. Chips Normal / Low / Critical stock
+  only appear when they have items (or are selected).
+- Set in the item panel's Kanban box (Admins only):
+  `set_item_kanban_levels(item_id, trigger, critical)` (security definer,
+  `is_admin()`, logs each changed level to `item_minimum_log` with
+  `level_kind` 'trigger' / 'critical'). Empty or 0 = none; "Remove both".
+  Others see the numbers read-only. The older `set_item_minimum()` still
+  exists (trigger only) but the site no longer calls it. No other way to
+  write either column (no write policy on inventory_items), except a
+  Check-in New item's optional trigger level. A save fires
+  `oryx-item-changed`; fp-pro.js re-reads the list. The list also re-reads
+  after Adjust and every time Master Inventory is opened (after Check-in /
+  Check-out). It does not live-update from other people's changes.
+  SQL: `supabase/sql/item_minimum_level.sql`, `supabase/sql/item_kanban_levels.sql`.
 
 ## Original PDFs kept with each transaction
 

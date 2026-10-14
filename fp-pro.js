@@ -4041,7 +4041,7 @@
         return;
       }
       if (buffer != null && (!isFinite(buffer) || buffer < 0)) {
-        ciStatus("Buffer level must be a positive number, or left blank.", "err");
+        ciStatus("Kanban trigger level must be a positive number, or left blank.", "err");
         return;
       }
       if (!approver) { ciStatus("Enter the name of the person approving this new item.", "err"); return; }
@@ -4352,7 +4352,7 @@
                 <div class="field"><label>${rollLine ? "Price per roll" : "Unit cost"} (${esc(curLabel)})</label>
                   <input id="ciNewCost${i}" type="number" step="any" min="0" value="${(rollLine ? rollPrice : r.invoiceUnitCost) != null ? (rollLine ? rollPrice : r.invoiceUnitCost) : ""}" placeholder="e.g. 4.80">
                   <span class="hint">Required — never guessed for a new item.</span></div>
-                <div class="field full"><label>Buffer / low-stock level <span class="opt">(optional)</span></label>
+                <div class="field full"><label>Kanban trigger level <span class="opt">(optional — the row turns yellow, Low stock, at this stock)</span></label>
                   <input id="ciNewBuffer${i}" type="number" step="any" min="0" placeholder="e.g. 10 — leave blank to set later"></div>
                 <div class="field full"><label>Approved by</label>
                   <input id="ciNewApprover${i}" placeholder="Full name of the person confirming this is a new item"></div>
@@ -5743,11 +5743,18 @@
   let miCurrentItems = [];
   let miFilteredItems = [];
 
-  // Status shown in the list (and used by the filter chips).
+  // Kanban state of an item (unset / normal / low / critical): the shared
+  // rule in kanban.js -- the row colour, the badge, the chips and the
+  // Extract all read it, so they can't disagree.
+  const kanbanOf = (it) => window.ORYX_KANBAN.kanbanState(it).state;
+
+  // Status badge shown in the list. Out of stock is said first; then the
+  // Kanban state (same as the row colour), then No cost.
   function miStatus(it) {
+    const k = kanbanOf(it);
     if (!(Number(it.current_qty) > 0)) return { key: "out", html: `<span class="badge no">Out of stock</span>` };
+    if (k === "critical" || k === "low") return { key: k, html: window.ORYX_KANBAN.BADGE[k] };
     if (!(Number(it.unit_cost) > 0)) return { key: "nocost", html: `<span class="badge warn">No cost</span>` };
-    if (it.buffer_level != null && it.current_qty <= it.buffer_level) return { key: "low", html: `<span class="badge warn">Low stock</span>` };
     return { key: "ok", html: `<span class="badge ok">In stock</span>` };
   }
 
@@ -5764,16 +5771,19 @@
 
     const FILTERS = {
       all: { label: "All", test: () => true },
-      out: { label: "Out of stock", test: (it) => miStatus(it).key === "out" },
-      nocost: { label: "No cost", test: (it) => miStatus(it).key === "nocost" },
+      out: { label: "Out of stock", test: (it) => !(Number(it.current_qty) > 0) },
+      nocost: { label: "No cost", test: (it) => Number(it.current_qty) > 0 && !(Number(it.unit_cost) > 0) },
       nophoto: { label: "No photo", test: (it) => !hasPhoto(it), count: `${noPhotoCodes} codes` },
-      low: { label: "Low stock", test: (it) => miStatus(it).key === "low" },
+      // Kanban chips: only items with a trigger level set (hidden while none).
+      normal: { label: "Normal stock", test: (it) => kanbanOf(it) === "normal", kanban: true },
+      low: { label: "Low stock", test: (it) => kanbanOf(it) === "low", kanban: true },
+      critical: { label: "Critical stock", test: (it) => kanbanOf(it) === "critical", kanban: true },
     };
     const drawChips = () => {
       const cur = $("#miFilter").value || "all";
       $("#miChips").innerHTML = Object.entries(FILTERS).map(([k, f]) => {
         const n = items.filter(f.test).length;
-        if (k === "low" && !n) return "";
+        if (f.kanban && !n && k !== cur) return "";
         return `<button type="button" class="pill ${k === cur ? "on" : ""}" data-mi-chip="${k}">${f.label} · ${f.count || n}</button>`;
       }).join("");
     };
@@ -5799,7 +5809,10 @@
 
       $("#miItemsBody").innerHTML = pageItems.map((it) => {
         const sub = [esc(it.item_code), it.bar_length_mm ? `${esc(fmt(it.bar_length_mm))} mm` : "", hasPhoto(it) ? "" : "no photo yet"].filter(Boolean).join(" · ");
-        return `<tr class="mi-row ${it.id === openId ? "sel" : ""}" data-mi-row="${esc(it.id)}">
+        // Whole-row Kanban colour: kb-low (yellow) / kb-critical (red).
+        const k = kanbanOf(it);
+        const kb = k === "low" || k === "critical" ? ` kb-${k}` : "";
+        return `<tr class="mi-row${kb} ${it.id === openId ? "sel" : ""}" data-mi-row="${esc(it.id)}">
           <td><div class="mi-item">${itemPhotoButton(photos, it)}<div><div class="mi-name">${esc(it.description || it.item_code)}</div><div class="mi-code mono">${sub}</div></div></div></td>
           <td class="num mono">${fmt(it.current_qty)}</td>
           <td class="num mono">${Number(it.unit_cost || 0).toFixed(2)}</td>
@@ -5855,8 +5868,8 @@
       document.addEventListener("oryx-item-closed", () => {
         for (const tr of document.querySelectorAll("#miItemsBody tr.sel")) tr.classList.remove("sel");
       });
-      // A new minimum level (item panel, Admins) changes the Low stock badge
-      // and the Low filter: re-read the list.
+      // New Kanban levels (item panel, Admins) change the row colour, badge
+      // and chips: re-read the list.
       document.addEventListener("oryx-item-changed", () => { loadMasterInventoryView(); });
     }
 
@@ -6136,10 +6149,13 @@
   // as the Items table shows it (search and Show filter applied, every
   // page), with the same Oryx-blue title/header styling as the
   // transactions report. Read-only -- nothing is written anywhere.
-  const INVENTORY_COLS = ["Code", "Description", "Category", "Bar length (mm)", "Unit", "Qty", "Unit cost (AED)", "Value (AED)", "Buffer level", "Status"];
+  const INVENTORY_COLS = ["Code", "Description", "Category", "Bar length (mm)", "Unit", "Qty", "Unit cost (AED)", "Value (AED)", "Kanban trigger", "Critical level", "Status"];
 
+  // Same Kanban rule as the rows (kanban.js).
   function inventoryStatus(it) {
-    if (it.buffer_level != null && it.current_qty <= it.buffer_level) return "Low";
+    const k = kanbanOf(it);
+    if (k === "critical") return "Critical";
+    if (k === "low") return "Low";
     return it.current_qty <= 0 ? "Out" : "OK";
   }
 
@@ -6157,7 +6173,7 @@
         it.item_code, it.description || "", it.category || "",
         it.bar_length_mm != null ? it.bar_length_mm : "",
         it.unit_of_measure || "", it.current_qty, it.unit_cost, it.current_value,
-        it.buffer_level != null ? it.buffer_level : "", inventoryStatus(it),
+        it.buffer_level != null ? it.buffer_level : "", it.critical_level != null ? it.critical_level : "", inventoryStatus(it),
       ]);
     }
     const totalRow = aoa.length;
@@ -6166,7 +6182,7 @@
 
     const ws = window.XLSX.utils.aoa_to_sheet(aoa);
     ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: n - 1 } }];
-    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 10 }, { wch: 15 }, { wch: 16 }, { wch: 12 }, { wch: 8 }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 10 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 9 }];
     ws["!rows"] = [{ hpt: 22 }];
     ws["!autofilter"] = { ref: window.XLSX.utils.encode_range({ s: { r: firstDataRow - 1, c: 0 }, e: { r: totalRow - 1, c: n - 1 } }) };
     const cell = (r, c) => {
@@ -6202,7 +6218,7 @@
       const q = ($("#miSearch").value || "").trim();
       const filterKey = $("#miFilter").value || "all";
       const notes = [];
-      if (filterKey !== "all") notes.push(({ out: "out of stock", nocost: "no cost", nophoto: "no photo", low: "low stock" })[filterKey] + " only");
+      if (filterKey !== "all") notes.push(({ out: "out of stock", nocost: "no cost", nophoto: "no photo", normal: "normal stock", low: "low stock", critical: "critical stock" })[filterKey] + " only");
       if (q) notes.push(`search "${q}"`);
       const filterNote = notes.length ? `filtered: ${notes.join(", ")} (${items.length} of ${miCurrentItems.length} items)` : "";
       const wb = window.XLSX.utils.book_new();

@@ -8,13 +8,14 @@
  *    line for this item, newest first, 6 at a time ("Show older").
  *  - transaction_documents (documents.js): a "View PDF" link on movements
  *    whose original PDF is kept.
- *  - item_minimum_log: who last set the item's minimum level.
+ *  - item_minimum_log: who last changed the item's Kanban levels.
  * "Stock after" is worked back from the current stock: the newest movement
  * ends at today's quantity, and each older one ends where the next began.
- * Nothing here changes stock. The one thing it writes is the item's
- * "Minimum level" (inventory_items.buffer_level, the number the Low stock
- * badge compares against): Admins only, through set_item_minimum(), which
- * refuses anyone else and logs who changed it.
+ * Nothing here changes stock. The one thing it writes is the item's Kanban
+ * levels -- trigger (inventory_items.buffer_level, was "Minimum level") and
+ * optional critical (critical_level); the rule is in kanban.js: Admins only,
+ * through set_item_kanban_levels(), which refuses anyone else and logs who
+ * changed them.
  */
 (function () {
   const PAGE = 6;
@@ -77,31 +78,14 @@
     return { list, next: cur };
   }
 
-  // The "Minimum level" box: what it says for an item's stock and level.
-  // Same rule as the Low stock badge in Master Inventory (stock <= level).
-  function minimumState(item) {
-    const level = item.buffer_level == null || item.buffer_level === "" ? null : Number(item.buffer_level);
-    const qty = Number(item.current_qty);
-    if (level == null) return { level: null, state: "unset" };
-    if (!(qty > 0)) return { level, state: "out" };
-    return { level, state: qty <= level ? "low" : "ok" };
-  }
-
-  // What was typed: "" or 0 = remove it (people type 0 to mean "none"),
-  // otherwise a number above 0.
-  function parseMinimum(text) {
-    const t = String(text == null ? "" : text).trim().replace(/,/g, "");
-    if (t === "") return { ok: true, level: null };
-    const n = Number(t);
-    if (n === 0) return { ok: true, level: null };
-    if (!Number.isFinite(n) || n < 0) return { ok: false, error: "Not saved — type a number above 0, or leave it empty." };
-    if (n > 1e9) return { ok: false, error: "That number is too big." };
-    return { ok: true, level: n };
-  }
+  // The Kanban box uses the shared rule in kanban.js (same as the row colours).
+  const K = () => window.ORYX_KANBAN;
 
   const MIN_ERRORS = {
-    not_admin: "Only Admins can change the minimum level.",
+    not_admin: "Only Admins can change the Kanban levels.",
     invalid_level: "Type a number above 0, or leave it empty.",
+    critical_needs_trigger: "Set the trigger level first, or leave the critical level empty.",
+    critical_not_below_trigger: "The critical level must be below the trigger level.",
     no_such_item: "This item is no longer in Master Inventory.",
   };
 
@@ -191,58 +175,74 @@
     if (!s || !box) return;
     const item = s.item;
     const unit = esc(item.unit_of_measure || "");
-    const { level, state: st } = minimumState(item);
+    const { trigger, critical, state: st } = K().kanbanState(item);
     const admin = !!(window.ORYX_AUTH && window.ORYX_AUTH.isAdmin && window.ORYX_AUTH.isAdmin());
-    const warn = st === "low"
-      ? `<p class="min-warn"><span class="badge warn">Low stock</span> Stock is ${num(item.current_qty)} ${unit} — at or below the minimum of ${num(level)}. Time to order.</p>`
-      : st === "out" ? `<p class="min-warn"><span class="badge no">Out of stock</span> Below the minimum of ${num(level)}. Time to order.</p>` : "";
+    const stock = `Stock is ${num(item.current_qty)} ${unit}`;
+    const warn = st === "critical"
+      ? `<p class="min-warn crit">${K().BADGE.critical} ${stock} — at or below the critical level of ${num(critical)}. Reorder now.</p>`
+      : st === "low" ? `<p class="min-warn">${K().BADGE.low} ${stock} — at or below the Kanban trigger of ${num(trigger)}. Time to reorder.</p>` : "";
     const last = s.minLog && s.minLog.set_by_name
-      ? `<p class="min-who">Set by ${esc(s.minLog.set_by_name)}, ${esc(when(s.minLog.set_at).phrase)}</p>` : "";
+      ? `<p class="min-who">Last changed by ${esc(s.minLog.set_by_name)}, ${esc(when(s.minLog.set_at).phrase)}</p>` : "";
     const msg = s.minMsg ? `<p class="min-msg ${s.minMsg.err ? "err" : ""}" role="status">${esc(s.minMsg.text)}</p>` : "";
+    const shown = (v) => (v == null ? `<span class="muted">Not set</span>` : `${num(v)} ${unit}`);
     if (!admin) {
-      box.innerHTML = `<div class="min-top"><span class="min-label">Minimum level</span>
-        <span class="min-val">${level == null ? `<span class="muted">Not set</span>` : `${num(level)} ${unit}`}</span></div>${warn}${level == null ? "" : last}`;
+      box.innerHTML = `<div class="min-top"><span class="min-label">Kanban trigger level</span><span class="min-val" id="idMinVal">${shown(trigger)}</span></div>
+        ${trigger == null ? "" : `<div class="min-top"><span class="min-label min-sub">Critical level</span><span class="min-val" id="idCritVal">${critical == null ? `<span class="muted">None</span>` : shown(critical)}</span></div>`}
+        ${warn}${trigger == null ? "" : last}`;
       return;
     }
-    box.innerHTML = `<div class="min-top"><label class="min-label" for="idMinIn">Minimum level <span class="min-admin">· Admins only</span></label>
-      <span class="min-in"><input id="idMinIn" type="text" inputmode="decimal" autocomplete="off" placeholder="Not set" value="${level == null ? "" : esc(String(level))}" aria-describedby="idMinHelp">
-      <span class="unit">${unit}</span><button class="btn-outline" type="button" id="idMinSave"${s.minSaving ? " disabled" : ""}>${s.minSaving ? "Saving…" : "Save"}</button>
-      ${level == null ? "" : `<button class="btn-outline min-remove" type="button" id="idMinRemove"${s.minSaving ? " disabled" : ""}>Remove</button>`}</span></div>
-      <p class="min-help" id="idMinHelp">${level == null ? "Leave empty if you don't know yet. " : ""}When stock drops to this number, the item shows <b>Low stock</b>.</p>
-      ${warn}${level == null ? "" : last}${msg}`;
-    const input = box.querySelector("#idMinIn");
-    input.addEventListener("input", () => { s.minDirty = true; });
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveMin(); } });
+    const dis = s.minSaving ? " disabled" : "";
+    box.innerHTML = `<div class="min-top"><label class="min-label" for="idMinIn">Kanban trigger level <span class="min-admin">· Admins only</span></label>
+      <span class="min-in"><input id="idMinIn" type="text" inputmode="decimal" autocomplete="off" placeholder="Not set" value="${trigger == null ? "" : esc(String(trigger))}" aria-describedby="idMinHelp">
+      <span class="unit">${unit}</span></span></div>
+      <div class="min-top"><label class="min-label min-sub" for="idCritIn">Critical level <span class="min-admin">· optional</span></label>
+      <span class="min-in"><input id="idCritIn" type="text" inputmode="decimal" autocomplete="off" placeholder="None" value="${critical == null ? "" : esc(String(critical))}" aria-describedby="idMinHelp">
+      <span class="unit">${unit}</span></span></div>
+      <p class="min-help" id="idMinHelp">${trigger == null ? "Leave empty if you don't know yet. " : ""}When stock drops to the <b>trigger level</b>, the item's row turns yellow (<b>Low stock</b>) — time to reorder.
+        If you also set a <b>critical level</b> (below the trigger), the row turns red (<b>Critical stock</b>) at that number. Nothing is ordered and the stock is not changed.</p>
+      <div class="min-btns"><button class="btn-outline" type="button" id="idMinSave"${dis}>${s.minSaving ? "Saving…" : "Save"}</button>
+      ${trigger == null ? "" : `<button class="btn-outline min-remove" type="button" id="idMinRemove"${dis}>Remove both</button>`}</div>
+      ${warn}${trigger == null ? "" : last}${msg}`;
+    for (const id of ["#idMinIn", "#idCritIn"]) {
+      const input = box.querySelector(id);
+      input.addEventListener("input", () => { s.minDirty = true; });
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveMin(); } });
+    }
     box.querySelector("#idMinSave").addEventListener("click", () => saveMin());
     const remove = box.querySelector("#idMinRemove");
-    if (remove) remove.addEventListener("click", () => { input.value = ""; s.minDirty = true; saveMin(); });
+    if (remove) remove.addEventListener("click", () => {
+      box.querySelector("#idMinIn").value = ""; box.querySelector("#idCritIn").value = "";
+      s.minDirty = true; saveMin();
+    });
   }
 
   async function saveMin() {
     const s = state;
     if (!s || s.minSaving) return;
-    const input = $("#idMinIn");
-    const parsed = parseMinimum(input ? input.value : "");
+    const tIn = $("#idMinIn"), cIn = $("#idCritIn");
+    const parsed = K().parseLevels(tIn ? tIn.value : "", cIn ? cIn.value : "");
     if (!parsed.ok) { s.minMsg = { err: true, text: parsed.error }; keepTyped(paintMin); return; }
     const token = s.token;
     s.minSaving = true; s.minMsg = null; keepTyped(paintMin);
     try {
-      const { data, error } = await window.ORYX_AUTH.sb.rpc("set_item_minimum", { p_item_id: s.item.id, p_level: parsed.level });
+      const { data, error } = await window.ORYX_AUTH.sb.rpc("set_item_kanban_levels",
+        { p_item_id: s.item.id, p_trigger: parsed.trigger, p_critical: parsed.critical });
       if (error) throw error;
       if (token !== s.token) return;
       if (!data || !data.ok) { s.minMsg = { err: true, text: MIN_ERRORS[data && data.error] || "Not saved: " + ((data && data.error) || "unknown error") + "." }; return; }
-      s.item = { ...s.item, buffer_level: data.buffer_level };
+      s.item = { ...s.item, buffer_level: data.buffer_level, critical_level: data.critical_level };
       s.minDirty = false;
       if (data.changed) {
         if (data.set_by_name) s.minLog = { set_by_name: data.set_by_name, set_at: data.set_at };
-        s.minMsg = { text: data.buffer_level == null ? "Removed — this item has no minimum now." : "Saved." };
-        document.dispatchEvent(new CustomEvent("oryx-item-changed", { detail: { id: s.item.id, buffer_level: data.buffer_level } }));
+        s.minMsg = { text: data.buffer_level == null ? "Removed — this item has no Kanban levels now." : "Saved." };
+        document.dispatchEvent(new CustomEvent("oryx-item-changed",
+          { detail: { id: s.item.id, buffer_level: data.buffer_level, critical_level: data.critical_level } }));
       } else {
-        s.minMsg = { text: "No change — that's already the minimum." };
+        s.minMsg = { text: "No change — those are already the levels." };
       }
     } catch (err) {
       if (token !== s.token) return;
-      console.error("minimum level", err);
+      console.error("kanban levels", err);
       s.minMsg = { err: true, text: "Not saved: " + (err.message || err) + "." };
     } finally {
       if (token === s.token) {
@@ -254,16 +254,19 @@
 
   // Redraw the box without losing what the person is typing.
   function keepTyped(fn) {
-    const input = $("#idMinIn");
-    const typed = input ? input.value : null;
-    const focused = input && document.activeElement === input;
+    const kept = ["#idMinIn", "#idCritIn"].map((id) => {
+      const input = $(id);
+      return { id, typed: input ? input.value : null, focused: !!input && document.activeElement === input };
+    });
     fn();
-    const again = $("#idMinIn");
-    if (again && typed != null) { again.value = typed; if (focused) again.focus(); }
+    for (const k of kept) {
+      const again = $(k.id);
+      if (again && k.typed != null) { again.value = k.typed; if (k.focused) again.focus(); }
+    }
   }
 
-  // Who last set the minimum (only shown when one is set). A failure only
-  // leaves the line out.
+  // Who last changed either level (only shown when a trigger is set). A
+  // failure only leaves the line out.
   async function loadMinLog(s, token) {
     try {
       const { data, error } = await window.ORYX_AUTH.sb.from("item_minimum_log")
@@ -273,7 +276,7 @@
       if (token !== s.token || s.minLog) return;
       s.minLog = data && data[0] ? data[0] : null;
       if (s.minLog) keepTyped(paintMin);
-    } catch (err) { console.error("minimum level log", err); }
+    } catch (err) { console.error("kanban levels log", err); }
   }
 
   function rowHtml(r) {
@@ -379,5 +382,5 @@
     loadMore();
   }
 
-  window.ORYX_ITEM = { open, close, describeTx, withStockAfter, when, minimumState, parseMinimum, currentItemId: () => (state && !$("#itemDrawer").hidden ? state.item.id : null) };
+  window.ORYX_ITEM = { open, close, describeTx, withStockAfter, when, currentItemId: () => (state && !$("#itemDrawer").hidden ? state.item.id : null) };
 })();
