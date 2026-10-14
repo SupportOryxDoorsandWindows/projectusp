@@ -498,12 +498,30 @@
     pageShell();
     drawBell();
     load();
-    // Pick up new updates: when the tab comes back and every 5 minutes.
+    // Instant: the database tells this page the moment an update is
+    // published, edited or removed (Supabase Realtime on system_updates).
+    // Row-level security still decides what each person receives, and the
+    // page then re-reads the list the normal way.
+    live();
+    // Back-up in case the live connection is blocked or drops: re-read when
+    // the tab comes back and every 5 minutes.
     let last = Date.now();
     root.addEventListener("focus", () => { if (Date.now() - last > 60000) { last = Date.now(); load(); } });
     setInterval(() => { last = Date.now(); load(); }, 5 * 60 * 1000);
   }
 
-  root.ORYX_UPDATES = { open: showPage, openDetails, reload: load };
+  function live() {
+    if (!sb.channel) return;
+    let timer = null, joinedBefore = false;
+    const soon = () => { clearTimeout(timer); timer = setTimeout(load, 300); };
+    sb.channel("system-updates")
+      .on("postgres_changes", { event: "*", schema: "public", table: "system_updates" }, soon)
+      .subscribe((status) => {
+        // Re-joined after a dropped connection: catch up on anything missed.
+        if (status === "SUBSCRIBED") { if (joinedBefore) soon(); joinedBefore = true; }
+      });
+  }
+
+  root.ORYX_UPDATES = { open: showPage, openDetails, reload: load, unreadCount: () => unreadOf(st.published, st.readIds).length };
   start();
 })(typeof window !== "undefined" ? window : globalThis);

@@ -136,6 +136,11 @@ create policy "Change own read-status" on public.system_update_reads
     and (select public.is_active_staff())
     and exists (select 1 from public.system_updates u where u.id = update_id and u.status = 'published'));
 
+-- Instant bell (Supabase Realtime): the browser is told when a row changes.
+-- Realtime applies the SELECT policy above per person, so staff are only
+-- told about published updates (deleted rows send just their id).
+alter publication supabase_realtime add table public.system_updates;
+
 -- Applied 2026-10-14 in three parts (tables / stamp trigger / rules). The
 -- Supabase connector hangs on SQL containing DROP or DELETE (and on ";"
 -- inside a quoted name), so the "drop trigger if exists" line above was left

@@ -202,6 +202,13 @@ product lines — never treat one family's item as a match for another's:
   for published updates). Trigger `system_updates_stamp` sets created_by /
   publisher / published_at / updated_at -- the browser never sends them; an
   edit keeps the publish date; back to draft clears it.
+- Instant bell: `system_updates` is in the `supabase_realtime` publication
+  (2026-10-14); updates.js `live()` subscribes to its postgres_changes with
+  the person's own token (Realtime applies the SELECT policy per person;
+  a DELETE only sends the row id) and re-reads the list. Back-up: re-read
+  on tab focus (>1 min) and every 5 minutes. The sandbox blocks real
+  websockets, so browser tests stub `realtime/v1/websocket`
+  (`page.routeWebSocket`) -- otherwise the console logs a failed connection.
 - Publishing needs the "This change is already live for everyone" tick
   (`validateForm`): announce only what is deployed. The publisher's own new
   update is marked read for them.
