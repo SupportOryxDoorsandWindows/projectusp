@@ -64,15 +64,13 @@ alter policy "Anyone can read supplier item aliases" on public.supplier_item_ali
 revoke select on public.supplier_item_aliases from anon;
 
 -- Drawings bucket: private, staff only (the site asks for signed links).
--- 2026-10-14: the bucket was switched to private (no public links), but the
--- Supabase connector may not change storage.objects policies ("must be owner
--- of table objects"), so the two ALTER POLICY lines below have to be run by
--- a person in the dashboard SQL editor (or Storage -> Policies). Until then a
--- visitor with the publishable key can still ask the storage API for a
--- drawing file (not through a plain link).
-alter policy "Anyone can read drawing files" on storage.objects
-  to authenticated using (bucket_id = 'drawings' and (select public.is_active_staff()));
-alter policy "Anyone can read drawing files" on storage.objects rename to "Staff read drawing files";
+-- The Supabase connector and even the dashboard SQL editor may not change
+-- storage.objects policies ("must be owner of table objects"), so the policy
+-- was changed by hand on 2026-10-14 in Dashboard -> Storage -> Policies. Its
+-- name was kept ("Anyone can read drawing files" -- the dashboard's rename
+-- step failed), but its rule is staff only. Equivalent SQL:
+--   alter policy "Anyone can read drawing files" on storage.objects
+--     to authenticated using (bucket_id = 'drawings' and (select public.is_active_staff()));
 update storage.buckets set public = false where id = 'drawings';
 
 -- Undo (back to readable by anyone):
@@ -109,6 +107,5 @@ update storage.buckets set public = false where id = 'drawings';
 --   alter policy "Staff read supplier item aliases" on public.supplier_item_aliases to anon, authenticated using (true);
 --   alter policy "Staff read supplier item aliases" on public.supplier_item_aliases rename to "Anyone can read supplier item aliases";
 --   grant select on public.supplier_item_aliases to anon;
---   alter policy "Staff read drawing files" on storage.objects to anon, authenticated using (bucket_id = 'drawings');
---   alter policy "Staff read drawing files" on storage.objects rename to "Anyone can read drawing files";
+--   (Dashboard -> Storage -> Policies) "Anyone can read drawing files": roles anon + authenticated, rule bucket_id = 'drawings'
 --   update storage.buckets set public = true where id = 'drawings';
