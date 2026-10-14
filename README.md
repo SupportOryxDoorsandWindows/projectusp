@@ -253,6 +253,8 @@ Three decisions worth knowing about:
 | `index.html` | Interface and the full design-system token block |
 | `config.js` | Supabase URL and publishable key |
 | `boot.js` | Loads the knowledge base from Supabase, then starts the app |
+| `updates.js` | What's New & Updates: bell, panel, history page, Admin publishing |
+| `supabase/sql/system_updates.sql` | Tables + rules for What's New & Updates (Admins publish, staff read, own read-status) |
 | `supabase/sql/staff_only_read.sql` | Only signed-in active staff can read the data and drawings (applied; undo inside) |
 | `app.js` | Sizing engine, knowledge retrieval, UI |
 | `assets/logos/` | Oryx logo and favicon |

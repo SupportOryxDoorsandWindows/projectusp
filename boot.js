@@ -312,6 +312,10 @@
       const t = document.createElement("script");
       t.src = "activity.js?v=" + Date.now();
       document.body.appendChild(t);
+      // What's New & Updates: bell, panel, history page, Admin publishing.
+      const u = document.createElement("script");
+      u.src = "updates.js?v=" + Date.now();
+      document.body.appendChild(u);
     };
     s.onerror = () => fail("Could not load app.js.");
     document.body.appendChild(s);

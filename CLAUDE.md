@@ -185,6 +185,33 @@ product lines — never treat one family's item as a match for another's:
   Check-out). It does not live-update from other people's changes.
   SQL: `supabase/sql/item_minimum_level.sql`, `supabase/sql/item_kanban_levels.sql`.
 
+## What's New & Updates (bell, panel, history page, publishing)
+
+- `updates.js` (loaded by boot.js after app.js; `window.ORYX_UPDATES`, pure
+  helpers in `window.ORYX_UPDATES_CORE`, tested in `tests/updates.test.js`).
+  The bell is created inside `.side-user` (fixed top-right on desktop, beside
+  the avatar on mobile; `.page-head` got right padding for it), the panel is
+  `#updPanel`, the history page is the view `#v-updates` (opened from "View
+  all updates", no sidebar item), details and the Admin form are dialogs.
+- It announces changes to the SYSTEM. It never reads or writes the Activity /
+  audit tables, and those stay the record of what people did.
+- Tables (`supabase/sql/system_updates.sql`): `system_updates` (Admins
+  `is_admin()` create / edit / delete; active staff read only `published`;
+  drafts are Admin-only) and `system_update_reads` (one row per person per
+  update, unique; each person inserts / updates only their own rows, only
+  for published updates). Trigger `system_updates_stamp` sets created_by /
+  publisher / published_at / updated_at -- the browser never sends them; an
+  edit keeps the publish date; back to draft clears it.
+- Publishing needs the "This change is already live for everyone" tick
+  (`validateForm`): announce only what is deployed. The publisher's own new
+  update is marked read for them.
+- Database rules are tested on a LOCAL Postgres (never the live project):
+  `tests/sql/supabase-base.sql` + the SQL file + `tests/sql/system-updates.test.sql`.
+  The Supabase connector times out on SQL that catches errors (exception
+  blocks), so don't test refusals through it.
+- The 4 sample updates from the request are TEST DATA (stand-in tests only);
+  never insert them into the live table without the user's say-so.
+
 ## Original PDFs kept with each transaction
 
 - Confirm (Check-out and Check-in) sends the PDF with the lines as
