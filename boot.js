@@ -3,7 +3,8 @@
  * Every staff member signs in (accounts are created by an Admin, who sends
  * them a one-time link to set their own password). Only after that, this file
  * pulls the knowledge base out of Supabase, assembles it into the shape app.js
- * expects (window.ORYX_KB), resolves the drawing URLs, and loads the app.
+ * expects (window.ORYX_KB), signs the drawing links (private bucket), and
+ * loads the app.
  *
  * window.ORYX_AUTH is the one place the rest of the app asks "who is this and
  * what may they do": the shared Supabase client (signed in), the person's
@@ -190,21 +191,73 @@
 
     if (!systems.length) {
       throw new Error(
-        "No systems came back. If the sign-in was removed recently, " +
-        "open-read-access.sql still needs running in the Supabase SQL editor.");
+        "No systems came back. Check that this account is active, and that " +
+        "supabase/sql/staff_only_read.sql (signed-in staff can read) is applied.");
     }
 
-    // Public bucket, so these URLs are permanent and need no refreshing.
-    const urls = {};
-    drawings.forEach((d) => {
-      urls[d.storage_path] = sb.storage
-        .from(CFG.drawingsBucket)
-        .getPublicUrl(d.storage_path).data.publicUrl;
-    });
+    // The drawings bucket is private (staff only): each drawing gets a
+    // temporary signed link. They are renewed before they run out (see
+    // renewDrawingLinks) and a drawing whose link has run out asks again.
+    const urls = await signDrawingLinks(drawings.map((d) => d.storage_path));
 
     return assembleKB(
       { systems, configs, options, drawings, notes, glossary, meta }, urls);
   }
+
+  /* ---------------------------------------------------------------- *
+   * Drawing links (private bucket, signed links)
+   * ---------------------------------------------------------------- */
+  const DRAWING_LINK_SECONDS = 12 * 3600;
+  const DRAWING_RENEW_MS = 6 * 3600 * 1000;
+  let drawingLinksAt = 0;
+
+  // path -> signed URL. A path that can't be signed gets "" (shown as
+  // "Drawing not uploaded", as before for a missing file).
+  async function signDrawingLinks(paths) {
+    const urls = {};
+    if (!paths.length) return urls;
+    const { data, error } = await sb.storage.from(CFG.drawingsBucket)
+      .createSignedUrls(paths, DRAWING_LINK_SECONDS);
+    if (error) throw new Error("drawings: " + error.message);
+    for (const r of data || []) if (r.path && r.signedUrl) urls[r.path] = r.signedUrl;
+    drawingLinksAt = Date.now();
+    return urls;
+  }
+
+  // Every drawing object in ORYX_KB (app.js keeps references to the same
+  // objects, so updating d.url here is what the next screen draw uses).
+  function kbDrawings() {
+    const kb = window.ORYX_KB;
+    return kb && kb.systems ? kb.systems.flatMap((s) => s.drawings || []) : [];
+  }
+
+  // A page left open all day: renew the links before they run out.
+  async function renewDrawingLinks() {
+    if (!drawingLinksAt || Date.now() - drawingLinksAt < DRAWING_RENEW_MS) return;
+    const list = kbDrawings();
+    try {
+      const urls = await signDrawingLinks([...new Set(list.map((d) => d.file).filter(Boolean))]);
+      for (const d of list) if (urls[d.file]) d.url = urls[d.file];
+    } catch (e) { console.error("renew drawing links", e); }
+  }
+  window.addEventListener("focus", renewDrawingLinks);
+  setInterval(renewDrawingLinks, 15 * 60 * 1000);
+
+  // A drawing already on screen whose link ran out (or a link copied from
+  // an older page): ask for a fresh link once and show it.
+  document.addEventListener("error", async (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || img.dataset.relinked) return;
+    const m = String(img.src).match(new RegExp("/storage/v1/object/sign/" + CFG.drawingsBucket + "/([^?]+)"));
+    if (!m) return;
+    img.dataset.relinked = "1";
+    const path = decodeURIComponent(m[1]);
+    const { data } = await sb.storage.from(CFG.drawingsBucket).createSignedUrl(path, DRAWING_LINK_SECONDS);
+    if (data && data.signedUrl) {
+      for (const d of kbDrawings()) if (d.file === path) d.url = data.signedUrl;
+      img.src = data.signedUrl;
+    }
+  }, true);
 
   /* ---------------------------------------------------------------- *
    * Start

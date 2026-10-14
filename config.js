@@ -6,8 +6,9 @@
    must never appear here — it belongs only in push_to_supabase.py, in an
    environment variable on the machine doing the upload.
 
-   Everyone signs in (boot.js). Note that the product data tables are still
-   readable with this key (see README.md, "Who can see the data"). */
+   Everyone signs in (boot.js). This key alone reads nothing: every table and
+   the drawings answer only a signed-in active staff account (README.md, "Who
+   can see the data"; supabase/sql/staff_only_read.sql). */
 window.ORYX_CONFIG = {
   supabaseUrl: "https://ylhdsvwzqcshffwohhfy.supabase.co",
   supabaseKey: "sb_publishable_-8lQTmwPyAsmJXKATTcbpg_OtKG9qJF",
