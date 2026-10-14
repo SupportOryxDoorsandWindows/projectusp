@@ -128,8 +128,10 @@ product lines — never treat one family's item as a match for another's:
   (title, subtitle, action) + `.page-body` per view. Tabs are still
   `nav button[data-v]` → `#v-<name>`; `window.ORYX_SHOW_VIEW(name)` switches.
   The approved-UI CSS is the block at the end of `index.html`'s `<style>`.
-- Master Inventory (pages 7 + 11): chips All / Out of stock / No cost /
-  No photo / Low (hidden `#miFilter` holds the choice), 10 per page, Last
+- Master Inventory (pages 7 + 11): a "Show" dropdown beside the search
+  (`#miFilter`, filled by `drawFilter` with counts: All items; Stock:
+  Normal / Low / Critical / Out of stock; Missing details: No cost / No
+  photo; was a row of chips until 2026-10-14), 10 per page, Last
   change column (`loadLastChangeByItem`). The item panel is
   `item-timeline.js` (`window.ORYX_ITEM.open(item, {onAdjust})`): re-reads
   the item by id, then its `inventory_transactions` 6 at a time ("Show
@@ -147,7 +149,7 @@ product lines — never treat one family's item as a match for another's:
 
 - ONE rule, in `kanban.js` (`window.ORYX_KANBAN.kanbanState`, loaded from
   index.html before boot.js; tests in `tests/kanban.test.js`). Everything
-  reads it: row colour, status badge, chips and Extract (fp-inventory.js
+  reads it: row colour, status badge, Show filter and Extract (fp-inventory.js
   `kanbanOf`/`miStatus`/`inventoryStatus`) and the item panel
   (item-timeline.js). Never add a second copy of the rule.
 - Kanban trigger level = `inventory_items.buffer_level` (same column and
@@ -161,8 +163,8 @@ product lines — never treat one family's item as a match for another's:
   Stock = the stored `current_qty`; nothing is ordered, stock never changes.
 - Badge order: Out of stock (stock <= 0) first, then Critical / Low stock,
   then No cost. So an out-of-stock item with no critical level is a yellow
-  row with the "Out of stock" badge. Chips Normal / Low / Critical stock
-  only appear when they have items (or are selected).
+  row with the "Out of stock" badge. The Normal / Low / Critical stock
+  options only appear when they have items (or are selected).
 - Set in the item panel's Kanban box (Admins only):
   `set_item_kanban_levels(item_id, trigger, critical)` (security definer,
   `is_admin()`, logs each changed level to `item_minimum_log` with

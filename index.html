@@ -1124,9 +1124,10 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .btn-sm{padding:8px 13px; font-size:13px; border-radius:8px}
 .mi-kpis{display:flex; gap:28px; align-items:baseline; flex-wrap:wrap; margin-bottom:14px; color:var(--text-muted); font-size:14.5px}
 .mi-kpi b{font-family:var(--font-display); font-size:26px; color:var(--brand); margin-right:6px}
-.mi-toolbar{display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px}
-.mi-toolbar .pill-row{margin:0}
-.mi-toolbar input{max-width:340px}
+.mi-toolbar{display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px}
+.mi-toolbar input{max-width:340px; flex:1 1 220px}
+.mi-filter{display:flex; align-items:center; gap:8px; margin:0; font-size:14px; font-weight:600; color:var(--brand)}
+.mi-filter select{width:auto; min-width:210px; font-weight:400; cursor:pointer}
 .mi-card{padding:0; overflow:hidden}
 .mi-scroll{max-height:none}
 .mi-table th,.mi-table td{padding:12px 14px; vertical-align:middle}
@@ -1786,13 +1787,12 @@ details.act-card > .act-doc{margin-top:10px}
     <span class="small muted" id="miExtractStatus"></span>
     <div class="mi-kpis" id="miTally"></div>
     <div class="mi-toolbar">
-      <div class="pill-row" id="miChips" role="group" aria-label="Show"></div>
+      <label class="mi-filter"><span>Show</span>
+        <select id="miFilter" aria-label="Show">
+          <option value="all">All items</option>
+        </select>
+      </label>
       <input id="miSearch" type="search" autocomplete="off" placeholder="Search code or description" aria-label="Search code or description">
-      <select id="miFilter" hidden>
-        <option value="all">All</option><option value="out">Out of stock</option><option value="nocost">No cost</option>
-        <option value="nophoto">No photo</option><option value="normal">Normal stock</option><option value="low">Low stock</option>
-        <option value="critical">Critical stock</option>
-      </select>
     </div>
     <div class="card mi-card">
       <div class="fp-scroll mi-scroll">
