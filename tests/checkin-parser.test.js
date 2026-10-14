@@ -1,11 +1,6 @@
 const assert = require("assert");
 const fs = require("fs");
-const vm = require("vm");
-
-const source = fs.readFileSync("fp-pro.js", "utf8").replace(
-  /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__ciTest = { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader };\n})();`
-);
+const { loadFp } = require("./load-fp");
 
 const fakeEl = {
   addEventListener() {},
@@ -40,8 +35,7 @@ const context = {
   crypto: { subtle: {} },
 };
 
-vm.runInNewContext(source, context);
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader } = context.window.__ciTest;
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader } = loadFp(context);
 
 const freedomApproval = `
 COMMON PARTS

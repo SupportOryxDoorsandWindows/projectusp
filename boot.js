@@ -216,6 +216,12 @@
       fail(e.message);
       return;
     }
+    const FP_FILES = [
+      "fp-core.js", "fp-items-ui.js", "fp-checkout.js",
+      "fp-checkin-read.js", "fp-checkin-layouts.js", "fp-checkin-fallbacks.js",
+      "fp-checkin-match.js", "fp-checkin-screen.js",
+      "fp-reports.js", "fp-inventory.js", "fp-main.js",
+    ];
     const s = document.createElement("script");
     // Cache-buster: GitHub Pages and browsers cache "app.js" aggressively, so a
     // plain filename can keep running old logic after a deploy. A per-load query
@@ -225,12 +231,18 @@
     s.onload = () => {
       $("#loading").hidden = true;
       $("#appShell").hidden = false;
-      // fp-pro.js runs the FP Pro Optimization tab. Loaded after app.js
-      // so it can hook into the main event loop; cache-busted the same way
-      // as app.js so a redeploy takes effect on the next page load.
-      const f = document.createElement("script");
-      f.src = "fp-pro.js?v=" + Date.now();
-      document.body.appendChild(f);
+      // The stock screens (Check-out, Check-in, Master Inventory), split over
+      // FP_FILES (they used to be one file, fp-pro.js). Loaded after app.js
+      // so they can hook into the main event loop; cache-busted the same way
+      // as app.js so a redeploy takes effect on the next page load. async =
+      // false runs them in this order: each file takes the shared names the
+      // files before it put on window.ORYX_FP, and fp-main.js starts it all.
+      for (const name of FP_FILES) {
+        const f = document.createElement("script");
+        f.src = name + "?v=" + Date.now();
+        f.async = false;
+        document.body.appendChild(f);
+      }
       // User Management (Admins only -- the server checks again).
       const a = document.createElement("script");
       a.src = "admin.js?v=" + Date.now();
