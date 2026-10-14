@@ -64,6 +64,12 @@ alter policy "Anyone can read supplier item aliases" on public.supplier_item_ali
 revoke select on public.supplier_item_aliases from anon;
 
 -- Drawings bucket: private, staff only (the site asks for signed links).
+-- 2026-10-14: the bucket was switched to private (no public links), but the
+-- Supabase connector may not change storage.objects policies ("must be owner
+-- of table objects"), so the two ALTER POLICY lines below have to be run by
+-- a person in the dashboard SQL editor (or Storage -> Policies). Until then a
+-- visitor with the publishable key can still ask the storage API for a
+-- drawing file (not through a plain link).
 alter policy "Anyone can read drawing files" on storage.objects
   to authenticated using (bucket_id = 'drawings' and (select public.is_active_staff()));
 alter policy "Anyone can read drawing files" on storage.objects rename to "Staff read drawing files";
