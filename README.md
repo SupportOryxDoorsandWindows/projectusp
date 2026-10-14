@@ -46,7 +46,8 @@ the Edge Functions / database functions.
 
 - Drawings are in a **private** bucket; the site asks for temporary signed
   links (12 hours, renewed while the page is open). A copied link stops
-  working after that.
+  working after that. (The storage policy keeps its old name "Anyone can
+  read drawing files", but its rule is staff only.)
 - The original Check-in / Check-out PDFs are in the **private**
   `transaction-documents` bucket (5-minute links).
 - SQL, and how to undo it: `supabase/sql/staff_only_read.sql`.
