@@ -115,6 +115,13 @@ product lines — never treat one family's item as a match for another's:
   `user-admin`, Admin-only read); deleted lines come from `delete_audit_log`.
 - Every Delete on Check-in/Check-out lines goes through `requestDelete`; never
   remove a line without it. Restore is open to all and only logged.
+- Reading is staff-only (2026-10-14, `supabase/sql/staff_only_read.sql`):
+  every public table and the `drawings` bucket answer only
+  `is_active_staff()`; anon gets nothing. Drawings use signed links
+  (`signDrawingLinks` in boot.js, 12 h, renewed; an expired one re-signs on
+  image error). A new table must get the same staff-only read policy. Not
+  `department_files` / `department-files`: another Oryx app uses them
+  without a sign-in.
 - Testing from this sandbox: the egress proxy injects a privileged key into
   every request to *.supabase.co (even with no key), so live REST/RPC calls
   from here do NOT run as the signed-in user. Test the rules in SQL with

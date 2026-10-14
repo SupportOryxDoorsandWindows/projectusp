@@ -36,30 +36,26 @@ through it. The `service_role` key must never go in this repo.
 
 ## Who can see the data
 
-Be clear-eyed about this: **the product data is public.** The page is served from
-a public GitHub Pages site and its key is visible in the source, so the sash
-limits, engineering notes and all 170 drawings can be read by anyone who finds
-the URL — not only Oryx staff.
+**Only signed-in, active Oryx staff** (since 2026-10-14). The page and its
+publishable key are public (GitHub Pages), but the key alone reads nothing:
+every table — product data, Master Inventory, Check-in / Check-out history,
+supplier links, exchange rates — and the drawings answer only a signed-in
+account that is active (`is_active_staff()`). A switched-off account sees
+nothing either. Nothing can be *changed* without going through the checks in
+the Edge Functions / database functions.
 
-That was a deliberate choice to keep the tool frictionless for the team. Nothing
-can be *changed* by an outsider, only read.
-
-The original Check-in / Check-out PDFs are the exception: they sit in a
-**private** bucket (`transaction-documents`) that only signed-in, active staff
-can open, through a link that expires after 5 minutes.
-
-### Restoring the sign-in
-
-Two steps, if you later want it staff-only:
-
-1. Run `revert-read-access.sql` in the Supabase SQL editor.
-2. Restore the gate in the app. Commit `701e5b0` has the working version —
-   `git show 701e5b0 -- index.html boot.js` — which adds an email and password
-   screen, hides everything behind it, and signs drawing URLs instead of using
-   public ones.
-
-Then create users under **Authentication → Users → Add user**, ticking
-*Auto Confirm User*.
+- Drawings are in a **private** bucket; the site asks for temporary signed
+  links (12 hours, renewed while the page is open). A copied link stops
+  working after that.
+- The original Check-in / Check-out PDFs are in the **private**
+  `transaction-documents` bucket (5-minute links).
+- SQL, and how to undo it: `supabase/sql/staff_only_read.sql`.
+- Exception: the `department-files` bucket and `department_files` table belong
+  to another Oryx app that works without a sign-in, so they are still readable
+  (see `supabase/sql/department_files_partial_lock.sql`).
+- `pull_from_supabase.py` (download the data with the publishable key) no
+  longer works for that reason; the "Publish product data" workflow uses its
+  own secret key and is unaffected.
 
 ## User permissions
 
@@ -256,8 +252,7 @@ Three decisions worth knowing about:
 | `index.html` | Interface and the full design-system token block |
 | `config.js` | Supabase URL and publishable key |
 | `boot.js` | Loads the knowledge base from Supabase, then starts the app |
-| `open-read-access.sql` | Makes the data readable without a sign-in (already applied) |
-| `revert-read-access.sql` | Puts the staff sign-in requirement back |
+| `supabase/sql/staff_only_read.sql` | Only signed-in active staff can read the data and drawings (applied; undo inside) |
 | `app.js` | Sizing engine, knowledge retrieval, UI |
 | `assets/logos/` | Oryx logo and favicon |
 | `build_kb.py` | Spreadsheet → `data/`; also holds the engineering notes and glossary |
