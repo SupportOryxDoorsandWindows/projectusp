@@ -33,7 +33,7 @@ create table if not exists public.system_updates (
 );
 create index if not exists system_updates_published_idx on public.system_updates (status, published_at desc);
 comment on table public.system_updates is
-  'What''s New & Updates announcements. Admins write; active staff read published rows. Stamps set by trigger system_updates_stamp.';
+  'What''s New & Updates announcements. Admins write, active staff read published rows. Stamps set by trigger system_updates_stamp.';
 
 create table if not exists public.system_update_reads (
   id bigint generated always as identity primary key,
@@ -105,7 +105,7 @@ revoke all on public.system_update_reads from authenticated;
 grant select, insert, update, delete on public.system_updates to authenticated;
 grant select, insert, update on public.system_update_reads to authenticated;
 
-create policy "Staff read published updates; Admins read all" on public.system_updates
+create policy "Staff read published updates, Admins read all" on public.system_updates
   for select to authenticated
   using ((status = 'published' and (select public.is_active_staff())) or (select public.is_admin()));
 create policy "Admins add updates" on public.system_updates
@@ -115,7 +115,7 @@ create policy "Admins change updates" on public.system_updates
   for update to authenticated
   using ((select public.is_admin()))
   with check ((select public.is_admin()));
-create policy "Admins delete updates" on public.system_updates
+create policy "Admins remove updates" on public.system_updates
   for delete to authenticated
   using ((select public.is_admin()));
 
@@ -136,6 +136,11 @@ create policy "Change own read-status" on public.system_update_reads
     and (select public.is_active_staff())
     and exists (select 1 from public.system_updates u where u.id = update_id and u.status = 'published'));
 
+-- Applied 2026-10-14 in three parts (tables / stamp trigger / rules). The
+-- Supabase connector hangs on SQL containing DROP or DELETE (and on ";"
+-- inside a quoted name), so the "drop trigger if exists" line above was left
+-- out there; it is harmless in the SQL editor.
+--
 -- Undo (removes the feature's data):
 --   drop table public.system_update_reads; drop table public.system_updates;
 --   drop function public.system_updates_stamp();
