@@ -1133,6 +1133,13 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .mi-table thead th{position:static; background:var(--white)}
 .mi-row{cursor:pointer}
 .mi-row.sel td{background:#FBF6EA}
+/* Kanban row colours (kanban.js): the whole row, every column. */
+.mi-table tr.kb-low > td,.mi-table tr.kb-low:hover > td{background:#FEF3C7; color:#92400E}
+.mi-table tr.kb-critical > td,.mi-table tr.kb-critical:hover > td{background:#FEE2E2; color:#991B1B}
+.mi-table tr.kb-low .mi-name,.mi-table tr.kb-low .mi-code{color:#92400E}
+.mi-table tr.kb-critical .mi-name,.mi-table tr.kb-critical .mi-code{color:#991B1B}
+.mi-table tr.kb-low.sel > td{background:#FDE9A8}
+.mi-table tr.kb-critical.sel > td{background:#FCCFCF}
 .mi-item{display:flex; align-items:center; gap:12px; min-width:220px}
 .mi-name{font-weight:600; color:var(--brand); font-size:14.5px}
 .mi-code{font-size:12.5px; color:var(--text-muted)}
@@ -1184,6 +1191,9 @@ body.drawer-open{overflow:hidden}
 .min-box{margin:12px 26px 0; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--white)}
 .min-box .min-top{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap}
 .min-box .min-label{font-weight:600; color:var(--brand); font-size:14px}
+.min-box .min-top + .min-top{margin-top:8px}
+.min-box .min-label.min-sub{font-weight:500}
+.min-box .min-btns{display:flex; gap:8px; margin-top:8px}
 .min-box .min-admin{font-size:12px; color:var(--text-muted-light); font-weight:400}
 .min-box .min-val{font-family:var(--font-display); font-weight:700; color:var(--brand)}
 .min-box .min-in{display:flex; align-items:center; gap:8px}
@@ -1192,6 +1202,7 @@ body.drawer-open{overflow:hidden}
 .min-box .unit{color:var(--text-muted); font-size:14px}
 .min-box p{margin:6px 0 0; font-size:13px; color:var(--text-muted)}
 .min-box .min-warn{margin-top:8px; display:flex; align-items:center; gap:8px; color:#8A5A0F}
+.min-box .min-warn.crit{color:#991B1B}
 .min-box .min-who{color:var(--text-muted-light)}
 .min-box .min-msg{color:var(--new-deep)}
 .min-box .min-msg.err{color:var(--danger); background:var(--danger-bg); border-radius:8px; padding:6px 10px; font-weight:600}
@@ -1779,7 +1790,8 @@ details.act-card > .act-doc{margin-top:10px}
       <input id="miSearch" type="search" autocomplete="off" placeholder="Search code or description" aria-label="Search code or description">
       <select id="miFilter" hidden>
         <option value="all">All</option><option value="out">Out of stock</option><option value="nocost">No cost</option>
-        <option value="nophoto">No photo</option><option value="low">Low stock</option>
+        <option value="nophoto">No photo</option><option value="normal">Normal stock</option><option value="low">Low stock</option>
+        <option value="critical">Critical stock</option>
       </select>
     </div>
     <div class="card mi-card">
@@ -2007,6 +2019,8 @@ details.act-card > .act-doc{margin-top:10px}
 <!-- boot.js loads the knowledge base from Supabase, then loads app.js and
      fp-pro.js. Bump ?v= when config.js or boot.js change so browsers
      fetch the new file. -->
+<!-- kanban.js: the one Kanban stock rule (row colours, badges, item panel). -->
+<script src="kanban.js?v=1"></script>
 <script src="boot.js?v=11"></script>
 </body>
 </html>
