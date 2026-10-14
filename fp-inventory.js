@@ -1,4 +1,4 @@
-/* Master Inventory: item list (Kanban colours, chips, search, pages), photos, Adjust dialog, Transaction History and the inventory Extract (.xlsx).
+/* Master Inventory: item list (Kanban colours, Show filter, search, pages), photos, Adjust dialog, Transaction History and the inventory Extract (.xlsx).
  *
  * Part of the stock screens that used to be one file (fp-pro.js). Loaded by
  * boot.js in a fixed order (see FP_FILES there); names shared between the
@@ -317,7 +317,7 @@
   let miFilteredItems = [];
 
   // Kanban state of an item (unset / normal / low / critical): the shared
-  // rule in kanban.js -- the row colour, the badge, the chips and the
+  // rule in kanban.js -- the row colour, the badge, the Show filter and the
   // Extract all read it, so they can't disagree.
   const kanbanOf = (it) => window.ORYX_KANBAN.kanbanState(it).state;
 
@@ -342,23 +342,30 @@
       <span class="mi-kpi"><b>${esc(money(totalValue).replace(/\.\d\d$/, ""))}</b> stock value</span>
       <span class="mi-kpi"><b>${items.length}</b> items in ${codes.size} codes</span>`;
 
+    // The "Show" dropdown beside the search box (was a row of chips).
     const FILTERS = {
-      all: { label: "All", test: () => true },
-      out: { label: "Out of stock", test: (it) => !(Number(it.current_qty) > 0) },
-      nocost: { label: "No cost", test: (it) => Number(it.current_qty) > 0 && !(Number(it.unit_cost) > 0) },
-      nophoto: { label: "No photo", test: (it) => !hasPhoto(it), count: `${noPhotoCodes} codes` },
-      // Kanban chips: only items with a trigger level set (hidden while none).
-      normal: { label: "Normal stock", test: (it) => kanbanOf(it) === "normal", kanban: true },
-      low: { label: "Low stock", test: (it) => kanbanOf(it) === "low", kanban: true },
-      critical: { label: "Critical stock", test: (it) => kanbanOf(it) === "critical", kanban: true },
+      all: { label: "All items", test: () => true },
+      // Kanban: only items with a trigger level set (left out while none).
+      normal: { label: "Normal stock", test: (it) => kanbanOf(it) === "normal", kanban: true, group: "Stock" },
+      low: { label: "Low stock", test: (it) => kanbanOf(it) === "low", kanban: true, group: "Stock" },
+      critical: { label: "Critical stock", test: (it) => kanbanOf(it) === "critical", kanban: true, group: "Stock" },
+      out: { label: "Out of stock", test: (it) => !(Number(it.current_qty) > 0), group: "Stock" },
+      nocost: { label: "No cost", test: (it) => Number(it.current_qty) > 0 && !(Number(it.unit_cost) > 0), group: "Missing details" },
+      nophoto: { label: "No photo", test: (it) => !hasPhoto(it), count: `${noPhotoCodes} codes`, group: "Missing details" },
     };
-    const drawChips = () => {
-      const cur = $("#miFilter").value || "all";
-      $("#miChips").innerHTML = Object.entries(FILTERS).map(([k, f]) => {
+    const drawFilter = () => {
+      const sel = $("#miFilter");
+      const cur = FILTERS[sel.value] ? sel.value : "all";
+      const opt = (k, f) => {
         const n = items.filter(f.test).length;
         if (f.kanban && !n && k !== cur) return "";
-        return `<button type="button" class="pill ${k === cur ? "on" : ""}" data-mi-chip="${k}">${f.label} · ${f.count || n}</button>`;
-      }).join("");
+        return `<option value="${k}"${k === cur ? " selected" : ""}>${esc(f.label)} (${esc(f.count || n)})</option>`;
+      };
+      const groups = new Map();
+      for (const [k, f] of Object.entries(FILTERS)) if (f.group) groups.set(f.group, (groups.get(f.group) || "") + opt(k, f));
+      sel.innerHTML = opt("all", FILTERS.all) +
+        [...groups].filter(([, html]) => html).map(([g, html]) => `<optgroup label="${esc(g)}">${html}</optgroup>`).join("");
+      sel.value = cur;
     };
 
     const PAGE_SIZE = 10;
@@ -427,12 +434,9 @@
       $("#miItemsPrev").disabled = miPage === 0;
       $("#miItemsNext").disabled = miPage >= pageCount - 1;
     }
-    drawChips();
+    drawFilter();
     draw();
-    $("#miChips").onclick = (e) => {
-      const b = e.target.closest("[data-mi-chip]"); if (!b) return;
-      $("#miFilter").value = b.dataset.miChip; miPage = 0; drawChips(); draw();
-    };
+    $("#miFilter").onchange = () => { miPage = 0; draw(); };
     $("#miSearch").oninput = () => { miPage = 0; draw(); };
     $("#miItemsPrev").onclick = () => { miPage = Math.max(0, miPage - 1); draw(); };
     $("#miItemsNext").onclick = () => { miPage = miPage + 1; draw(); };
@@ -442,7 +446,7 @@
         for (const tr of document.querySelectorAll("#miItemsBody tr.sel")) tr.classList.remove("sel");
       });
       // New Kanban levels (item panel, Admins) change the row colour, badge
-      // and chips: re-read the list.
+      // and Show filter: re-read the list.
       document.addEventListener("oryx-item-changed", () => { loadMasterInventoryView(); });
     }
 
