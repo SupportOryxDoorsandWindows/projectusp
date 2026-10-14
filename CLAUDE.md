@@ -1,5 +1,31 @@
 # Notes for Claude
 
+## Code layout (stock screens)
+
+- The old `fp-pro.js` (6,376 lines) was split on 2026-10-14 into the
+  `fp-*.js` files listed in `boot.js` `FP_FILES`, loaded in that order
+  (async = false). The split was mechanical: every statement was moved
+  unchanged; only names shared between files were rewired.
+  `fp-core.js` (setup, PDF reading, Master Inventory matching rules),
+  `fp-items-ui.js` (code pickers, item photos), `fp-checkout.js`,
+  `fp-checkin-read.js` (state, OCR, currency, shipping),
+  `fp-checkin-layouts.js` (fixed supplier layouts),
+  `fp-checkin-fallbacks.js` (general readers + `parseCheckinDocument`),
+  `fp-checkin-match.js` (remember, `buildCheckinRows`, costs, rates),
+  `fp-checkin-screen.js` (Preview, Confirm, manual entry), `fp-reports.js`,
+  `fp-inventory.js` (Master Inventory, Adjust, Extract), `fp-main.js`
+  (`init`, starts everything).
+- Sharing: each file is its own IIFE and ends with `Object.assign(FP, {...})`
+  for the names other files use (`FP` = `window.ORYX_FP`). A later file
+  takes them at its top (`const { a, b } = FP;`); an earlier file reads
+  `FP.name` inside functions (only runs after all files loaded). A `let`
+  that is reassigned must stay in one file (or become an `FP` property).
+  When you add a cross-file use, add the name to the provider's
+  `Object.assign` and to the user's `const {...} = FP`.
+- Tests load the files through `tests/load-fp.js` (same order, without
+  fp-main.js) and read `window.ORYX_FP`; a name a test needs must be in its
+  file's `Object.assign`.
+
 ## Product families (Master Inventory)
 
 Item descriptions start with a product-family prefix. They are different
@@ -15,7 +41,7 @@ product lines — never treat one family's item as a match for another's:
   Black" from Freedom invoices) — not a match for the SMB1 or ZLX item with a
   similar name.
 - The Check-in description matcher (`findUniqueDescriptionItem` in
-  `fp-pro.js`) never auto-matches across a series-number difference
+  `fp-core.js`) never auto-matches across a series-number difference
   ("ZLS" vs "ZLS1"). Such a match is only offered as a "Possible match —
   Use this item" suggestion (`findSeriesSuggestion`), because deciding that
   two names are the same part is the stock team's call, not the system's.
@@ -111,7 +137,7 @@ product lines — never treat one family's item as a match for another's:
   (`withStockAfter`, tested in `tests/item-timeline.test.js`). Read-only;
   "Adjust stock" opens the same Adjust dialog.
 - Check-out / Check-in: header stepper and the Check-in summary strip are a
-  read-out (`updateFlowUi` in fp-pro.js, driven by a MutationObserver).
+  read-out (`updateFlowUi` in fp-main.js, driven by a MutationObserver).
 - User Management "Last active" comes from `admin_user_last_active()`
   (security definer, Admins only, reads auth.users.last_sign_in_at).
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,
@@ -121,7 +147,7 @@ product lines — never treat one family's item as a match for another's:
 
 - ONE rule, in `kanban.js` (`window.ORYX_KANBAN.kanbanState`, loaded from
   index.html before boot.js; tests in `tests/kanban.test.js`). Everything
-  reads it: row colour, status badge, chips and Extract (fp-pro.js
+  reads it: row colour, status badge, chips and Extract (fp-inventory.js
   `kanbanOf`/`miStatus`/`inventoryStatus`) and the item panel
   (item-timeline.js). Never add a second copy of the rule.
 - Kanban trigger level = `inventory_items.buffer_level` (same column and
@@ -145,7 +171,7 @@ product lines — never treat one family's item as a match for another's:
   exists (trigger only) but the site no longer calls it. No other way to
   write either column (no write policy on inventory_items), except a
   Check-in New item's optional trigger level. A save fires
-  `oryx-item-changed`; fp-pro.js re-reads the list. The list also re-reads
+  `oryx-item-changed`; fp-inventory.js re-reads the list. The list also re-reads
   after Adjust and every time Master Inventory is opened (after Check-in /
   Check-out). It does not live-update from other people's changes.
   SQL: `supabase/sql/item_minimum_level.sql`, `supabase/sql/item_kanban_levels.sql`.
@@ -154,7 +180,7 @@ product lines — never treat one family's item as a match for another's:
 
 - Confirm (Check-out and Check-in) sends the PDF with the lines as
   multipart/form-data: "payload" = the same JSON as before, "document" = the
-  file (`confirmRequest` in fp-pro.js; no PDF / hand entry / over 25 MB =
+  file (`confirmRequest` in fp-core.js; no PDF / hand entry / over 25 MB =
   plain JSON as before). The Edge Function checks the file BEFORE the stock
   (PDF header, SHA-256 must equal `pdf_hash`) and keeps it only AFTER the
   stock function succeeded; failing to keep it never fails the stock -- the
@@ -200,7 +226,7 @@ product lines — never treat one family's item as a match for another's:
 
 ## Currency (Check-in)
 
-- `detectDocumentCurrencyInfo` in `fp-pro.js`: a written code or code-marked
+- `detectDocumentCurrencyInfo` in `fp-checkin-read.js`: a written code or code-marked
   symbol (USD, AUD, US$, A$…) wins; a bare "$" uses Australia-only markers
   (ABN, Pty Ltd, Australia, .com.au — not GST, which India also uses) or US
   markers; a bare "$" with no markers is **AUD** automatically — verified on

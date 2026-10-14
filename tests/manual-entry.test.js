@@ -1,11 +1,6 @@
 const assert = require("assert");
 const fs = require("fs");
-const vm = require("vm");
-
-const source = fs.readFileSync("fp-pro.js", "utf8").replace(
-  /\n\s*init\(\);\s*\n\}\)\(\);\s*$/,
-  `\nwindow.__manTest = { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches };\n})();`
-);
+const { loadFp } = require("./load-fp");
 
 const fakeEl = {
   addEventListener() {},
@@ -40,8 +35,7 @@ const context = {
   crypto: { subtle: {} },
 };
 
-vm.runInNewContext(source, context);
-const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches } = context.window.__manTest;
+const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches } = loadFp(context);
 
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
