@@ -145,6 +145,12 @@ product lines — never treat one family's item as a match for another's:
   older"); "stock after" is worked back from the current stock
   (`withStockAfter`, tested in `tests/item-timeline.test.js`). Read-only;
   "Adjust stock" opens the same Adjust dialog.
+- Sidebar hide/unhide (desktop only, 2026-10-15): the « button `#sideToggle`
+  in `.side-brand` toggles `.shell.side-collapsed` (72px icon strip; names
+  become hover tooltips, set from each button's text in app.js). Remembered
+  per browser in localStorage `oryx_side_collapsed`. Phones keep the old
+  menu (toggle hidden at <=900px). `#signOut` children have
+  `pointer-events:none` because boot.js checks `e.target.id`.
 - Check-out / Check-in: header stepper and the Check-in summary strip are a
   read-out (`updateFlowUi` in fp-main.js, driven by a MutationObserver).
 - User Management "Last active" comes from `admin_user_last_active()`

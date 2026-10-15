@@ -999,6 +999,30 @@ function showView(v) {
 document.querySelectorAll("nav button[data-v]").forEach(b => b.addEventListener("click", () => showView(b.dataset.v)));
 window.ORYX_SHOW_VIEW = showView;
 
+// Sidebar hide / show (desktop): folds it to a strip of icons and back.
+// Remembered in this browser only; hovering an icon shows its name.
+(function () {
+  const KEY = "oryx_side_collapsed";
+  const shell = document.querySelector(".shell"), btn = document.getElementById("sideToggle");
+  if (!shell || !btn) return;
+  document.querySelectorAll("nav.side-nav button").forEach(b => {
+    const name = b.textContent.replace(/\s+/g, " ").replace(/\s*Soon$/i, "").trim();
+    if (!b.title) b.title = name;
+    if (!b.getAttribute("aria-label")) b.setAttribute("aria-label", name);
+  });
+  const set = (collapsed, remember) => {
+    shell.classList.toggle("side-collapsed", collapsed);
+    const label = collapsed ? "Show menu" : "Hide menu";
+    btn.setAttribute("aria-expanded", String(!collapsed));
+    btn.setAttribute("aria-label", label); btn.title = label;
+    if (remember) { try { localStorage.setItem(KEY, collapsed ? "1" : "0"); } catch { /* private mode: not remembered */ } }
+  };
+  let saved = false;
+  try { saved = localStorage.getItem(KEY) === "1"; } catch { /* not available */ }
+  set(saved, false);
+  btn.addEventListener("click", () => set(!shell.classList.contains("side-collapsed"), true));
+})();
+
 // ---- checker (proposal page 2) ----
 const ALL_THRESHOLDS = [...new Set(SYS.flatMap(s => Object.keys(s.thresholds)))];
 $("#thr").innerHTML = `<option value="">Any</option>` +
