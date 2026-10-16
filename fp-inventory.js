@@ -246,6 +246,18 @@
         // A stock count: book only the difference, at the item's own cost
         // (a Check-in never changes an existing item's unit cost).
         if (!(qty >= 0) || $("#miAdjustQty").value === "") return showErr("Enter the counted quantity (0 or more).");
+        // The difference must come from the stock as it is NOW: the list may
+        // be minutes old, and a Check-out by someone else in the meantime
+        // would leave the stock off by that amount instead of at the count.
+        const { data: fresh, error: freshErr } = await sb.from("inventory_items")
+          .select("current_qty").eq("id", item.id).maybeSingle();
+        if (freshErr || !fresh) return showErr("Could not re-read the current stock. Please try again.");
+        if (Math.abs(Number(fresh.current_qty) - Number(item.current_qty)) > 1e-9) {
+          item.current_qty = Number(fresh.current_qty);
+          $("#miAdjustSubtitle").textContent = `${item.description || ""} — current stock: ${fmt(item.current_qty)}`;
+          updateAdjustForm();
+          return showErr(`The stock changed to ${fmt(item.current_qty)} since this list was loaded. Check the preview and press Save again.`);
+        }
         const diff = qty - item.current_qty;
         if (Math.abs(diff) < 1e-9) return showErr(`Stock is already ${fmt(item.current_qty)} — nothing to change.`);
         if (!reason) return showErr("A reason is required for every manual adjustment.");
