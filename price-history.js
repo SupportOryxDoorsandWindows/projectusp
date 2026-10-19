@@ -80,15 +80,18 @@
 
   // ---- Export (price-export.js): the same rules, laid out as a report ----
 
-  // The day a purchase was bought: the document date, else the day it was
-  // checked in. "YYYY-MM-DD".
+  // The day the goods were checked in (received), "YYYY-MM-DD". The export's
+  // dates filter on this: an invoice can be dated long before (a 2024
+  // proforma checked in in 2026), and people pick dates by when stock came.
   function purchaseDay(t) {
-    if (t.document_date) return String(t.document_date).slice(0, 10);
     const d = new Date(t.created_at);
     if (isNaN(d)) return "";
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
+
+  // The date printed on the supplier's document ("" when none).
+  const invoiceDay = (t) => (t && t.document_date ? String(t.document_date).slice(0, 10) : "");
 
   // Every purchase with its change from the purchase before it of the SAME
   // item. The change is worked out over the item's whole history BEFORE the
@@ -138,5 +141,5 @@
   }
 
   window.ORYX_PRICES = { isPurchase, lastPurchaseByItem, compare, withPriceChanges, pctText, AED_TOLERANCE,
-    purchaseDay, purchaseReport, latestPerItem };
+    purchaseDay, invoiceDay, purchaseReport, latestPerItem };
 })();

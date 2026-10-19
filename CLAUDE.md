@@ -372,6 +372,10 @@ product lines — never treat one family's item as a match for another's:
   the item panel's list has "⬇ Excel" / "🖨 PDF" for one item. Rows come from
   `purchaseReport` / `latestPerItem` in price-history.js (same purchase rule;
   the change is worked out over the item's whole history BEFORE the filters).
+  Dates (window filter, "Checked in" column) are the CHECK-IN day
+  (`purchaseDay` = created_at), not the invoice date (`invoiceDay`, its own
+  column): the one real purchase is a 2024 India proforma checked in on
+  28 Sep 2026, and a "from 2026" filter found nothing (fixed 2026-10-20).
   Excel = 2 sheets ("All purchases", "Latest price per item"); PDF = a page
   printed from a hidden iframe (the browser's "Save as PDF"; a new window
   would be blocked because the data arrives after the click). All staff;
