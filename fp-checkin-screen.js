@@ -55,7 +55,9 @@
   function ciLoadLastPrices() {
     const P = window.ORYX_PRICES;
     if (!P || !ciState.rows || ciState.done) return;
-    if (!ciState.lastPrices) ciState.lastPrices = { asked: new Set(), byItem: new Map() };
+    // asked = lookup sent; loaded = answer in (only then may a line say
+    // "no earlier purchase" -- not while the lookup is still on its way).
+    if (!ciState.lastPrices) ciState.lastPrices = { asked: new Set(), loaded: new Set(), byItem: new Map() };
     const lp = ciState.lastPrices;
     const ids = [...new Set(ciState.rows.map((r) => r.itemId).filter((id) => id && !lp.asked.has(id)))];
     if (!ids.length) return;
@@ -68,7 +70,8 @@
         if (error) throw error;
         if (ciState.lastPrices !== lp) return; // another document since
         for (const [id, t] of P.lastPurchaseByItem(data)) lp.byItem.set(id, t);
-        if (lp.byItem.size && ciState.rows && !ciState.done) ciRender();
+        ids.forEach((id) => lp.loaded.add(id));
+        if (ciState.rows && !ciState.done) ciRender();
       })
       .catch((err) => console.error("last purchase prices", err));
   }
@@ -87,7 +90,7 @@
     const P = window.ORYX_PRICES;
     if (!P || !r.itemId || r.action === "skip" || r.invoiceUnitCost == null || ciState.done) return "";
     const lp = ciState.lastPrices;
-    if (!lp || !lp.asked.has(r.itemId)) return "";
+    if (!lp || !lp.loaded.has(r.itemId)) return "";
     const last = lp.byItem.get(r.itemId);
     // Costs are per Master Inventory unit (per metre for a converted roll).
     const master = ciMasterItemById(r.itemId);
