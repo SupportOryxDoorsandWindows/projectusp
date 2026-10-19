@@ -123,17 +123,17 @@
     const AED = '#,##0.00', PRICE = '#,##0.00##', PCT = '+0.0%;-0.0%;0%', DAY = 'dd mmm yyyy';
     const allRows = report.map(({ t, change, previous, day }) => {
       const it = itemInfo(items, t), ch = changeCells(change, previous);
-      return [xlDate(day), it.code, it.name, it.length || "", t.supplier || "", t.invoice_number || "", t.po_number || "",
+      return [xlDate(day), it.code, it.name, it.length || "", t.supplier || "", t.invoice_number || "", xlDate(P().invoiceDay(t)), t.po_number || "",
         Number(t.quantity) || "", it.unit, t.original_currency || "", Number(t.original_unit_cost),
         t.exchange_rate != null ? Number(t.exchange_rate) : "", Number(t.unit_cost_used), ch.pct, ch.note,
         previous ? supplierPrice(previous) : "", it.master != null ? it.master : ""];
     });
     const ws1 = sheet("Oryx Doors & Windows — Purchase prices", sub,
-      ["Date bought", "Code", "Item", "Length (mm)", "Supplier", "Invoice no.", "PO no.", "Qty", "Unit", "Currency",
+      ["Checked in", "Code", "Item", "Length (mm)", "Supplier", "Invoice no.", "Invoice date", "PO no.", "Qty", "Unit", "Currency",
         "Supplier price", "Exchange rate", "AED per unit (incl. shipping)", "Change vs last purchase", "How compared",
         "Last purchase price", "Master cost (AED)"],
-      allRows, [12, 10, 38, 10, 24, 18, 12, 8, 7, 9, 13, 10, 14, 12, 30, 16, 12],
-      { 0: DAY, 10: PRICE, 11: '0.0000', 12: AED, 13: PCT, 16: AED }, 13);
+      allRows, [12, 10, 38, 10, 24, 18, 12, 12, 8, 7, 9, 13, 10, 14, 12, 30, 16, 12],
+      { 0: DAY, 6: DAY, 11: PRICE, 12: '0.0000', 13: AED, 14: PCT, 17: AED }, 14);
 
     const latestRows = latest.map((g) => {
       const it = itemInfo(items, g.last), ch = changeCells(g.change, g.previous);
@@ -142,7 +142,7 @@
         g.previous ? Number(g.previous.unit_cost_used) : "", ch.pct, g.low, g.high, it.master != null ? it.master : ""];
     }).sort((a, b) => String(a[0]).localeCompare(String(b[0])) || (Number(a[2]) || 0) - (Number(b[2]) || 0));
     const ws2 = sheet("Oryx Doors & Windows — Latest purchase price per item", sub,
-      ["Code", "Item", "Length (mm)", "Unit", "Purchases", "Last bought", "Last supplier", "Last invoice",
+      ["Code", "Item", "Length (mm)", "Unit", "Purchases", "Last checked in", "Last supplier", "Last invoice",
         "Last supplier price", "Last AED per unit", "Previous supplier price", "Previous AED per unit", "Change",
         "Lowest AED", "Highest AED", "Master cost (AED)"],
       latestRows, [10, 38, 10, 7, 10, 12, 24, 18, 16, 13, 16, 13, 10, 11, 11, 12],
@@ -162,7 +162,7 @@
       const ch = changeText(change, previous);
       const cls = change && change.change === "up" ? "up" : change && change.change === "down" ? "down" : "muted";
       return `<tr><td>${esc(niceDay(day))}</td><td><b>${esc(it.code)}</b> ${esc(it.name)}${it.length ? ` · ${it.length} mm` : ""}</td>
-        <td>${esc(t.supplier || "")}${t.invoice_number ? `<div class="muted">${esc(t.invoice_number)}</div>` : ""}</td>
+        <td>${esc(t.supplier || "")}${t.invoice_number ? `<div class="muted">${esc(t.invoice_number)}${P().invoiceDay(t) ? ` · ${esc(niceDay(P().invoiceDay(t)))}` : ""}</div>` : ""}</td>
         <td class="r">${esc(Number(t.quantity).toLocaleString("en-US", { maximumFractionDigits: 2 }))} ${esc(it.unit)}</td><td class="r">${esc(supplierPrice(t))}</td>
         <td class="r">${esc(num(t.unit_cost_used, 2))}</td><td class="r ${cls}">${esc(ch)}</td></tr>`;
     }).join("");
@@ -185,7 +185,7 @@
       </style></head><body>
       <h1>Oryx Doors &amp; Windows — Purchase prices</h1>
       <div class="sub">${esc(sub)}</div>
-      <table><thead><tr><th>Date bought</th><th>Item</th><th>Supplier · Invoice</th><th class="r">Qty</th>
+      <table><thead><tr><th>Checked in</th><th>Item</th><th>Supplier · Invoice</th><th class="r">Qty</th>
         <th class="r">Supplier price</th><th class="r">AED / unit</th><th class="r">Change</th></tr></thead>
       <tbody>${rows}</tbody></table>
       <p class="foot">AED per unit includes shipping. Change = compared with the purchase before of the same item
@@ -214,7 +214,7 @@
     const it = f.itemId && items.get(f.itemId);
     return [
       it ? `${it.item_code} ${it.description}${Number(it.bar_length_mm) > 0 ? ` · ${Math.round(it.bar_length_mm)} mm` : ""}` : "All items",
-      f.from || f.to ? `${f.from ? niceDay(f.from) : "first purchase"} – ${f.to ? niceDay(f.to) : "today"}` : "All dates",
+      f.from || f.to ? `checked in ${f.from ? niceDay(f.from) : "from the first purchase"} – ${f.to ? niceDay(f.to) : "today"}` : "All dates",
       f.supplier || (supplierCount === 1 ? "" : "All suppliers"),
       `exported ${niceDay(today())}`,
     ].filter(Boolean).join(" · ");
@@ -272,9 +272,10 @@
       <input id="ppItem" list="ppItemList" autocomplete="off" placeholder="All items — type a code or name to pick one">
       <datalist id="ppItemList"></datalist>
       <div class="pp-two">
-        <div><label class="field-label" for="ppFrom">From</label><input id="ppFrom" type="date"></div>
+        <div><label class="field-label" for="ppFrom">Checked in from</label><input id="ppFrom" type="date"></div>
         <div><label class="field-label" for="ppTo">To</label><input id="ppTo" type="date"></div>
       </div>
+      <p class="small muted" style="margin:4px 0 0">Dates are when the stock was checked in. The invoice's own date is in the file too.</p>
       <label class="field-label" for="ppSupplier">Supplier</label>
       <select id="ppSupplier"><option value="">All suppliers</option></select>
       <span class="field-label" style="display:block; margin-top:12px">Format</span>
