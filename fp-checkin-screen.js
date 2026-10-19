@@ -16,7 +16,7 @@
     parseCheckinDocument, aliasCodeKey, aliasDescriptionKey, applyCiRowAction, buildAliasIndex,
     buildCheckinRows, ciInvoiceQty, ciLandedUnitCost, ciLoadExchangeRate, ciRate,
     ciRenderRowActionButtons, ciShippingAllocation, ciTally, CURRENCY_BASIS_NOTE,
-    findSimilarMasterInventoryItems, loadSupplierAliases, storedInventoryUnitCostAed, supplierKey } = FP;
+    findSimilarMasterInventoryItems, loadSupplierAliases, sb, storedInventoryUnitCostAed, supplierKey } = FP;
 
   // Bumped whenever a new file is selected (see wireCiDrop) or a new
   // analysis starts (see ciAnalyse) -- an in-flight ciAnalyse() checks this
@@ -49,12 +49,78 @@
     );
   }
 
+  // Purchase price history (price-history.js): the last price each matched
+  // item was bought at, read once per item for this document and shown
+  // under the line. Lookups only; a failure just leaves the note out.
+  function ciLoadLastPrices() {
+    const P = window.ORYX_PRICES;
+    if (!P || !ciState.rows || ciState.done) return;
+    // asked = lookup sent; loaded = answer in (only then may a line say
+    // "no earlier purchase" -- not while the lookup is still on its way).
+    if (!ciState.lastPrices) ciState.lastPrices = { asked: new Set(), loaded: new Set(), byItem: new Map() };
+    const lp = ciState.lastPrices;
+    const ids = [...new Set(ciState.rows.map((r) => r.itemId).filter((id) => id && !lp.asked.has(id)))];
+    if (!ids.length) return;
+    ids.forEach((id) => lp.asked.add(id));
+    Promise.resolve(sb.from("inventory_transactions")
+      .select("item_id,type,supplier,invoice_number,unit,unit_cost_used,original_unit_cost,original_currency,document_date,created_at")
+      .eq("type", "check_in").in("item_id", ids).not("original_unit_cost", "is", null)
+      .order("created_at", { ascending: false }).limit(2000))
+      .then(({ data, error }) => {
+        if (error) throw error;
+        if (ciState.lastPrices !== lp) return; // another document since
+        for (const [id, t] of P.lastPurchaseByItem(data)) lp.byItem.set(id, t);
+        ids.forEach((id) => lp.loaded.add(id));
+        if (ciState.rows && !ciState.done) ciRender();
+      })
+      .catch((err) => console.error("last purchase prices", err));
+  }
+
+  function ciMasterItemById(id) {
+    for (const arr of (ciState.itemsByCode || new Map()).values()) {
+      const hit = arr.find((it) => it.id === id);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // "Last bought at …" under a matched line, with a badge when the price
+  // differs. No earlier purchase on record: compared with the Master cost.
+  function ciPriceNote(r, storedUnitCostAed) {
+    const P = window.ORYX_PRICES;
+    if (!P || !r.itemId || r.action === "skip" || r.invoiceUnitCost == null || ciState.done) return "";
+    const lp = ciState.lastPrices;
+    if (!lp || !lp.loaded.has(r.itemId)) return "";
+    const last = lp.byItem.get(r.itemId);
+    // Costs are per Master Inventory unit (per metre for a converted roll).
+    const master = ciMasterItemById(r.itemId);
+    const unit = master && master.unit_of_measure ? ` / ${esc(master.unit_of_measure)}` : "";
+    const badge = (c) => c.change === "up"
+      ? `<span class="badge warn fp-price-badge">Price up ${esc(P.pctText(c).slice(1))}</span>`
+      : c.change === "down" ? `<span class="badge grey fp-price-badge">Price down ${esc(P.pctText(c).slice(1))}</span>` : "";
+    const showMoney = (n, c) => (c === "AED" ? money(n) : genericMoney(n, c));
+    if (last) {
+      const c = P.compare({ currency: ciState.currency, unitCost: r.invoiceUnitCost, aed: storedUnitCostAed, unit: r.unit }, last);
+      const day = new Date(last.document_date || last.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      const from = [last.supplier, last.invoice_number ? `invoice ${last.invoice_number}` : ""].filter(Boolean).map(esc).join(", ");
+      const lastPrice = c && c.basis === "supplier" ? showMoney(last.original_unit_cost, last.original_currency) : money(last.unit_cost_used);
+      const now = c ? ` Now ${showMoney(c.after, c.currency)}${unit}${c.change === "same" ? " (same price)" : ""}.` : "";
+      const basis = c && c.basis === "aed" ? ` <span class="muted">Compared in AED, stored cost incl. shipping.</span>` : "";
+      return `<div class="fp-price-note small">${c ? badge(c) : ""} Last bought at ${lastPrice}${unit} on ${esc(day)}${from ? ` (${from})` : ""}.${now}${basis}</div>`;
+    }
+    if (!master || !(Number(master.unit_cost) > 0) || !(storedUnitCostAed > 0)) return "";
+    const c = P.compare({ currency: "AED", unitCost: storedUnitCostAed, unit: r.unit }, { original_currency: "AED", original_unit_cost: master.unit_cost, unit: r.unit });
+    if (!c) return "";
+    return `<div class="fp-price-note small">${badge(c)} No earlier purchase on record. Master Inventory cost is ${money(master.unit_cost)}${unit}; this line is ${money(c.after)}${unit}.</div>`;
+  }
+
   function ciRender() {
     // Item photos (same ones as Master Inventory): loaded once, then the
     // preview redraws with them.
     if (!ciState.photos) {
       loadItemPhotos().then((photos) => { ciState.photos = photos; if (ciState.rows && !ciState.done) ciRender(); });
     }
+    ciLoadLastPrices();
     const t = ciTally();
     const rate = ciRate();
     const unmatched = ciState.rows.filter((r) => !r.decided && r.status === "unmatched").length;
@@ -296,7 +362,7 @@
         <td class="code"><div class="fp-checkin-code-cell"><span>${esc(r.code)}</span>${descriptionMatchBadge}${reviewFlag}${lowConfBadge}</div></td>
         <td><div class="fp-checkin-description-cell">${r.itemId
           ? `<div class="fp-ci-item">${itemPhotoButton(ciState.photos, { item_code: r.code, description: r.description }, "fp-photo-sm")}<span>${esc(r.description)}${r.addedByHand ? `<span class="small muted" style="display:block">${esc(["Added by hand", r.handLengthMm ? `${Math.round(r.handLengthMm)} mm` : ""].filter(Boolean).join(" · "))}</span>` : ""}</span></div>`
-          : `<span>${esc(r.description)}</span>`}${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
+          : `<span>${esc(r.description)}</span>`}${ciPriceNote(r, storedUnitCostAed)}${exactDiffNote}${packReviewNote}${usedDiffNote}${codeDescConflictNote}${suggestionNote}</div></td>
         <td class="num">${r.current != null ? fmt(r.current) : "—"}</td>
         <td class="num" style="color:var(--brand); font-weight:600">${qtyDisplay}</td>
         <td class="num">${r.newQty != null ? fmt(r.newQty) : "—"}</td>
@@ -881,6 +947,7 @@
       let pdfText = pages.join("\n\n");
       ciState.itemsByCode = itemsByCode;
       ciState.pdfHash = hash;
+      ciState.lastPrices = null; // re-read: the last document may have just been saved
       ciState.header = parseCheckinHeader(pdfText, ciState.usedOcr ? null : pages.items);
       ciState.ratesByCurrency = ratesByCurrency;
       const currencyInfo = detectDocumentCurrencyInfo(pdfText);
@@ -999,6 +1066,7 @@
   function ciResetAll() {
     ciState.pdfFile = null;
     ciState.pdfHash = ciState.header = ciState.rows = ciState.itemsByCode = null;
+    ciState.lastPrices = null;
     ciState.deletedRows = [];
     ciState.done = false;
     ciManualItemsPromise = null; // next manual entry reloads current stock
@@ -1153,6 +1221,7 @@
     ciState.pdfHash = null;
     ciState.header = {};
     ciState.itemsByCode = ciManualItemsByCode;
+    ciState.lastPrices = null;
     ciState.currency = "AED"; ciState.currencyBasis = "none"; ciState.exchangeRate = 1; ciState.rateDate = null; ciState.rateSource = "n/a"; ciState.showCurrencyEdit = false;
     ciState.shippingAmountOriginal = null; ciState.shippingNote = ""; ciState.shippingNeedsReview = false;
     ciState.usedOcr = false; ciState.ocrAcknowledged = false; ciState.ocrStillUnreadablePages = [];
