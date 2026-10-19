@@ -99,10 +99,17 @@ async function sweepFile(browser, file) {
     return c.length < 10 ? null : [c[0], (tr.children[1].innerText.split("\n")[0] || "").trim(), c[3], c[5], c[9]].join(" | ");
   }).filter(Boolean));
   const result = { file: path.basename(file), asRead: await rows() };
-  for (let k = 0; k < 40; k++) { const u = await p.$('#ciOut button[data-act="use-suggestion"]'); if (!u) break; await u.click(); await p.waitForTimeout(150); }
+  // "Use this item" looks up that item's last purchase price and redraws the
+  // table when the answer comes (price-history notes): wait for it, or the
+  // next click lands on a button that is being replaced.
+  const settle = async () => { await p.waitForLoadState("networkidle").catch(() => {}); await p.waitForTimeout(150); };
+  await settle();
+  // A locator finds the button again if the table was redrawn mid-click.
+  const clickFirst = async (sel) => { const l = p.locator(sel).first(); if (!(await l.count())) return false; await l.click({ timeout: 10000 }); return true; };
+  for (let k = 0; k < 40; k++) { if (!(await clickFirst('#ciOut button[data-act="use-suggestion"]'))) break; await settle(); }
   result.afterUseThisItem = await rows();
-  for (let k = 0; k < 60; k++) { const a = await p.$('#ciOut button[data-act="skip"]:not(.on):text-is("Acknowledge")'); if (!a) break; await a.click(); await p.waitForTimeout(80); }
-  for (let k = 0; k < 20; k++) { const a = await p.$('#ciOut button[data-act="accept-pack"], #ciOut button[data-act="use-exact"]'); if (!a) break; await a.click(); await p.waitForTimeout(100); }
+  for (let k = 0; k < 60; k++) { if (!(await clickFirst('#ciOut button[data-act="skip"]:not(.on):text-is("Acknowledge")'))) break; await p.waitForTimeout(80); }
+  for (let k = 0; k < 20; k++) { if (!(await clickFirst('#ciOut button[data-act="accept-pack"], #ciOut button[data-act="use-exact"]'))) break; await p.waitForTimeout(100); }
   if (!(await p.inputValue("#ciSupplier"))) await p.fill("#ciSupplier", "Sweep");
   if (!(await p.inputValue("#ciInvoiceNumber"))) await p.fill("#ciInvoiceNumber", "SWEEP");
   for (const sel of ["#ciMissingLnAck", "#ciOcrAck", "#ciLowConfAck"]) { const el = await p.$(sel); if (el) await el.check().catch(() => {}); }
