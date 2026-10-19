@@ -9,6 +9,9 @@
  *  - transaction_documents (documents.js): a "View PDF" link on movements
  *    whose original PDF is kept.
  *  - item_minimum_log: who last changed the item's Kanban levels.
+ *  - Purchase prices: the same inventory_transactions read as a price
+ *    history (price-history.js): every Check-in price paid, newest first,
+ *    with the change from the purchase before it.
  * "Stock after" is worked back from the current stock: the newest movement
  * ends at today's quantity, and each older one ends where the next began.
  * Nothing here changes stock. The one thing it writes is the item's Kanban
@@ -119,6 +122,7 @@
         <div class="min-box" id="idMin"></div>
         <p class="drawer-last" id="idLast"></p>
         <div class="drawer-body">
+          <div id="idPrices" class="pp" hidden></div>
           <div class="tl-h"><span>Timeline</span></div>
           <ol class="tl" id="idTl"></ol>
           <div id="idState" class="tl-state" role="status" aria-live="polite"></div>
@@ -279,6 +283,53 @@
     } catch (err) { console.error("kanban levels log", err); }
   }
 
+  // Purchase prices: read once when the panel opens. Hidden when the item
+  // has no purchase with a document price; a failure only leaves it out.
+  const PRICE_ROWS = 50;
+  async function loadPrices(s, token) {
+    const P = window.ORYX_PRICES;
+    const box = $("#idPrices");
+    if (!P || !box) return;
+    box.hidden = true; box.innerHTML = "";
+    try {
+      const { data, error } = await window.ORYX_AUTH.sb.from("inventory_transactions")
+        .select("id,item_id,type,quantity,unit,unit_cost_used,original_unit_cost,original_currency,supplier,invoice_number,document_date,created_at")
+        .eq("item_id", s.item.id).eq("type", "check_in").not("original_unit_cost", "is", null)
+        .order("created_at", { ascending: false }).order("id", { ascending: false })
+        .limit(PRICE_ROWS + 1);
+      if (error) throw error;
+      if (token !== s.token) return;
+      const list = P.withPriceChanges(data.slice(0, PRICE_ROWS));
+      if (!list.length) return;
+      box.innerHTML = pricesHtml(list, s.item, data.length > PRICE_ROWS);
+      box.hidden = false;
+    } catch (err) { console.error("purchase prices", err); }
+  }
+
+  function pricesHtml(list, item, more) {
+    const P = window.ORYX_PRICES;
+    const unit = item.unit_of_measure ? ` / ${esc(item.unit_of_measure)}` : "";
+    const cur = (n, c) => (n == null ? "—" : `${esc(c || "")} ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`.trim());
+    const rows = list.map(({ t, change }) => {
+      const day = new Date(t.document_date || t.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      const from = [t.supplier, t.invoice_number].filter(Boolean).map(esc).join(" · ");
+      const ch = !change ? `<span class="muted">—</span>`
+        : change.change === "same" ? `<span class="muted">Same</span>`
+        : `<span class="pp-chg ${change.change}">${esc(P.pctText(change))}</span>`;
+      return `<tr><td>${esc(day)}<div class="small muted">${from}</div></td>
+        <td class="num">${cur(t.original_unit_cost, t.original_currency)}</td>
+        <td class="num">${aed(t.unit_cost_used)}</td>
+        <td class="num">${ch}</td></tr>`;
+    }).join("");
+    const last = list[0].t;
+    const vsMaster = Number(item.unit_cost) > 0 && Math.abs(Number(last.unit_cost_used) - Number(item.unit_cost)) >= 0.005
+      ? `<p class="small muted pp-note">Master Inventory cost stays ${aed(item.unit_cost)}${unit}; a Check-in does not change it.</p>` : "";
+    return `<div class="tl-h"><span>Purchase prices</span></div>
+      <table class="pp-table"><thead><tr><th>Bought</th><th class="num">Supplier price</th><th class="num">AED${unit}</th><th class="num">Change</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      ${more ? `<p class="small muted pp-note">Last ${PRICE_ROWS} purchases shown.</p>` : ""}${vsMaster}`;
+  }
+
   function rowHtml(r) {
     const w = when(r.t.created_at);
     return `<li class="tl-row k-${r.kind}">
@@ -379,6 +430,7 @@
     el.hidden = false;
     document.body.classList.add("drawer-open");
     el.querySelector(".drawer-x").focus();
+    loadPrices(state, state.token);
     loadMore();
   }
 

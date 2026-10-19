@@ -333,3 +333,21 @@ product lines — never treat one family's item as a match for another's:
 - `checkin_transaction` is executable by service_role only (locked
   2026-10-05). Two old unused overloads still exist (also locked); the
   Supabase connector times out on DROP, so remove them from the SQL editor.
+
+## Purchase price history (Check-in, item panel)
+
+- A Check-in never changes an existing item's Master `unit_cost` (nor
+  `current_value`'s price); the price paid is kept per line in
+  `inventory_transactions` (`unit_cost_used` = stored AED incl. shipping,
+  `original_unit_cost` + `original_currency` = supplier price). No extra table.
+- `price-history.js` (`window.ORYX_PRICES`, loaded from index.html before
+  boot.js; tests in `tests/price-history.test.js`) reads those lines as a
+  history. A purchase = `check_in`, document price present, supplier not
+  "Manual correction". Compared in the supplier's currency when it matches
+  last time (exact), else in AED (changes under 0.5% count as the same).
+  Different units are never compared.
+- Check-in preview: under each matched line, "Last bought at …" with a
+  "Price up / down n%" badge (`ciPriceNote` in fp-checkin-screen.js); no
+  earlier purchase = compared with the Master cost. Kept in the description
+  cell so the sweep's captured columns don't change. Item panel: "Purchase
+  prices" list (last 50) above the timeline. Display only; nothing is written.

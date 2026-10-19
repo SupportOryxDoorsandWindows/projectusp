@@ -1218,6 +1218,18 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .tl-err{color:var(--danger); margin:0 0 8px}
 .drawer-foot{display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 26px; border-top:1px solid #DCE3E6}
 body.drawer-open{overflow:hidden}
+/* Purchase prices (price-history.js): item panel list and Check-in note. */
+.pp{margin-bottom:14px}
+.pp-table{width:100%; border-collapse:collapse; font-size:13px; margin-top:6px}
+.pp-table th{text-align:left; font-weight:600; color:var(--text-muted-light); font-size:12px; padding:4px 6px; border-bottom:1px solid var(--line)}
+.pp-table td{padding:6px; border-bottom:1px solid var(--line); vertical-align:top}
+.pp-table .num{text-align:right; white-space:nowrap}
+.pp-chg{font-weight:600}
+.pp-chg.up{color:#8A5A0F}
+.pp-chg.down{color:#4F5F66}
+.pp-note{margin:6px 0 0}
+.fp-price-note{margin-top:4px; color:var(--text-muted-light); line-height:1.5}
+.fp-price-note .fp-price-badge{margin-right:4px; font-size:11.5px; padding:1px 8px}
 .min-box{margin:12px 26px 0; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--white)}
 .min-box .min-top{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap}
 .min-box .min-label{font-weight:600; color:var(--brand); font-size:14px}
@@ -2140,6 +2152,8 @@ details.act-card > .act-doc{margin-top:10px}
      when config.js or boot.js change so browsers fetch the new file. -->
 <!-- kanban.js: the one Kanban stock rule (row colours, badges, item panel). -->
 <script src="kanban.js?v=1"></script>
+<!-- price-history.js: purchase price history (Check-in "last bought at", item panel). -->
+<script src="price-history.js?v=1"></script>
 <script src="boot.js?v=14"></script>
 </body>
 </html>
