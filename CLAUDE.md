@@ -348,8 +348,11 @@ product lines — never treat one family's item as a match for another's:
   never moves it. Each line keeps `unit_cost_before` / `unit_cost_after`
   (null on older lines). Tested on local Postgres:
   `tests/sql/inventory-base.sql` + the SQL file +
-  `tests/sql/checkin-weighted-average.test.sql`. Before it was applied (check
-  the live function), a Check-in left `unit_cost` unchanged.
+  `tests/sql/checkin-weighted-average.test.sql`. Approved by Mousa and
+  applied 2026-10-20 (before that a Check-in left `unit_cost` unchanged).
+  GO BACK: `supabase/sql/checkin_weighted_average_rollback.sql` = the exact
+  previous live function (same md5 as live before the change); it does not
+  undo costs already averaged (`unit_cost_before` on each line has them).
 - `price-history.js` (`window.ORYX_PRICES`, loaded from index.html before
   boot.js; tests in `tests/price-history.test.js`) reads those lines as a
   history. A purchase = `check_in`, document price present, supplier not
