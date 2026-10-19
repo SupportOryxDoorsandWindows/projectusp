@@ -336,10 +336,20 @@ product lines — never treat one family's item as a match for another's:
 
 ## Purchase price history (Check-in, item panel)
 
-- A Check-in never changes an existing item's Master `unit_cost` (nor
-  `current_value`'s price); the price paid is kept per line in
-  `inventory_transactions` (`unit_cost_used` = stored AED incl. shipping,
-  `original_unit_cost` + `original_currency` = supplier price). No extra table.
+- The price paid is kept per line in `inventory_transactions`
+  (`unit_cost_used` = stored AED incl. shipping, `original_unit_cost` +
+  `original_currency` = supplier price). No extra table.
+- Weighted average cost (`supabase/sql/checkin_weighted_average.sql`, user's
+  request 2026-10-19): a Check-in of an existing item sets `unit_cost` =
+  (stock x old cost + received x price paid) / (stock + received);
+  `current_value` follows; Check-out already uses `unit_cost`. No stock (<= 0)
+  or no cost on file = the price paid. No document price = the item's own
+  cost (average unchanged); a stock count books at the item's own cost, so it
+  never moves it. Each line keeps `unit_cost_before` / `unit_cost_after`
+  (null on older lines). Tested on local Postgres:
+  `tests/sql/inventory-base.sql` + the SQL file +
+  `tests/sql/checkin-weighted-average.test.sql`. Before it was applied (check
+  the live function), a Check-in left `unit_cost` unchanged.
 - `price-history.js` (`window.ORYX_PRICES`, loaded from index.html before
   boot.js; tests in `tests/price-history.test.js`) reads those lines as a
   history. A purchase = `check_in`, document price present, supplier not

@@ -1,7 +1,6 @@
 /* Purchase price history: what an item was bought at before.
  *
- * A Check-in never changes an existing item's Master Inventory unit cost;
- * the price paid is kept on each inventory_transactions line instead
+ * The price paid is kept on each inventory_transactions line
  * (unit_cost_used = AED per unit as stored, landed; original_unit_cost +
  * original_currency = the supplier's own price). This file reads those lines
  * back as a price history. Used by the Check-in preview ("last bought at")

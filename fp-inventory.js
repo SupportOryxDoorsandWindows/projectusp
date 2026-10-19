@@ -244,7 +244,7 @@
       let unitCostForSet = null;
       if (direction === "set_to") {
         // A stock count: book only the difference, at the item's own cost
-        // (a Check-in never changes an existing item's unit cost).
+        // (so it never moves the item's average cost).
         if (!(qty >= 0) || $("#miAdjustQty").value === "") return showErr("Enter the counted quantity (0 or more).");
         // The difference must come from the stock as it is NOW: the list may
         // be minutes old, and a Check-out by someone else in the meantime

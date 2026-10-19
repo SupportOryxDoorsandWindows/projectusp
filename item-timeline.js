@@ -293,7 +293,9 @@
     box.hidden = true; box.innerHTML = "";
     try {
       const { data, error } = await window.ORYX_AUTH.sb.from("inventory_transactions")
-        .select("id,item_id,type,quantity,unit,unit_cost_used,original_unit_cost,original_currency,supplier,invoice_number,document_date,created_at")
+        // "*": unit_cost_before/after only exist once
+        // supabase/sql/checkin_weighted_average.sql is applied.
+        .select("*")
         .eq("item_id", s.item.id).eq("type", "check_in").not("original_unit_cost", "is", null)
         .order("created_at", { ascending: false }).order("id", { ascending: false })
         .limit(PRICE_ROWS + 1);
@@ -326,11 +328,17 @@
         : `<span class="pp-chg ${change.change}">${esc(P.pctText(change))}</span>`;
       return `<tr><td>${esc(day)}<div class="small muted">${from}</div></td>
         <td class="num">${cur(t.original_unit_cost, t.original_currency)}</td>
-        <td class="num">${aed(t.unit_cost_used)}</td>
+        <td class="num">${aed(t.unit_cost_used)}${t.unit_cost_after != null
+          ? `<div class="small muted" title="Average cost after this Check-in (was ${esc(aed(t.unit_cost_before))})">avg ${esc(aed(t.unit_cost_after))}</div>` : ""}</td>
         <td class="num">${ch}</td></tr>`;
     }).join("");
+    // Weighted average cost (checkin_weighted_average.sql): lines saved since
+    // carry unit_cost_after. Older Check-ins left the cost unchanged.
     const last = list[0].t;
-    const vsMaster = Number(item.unit_cost) > 0 && Math.abs(Number(last.unit_cost_used) - Number(item.unit_cost)) >= 0.005
+    const averaged = list.some(({ t }) => t.unit_cost_after != null);
+    const vsMaster = averaged
+      ? `<p class="small muted pp-note">Average cost is now ${aed(item.unit_cost)}${unit}. Each Check-in averages the price paid with the stock on hand.</p>`
+      : Number(item.unit_cost) > 0 && Math.abs(Number(last.unit_cost_used) - Number(item.unit_cost)) >= 0.005
       ? `<p class="small muted pp-note">Master Inventory cost stays ${aed(item.unit_cost)}${unit}; a Check-in does not change it.</p>` : "";
     return `<div class="pp-head"><div class="tl-h"><span>Purchase prices</span></div>
         <button class="btn-outline pp-dl" type="button" data-pp-dl="xlsx" title="Download this item's purchase prices (.xlsx)">⬇ Excel</button>
