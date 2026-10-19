@@ -6,7 +6,7 @@ const vm = require("vm");
 
 const context = { window: {} };
 vm.runInNewContext(fs.readFileSync("price-history.js", "utf8"), context);
-const { isPurchase, lastPurchaseByItem, compare, withPriceChanges, pctText, purchaseDay, purchaseReport, latestPerItem } = context.window.ORYX_PRICES;
+const { isPurchase, lastPurchaseByItem, compare, withPriceChanges, pctText, purchaseDay, invoiceDay, purchaseReport, latestPerItem } = context.window.ORYX_PRICES;
 
 const tx = (o) => ({ type: "check_in", item_id: "A", supplier: "Freedom", unit: "pcs", original_currency: "AUD",
   original_unit_cost: 1, unit_cost_used: 2.41, created_at: "2026-10-01T08:00:00Z", ...o });
@@ -63,9 +63,15 @@ assert.equal(pctText(hist[0].change), "+100%");
 assert.equal(hist[1].change.change, "same");
 assert.equal(hist[2].change, null);
 
-// 7. Export: purchase date = document date, else the check-in day.
-assert.equal(purchaseDay(tx({ document_date: "2024-08-27" })), "2024-08-27");
-assert.equal(purchaseDay(tx({ document_date: null, created_at: "2026-10-01T08:00:00Z" })).length, 10);
+// 7. Export: dates are the check-in day (when the stock came), not the
+//    invoice's own date -- a 2024 proforma checked in on 28 Sep 2026 is a
+//    September 2026 purchase. The invoice date is kept apart.
+const old = tx({ document_date: "2024-08-27", created_at: "2026-09-28T11:06:40Z" });
+assert.equal(purchaseDay(old), "2026-09-28");
+assert.equal(invoiceDay(old), "2024-08-27");
+assert.equal(invoiceDay(tx({ document_date: null })), "");
+assert.deepEqual(purchaseReport([old], { from: "2026-09-01", to: "2026-10-19" }).length, 1);
+assert.deepEqual(purchaseReport([old], { from: "2024-08-01", to: "2024-08-31" }).length, 0);
 
 // 8. Export rows: change worked out over the item's WHOLE history, then filtered.
 const all = [
