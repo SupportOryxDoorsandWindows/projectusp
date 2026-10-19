@@ -79,5 +79,65 @@
     return (c.pct > 0 ? "+" : "−") + shown + "%";
   }
 
-  window.ORYX_PRICES = { isPurchase, lastPurchaseByItem, compare, withPriceChanges, pctText, AED_TOLERANCE };
+  // ---- Export (price-export.js): the same rules, laid out as a report ----
+
+  // The day a purchase was bought: the document date, else the day it was
+  // checked in. "YYYY-MM-DD".
+  function purchaseDay(t) {
+    if (t.document_date) return String(t.document_date).slice(0, 10);
+    const d = new Date(t.created_at);
+    if (isNaN(d)) return "";
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  // Every purchase with its change from the purchase before it of the SAME
+  // item. The change is worked out over the item's whole history BEFORE the
+  // filters, so the first purchase inside a date range still compares with
+  // the one before the range. filters: { from, to ("YYYY-MM-DD", inclusive),
+  // supplier (exact), itemId }. Newest first.
+  function purchaseReport(txs, filters) {
+    const f = filters || {};
+    const byItem = new Map();
+    for (const t of txs || []) {
+      if (!isPurchase(t)) continue;
+      if (!byItem.has(t.item_id)) byItem.set(t.item_id, []);
+      byItem.get(t.item_id).push(t);
+    }
+    const out = [];
+    for (const [itemId, list] of byItem) {
+      if (f.itemId && itemId !== f.itemId) continue;
+      const changes = withPriceChanges(list);
+      changes.forEach((row, i) => {
+        const day = purchaseDay(row.t);
+        if (f.from && day < f.from) return;
+        if (f.to && day > f.to) return;
+        if (f.supplier && row.t.supplier !== f.supplier) return;
+        out.push({ t: row.t, change: row.change, day, previous: changes[i + 1] ? changes[i + 1].t : null });
+      });
+    }
+    return out.sort((a, b) => (b.day.localeCompare(a.day)) || (time(b.t) - time(a.t)) ||
+      String(a.t.item_code || "").localeCompare(String(b.t.item_code || "")));
+  }
+
+  // One line per item from purchaseReport rows: the latest purchase in the
+  // rows, the one before it (from the whole history), the change between
+  // them, lowest / highest AED in the rows, and how many purchases.
+  function latestPerItem(rows) {
+    const map = new Map();
+    for (const r of rows || []) {
+      let g = map.get(r.t.item_id);
+      if (!g) { g = { itemId: r.t.item_id, last: r, count: 0, low: Infinity, high: -Infinity }; map.set(r.t.item_id, g); }
+      g.count++;
+      const v = Number(r.t.unit_cost_used);
+      if (v < g.low) g.low = v;
+      if (v > g.high) g.high = v;
+      if (r.day > g.last.day || (r.day === g.last.day && time(r.t) > time(g.last.t))) g.last = r;
+    }
+    return [...map.values()].map((g) => ({ itemId: g.itemId, last: g.last.t, day: g.last.day,
+      previous: g.last.previous, change: g.last.change, count: g.count, low: g.low, high: g.high }));
+  }
+
+  window.ORYX_PRICES = { isPurchase, lastPurchaseByItem, compare, withPriceChanges, pctText, AED_TOLERANCE,
+    purchaseDay, purchaseReport, latestPerItem };
 })();

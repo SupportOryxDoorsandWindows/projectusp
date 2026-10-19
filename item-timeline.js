@@ -302,6 +302,14 @@
       const list = P.withPriceChanges(data.slice(0, PRICE_ROWS));
       if (!list.length) return;
       box.innerHTML = pricesHtml(list, s.item, data.length > PRICE_ROWS);
+      for (const b of box.querySelectorAll("[data-pp-dl]")) {
+        b.addEventListener("click", async () => {
+          if (!window.ORYX_PRICE_EXPORT) return;
+          b.disabled = true;
+          try { await window.ORYX_PRICE_EXPORT.downloadItem(s.item.id, b.dataset.ppDl, $("#idPricesStatus")); }
+          finally { b.disabled = false; }
+        });
+      }
       box.hidden = false;
     } catch (err) { console.error("purchase prices", err); }
   }
@@ -324,10 +332,13 @@
     const last = list[0].t;
     const vsMaster = Number(item.unit_cost) > 0 && Math.abs(Number(last.unit_cost_used) - Number(item.unit_cost)) >= 0.005
       ? `<p class="small muted pp-note">Master Inventory cost stays ${aed(item.unit_cost)}${unit}; a Check-in does not change it.</p>` : "";
-    return `<div class="tl-h"><span>Purchase prices</span></div>
+    return `<div class="pp-head"><div class="tl-h"><span>Purchase prices</span></div>
+        <button class="btn-outline pp-dl" type="button" data-pp-dl="xlsx" title="Download this item's purchase prices (.xlsx)">⬇ Excel</button>
+        <button class="btn-outline pp-dl" type="button" data-pp-dl="pdf" title="Print or save as PDF">🖨 PDF</button></div>
       <table class="pp-table"><thead><tr><th>Bought</th><th class="num">Supplier price</th><th class="num">AED${unit}</th><th class="num">Change</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      ${more ? `<p class="small muted pp-note">Last ${PRICE_ROWS} purchases shown.</p>` : ""}${vsMaster}`;
+      ${more ? `<p class="small muted pp-note">Last ${PRICE_ROWS} purchases shown; the download has them all.</p>` : ""}${vsMaster}
+      <p class="small muted pp-status" id="idPricesStatus" role="status" aria-live="polite"></p>`;
   }
 
   function rowHtml(r) {
