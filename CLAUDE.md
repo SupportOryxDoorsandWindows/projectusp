@@ -336,10 +336,23 @@ product lines — never treat one family's item as a match for another's:
 
 ## Purchase price history (Check-in, item panel)
 
-- A Check-in never changes an existing item's Master `unit_cost` (nor
-  `current_value`'s price); the price paid is kept per line in
-  `inventory_transactions` (`unit_cost_used` = stored AED incl. shipping,
-  `original_unit_cost` + `original_currency` = supplier price). No extra table.
+- The price paid is kept per line in `inventory_transactions`
+  (`unit_cost_used` = stored AED incl. shipping, `original_unit_cost` +
+  `original_currency` = supplier price). No extra table.
+- Weighted average cost (`supabase/sql/checkin_weighted_average.sql`, user's
+  request 2026-10-19): a Check-in of an existing item sets `unit_cost` =
+  (stock x old cost + received x price paid) / (stock + received);
+  `current_value` follows; Check-out already uses `unit_cost`. No stock (<= 0)
+  or no cost on file = the price paid. No document price = the item's own
+  cost (average unchanged); a stock count books at the item's own cost, so it
+  never moves it. Each line keeps `unit_cost_before` / `unit_cost_after`
+  (null on older lines). Tested on local Postgres:
+  `tests/sql/inventory-base.sql` + the SQL file +
+  `tests/sql/checkin-weighted-average.test.sql`. Approved by Mousa and
+  applied 2026-10-20 (before that a Check-in left `unit_cost` unchanged).
+  GO BACK: `supabase/sql/checkin_weighted_average_rollback.sql` = the exact
+  previous live function (same md5 as live before the change); it does not
+  undo costs already averaged (`unit_cost_before` on each line has them).
 - `price-history.js` (`window.ORYX_PRICES`, loaded from index.html before
   boot.js; tests in `tests/price-history.test.js`) reads those lines as a
   history. A purchase = `check_in`, document price present, supplier not
@@ -351,6 +364,11 @@ product lines — never treat one family's item as a match for another's:
   earlier purchase = compared with the Master cost. Kept in the description
   cell so the sweep's captured columns don't change. Item panel: "Purchase
   prices" list (last 50) above the timeline. Display only; nothing is written.
+- Item panel top box (2026-10-19, asked for "here", under the Unit cost box):
+  `costBox` in item-timeline.js labels it "Average cost" once any line has
+  `unit_cost_after` (else "Unit cost") and adds "Last bought AED x · date".
+  Reset at the start of `loadPrices`, not in `setKpis` (that also runs when
+  the item is re-read and would race the price lookup).
 - Export (2026-10-19): `price-export.js` (`window.ORYX_PRICE_EXPORT`, loaded
   by boot.js). Master Inventory → Transaction History "💲 Purchase prices"
   (`#miPriceBtn`) opens a window (item / from / to / supplier / Excel or PDF);
