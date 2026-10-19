@@ -116,7 +116,7 @@
         </div>
         <div class="drawer-kpis">
           <div class="kpi"><span>Stock</span><b id="idQty">—</b></div>
-          <div class="kpi"><span>Unit cost</span><b id="idCost">—</b></div>
+          <div class="kpi" id="idCostBox"><span id="idCostLabel">Unit cost</span><b id="idCost">—</b><small class="kpi-note" id="idCostNote" hidden></small></div>
           <div class="kpi"><span>Value</span><b id="idValue">—</b></div>
         </div>
         <div class="min-box" id="idMin"></div>
@@ -169,7 +169,7 @@
     $("#idCode").textContent = item.item_code + (item.bar_length_mm ? ` · ${num(item.bar_length_mm)} mm` : "");
     $("#idTitle").textContent = item.description || item.item_code;
     $("#idQty").textContent = num(item.current_qty);
-    $("#idCost").textContent = aed(item.unit_cost);
+    $("#idCost").textContent = aed(item.unit_cost); // label + "Last bought" line: loadPrices
     $("#idValue").textContent = item.current_value == null ? "—" : "AED " + Number(item.current_value).toLocaleString("en-US", { maximumFractionDigits: 0 });
   }
 
@@ -291,6 +291,9 @@
     const box = $("#idPrices");
     if (!P || !box) return;
     box.hidden = true; box.innerHTML = "";
+    $("#idCostLabel").textContent = "Unit cost";
+    $("#idCostBox").removeAttribute("title");
+    $("#idCostNote").hidden = true; $("#idCostNote").textContent = "";
     try {
       const { data, error } = await window.ORYX_AUTH.sb.from("inventory_transactions")
         // "*": unit_cost_before/after only exist once
@@ -304,6 +307,7 @@
       const list = P.withPriceChanges(data.slice(0, PRICE_ROWS));
       if (!list.length) return;
       box.innerHTML = pricesHtml(list, s.item, data.length > PRICE_ROWS);
+      costBox(list, s.item);
       for (const b of box.querySelectorAll("[data-pp-dl]")) {
         b.addEventListener("click", async () => {
           if (!window.ORYX_PRICE_EXPORT) return;
@@ -314,6 +318,22 @@
       }
       box.hidden = false;
     } catch (err) { console.error("purchase prices", err); }
+  }
+
+  // The Unit cost box at the top: "Average cost" once a Check-in has averaged
+  // it (checkin_weighted_average.sql: those lines carry unit_cost_after;
+  // older Check-ins left the cost unchanged), with the last price paid under it.
+  function costBox(list, item) {
+    const last = list[0].t;
+    const averaged = list.some(({ t }) => t.unit_cost_after != null);
+    const day = new Date(last.document_date || last.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    $("#idCostLabel").textContent = averaged ? "Average cost" : "Unit cost";
+    $("#idCostBox").title = averaged
+      ? "Each Check-in averages the price paid with the stock on hand."
+      : "A Check-in before average costing did not change this cost.";
+    const note = $("#idCostNote");
+    note.textContent = `Last bought ${aed(last.unit_cost_used)} · ${day}`;
+    note.hidden = false;
   }
 
   function pricesHtml(list, item, more) {
@@ -332,20 +352,12 @@
           ? `<div class="small muted" title="Average cost after this Check-in (was ${esc(aed(t.unit_cost_before))})">avg ${esc(aed(t.unit_cost_after))}</div>` : ""}</td>
         <td class="num">${ch}</td></tr>`;
     }).join("");
-    // Weighted average cost (checkin_weighted_average.sql): lines saved since
-    // carry unit_cost_after. Older Check-ins left the cost unchanged.
-    const last = list[0].t;
-    const averaged = list.some(({ t }) => t.unit_cost_after != null);
-    const vsMaster = averaged
-      ? `<p class="small muted pp-note">Average cost is now ${aed(item.unit_cost)}${unit}. Each Check-in averages the price paid with the stock on hand.</p>`
-      : Number(item.unit_cost) > 0 && Math.abs(Number(last.unit_cost_used) - Number(item.unit_cost)) >= 0.005
-      ? `<p class="small muted pp-note">Master Inventory cost stays ${aed(item.unit_cost)}${unit}; a Check-in does not change it.</p>` : "";
     return `<div class="pp-head"><div class="tl-h"><span>Purchase prices</span></div>
         <button class="btn-outline pp-dl" type="button" data-pp-dl="xlsx" title="Download this item's purchase prices (.xlsx)">⬇ Excel</button>
         <button class="btn-outline pp-dl" type="button" data-pp-dl="pdf" title="Print or save as PDF">🖨 PDF</button></div>
       <table class="pp-table"><thead><tr><th>Bought</th><th class="num">Supplier price</th><th class="num">AED${unit}</th><th class="num">Change</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      ${more ? `<p class="small muted pp-note">Last ${PRICE_ROWS} purchases shown; the download has them all.</p>` : ""}${vsMaster}
+      ${more ? `<p class="small muted pp-note">Last ${PRICE_ROWS} purchases shown; the download has them all.</p>` : ""}
       <p class="small muted pp-status" id="idPricesStatus" role="status" aria-live="polite"></p>`;
   }
 

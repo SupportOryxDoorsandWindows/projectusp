@@ -361,6 +361,11 @@ product lines — never treat one family's item as a match for another's:
   earlier purchase = compared with the Master cost. Kept in the description
   cell so the sweep's captured columns don't change. Item panel: "Purchase
   prices" list (last 50) above the timeline. Display only; nothing is written.
+- Item panel top box (2026-10-19, asked for "here", under the Unit cost box):
+  `costBox` in item-timeline.js labels it "Average cost" once any line has
+  `unit_cost_after` (else "Unit cost") and adds "Last bought AED x · date".
+  Reset at the start of `loadPrices`, not in `setKpis` (that also runs when
+  the item is re-read and would race the price lookup).
 - Export (2026-10-19): `price-export.js` (`window.ORYX_PRICE_EXPORT`, loaded
   by boot.js). Master Inventory → Transaction History "💲 Purchase prices"
   (`#miPriceBtn`) opens a window (item / from / to / supplier / Excel or PDF);
