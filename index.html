@@ -1230,6 +1230,19 @@ body.drawer-open{overflow:hidden}
 .pp-note{margin:6px 0 0}
 .fp-price-note{margin-top:4px; color:var(--text-muted-light); line-height:1.5}
 .fp-price-note .fp-price-badge{margin-right:4px; font-size:11.5px; padding:1px 8px}
+/* Purchase price export (price-export.js): window + item panel buttons. */
+.pp-dlg{padding:var(--space-5); width:min(480px,88vw)}
+.pp-dlg input:not([type=radio]), .pp-dlg select{width:100%}
+.pp-dlg .field-label{display:block; margin-top:12px}
+.pp-two{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+.pp-opt{display:flex; gap:10px; align-items:flex-start; border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top:8px; cursor:pointer}
+.pp-opt:has(input:checked){border-color:var(--brand); background:#F4F7F8}
+.pp-opt input{flex:0 0 auto; width:auto; margin:3px 0 0}
+.pp-opt > span{flex:1; min-width:0}
+.pp-head{display:flex; align-items:center; gap:8px}
+.pp-head .tl-h{flex:1; margin:0}
+.pp-dl{font-size:12.5px; padding:4px 10px}
+.pp-status{margin:6px 0 0}
 .min-box{margin:12px 26px 0; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--white)}
 .min-box .min-top{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap}
 .min-box .min-label{font-weight:600; color:var(--brand); font-size:14px}
@@ -1963,6 +1976,7 @@ details.act-card > .act-doc{margin-top:10px}
           <span class="small muted">Export (.xlsx)</span>
           <button class="ghost" id="miExportBtn" type="button" title="Every transaction with its items">📄 Detailed transactions</button>
           <button class="ghost" id="miReportBtn" type="button" title="One row per transaction with its total value, no items">📊 Report</button>
+          <button class="ghost" id="miPriceBtn" type="button" title="Every price paid on a Check-in: supplier, invoice, date and change (Excel or PDF)">💲 Purchase prices</button>
         </div>
       </div>
       <span class="small muted" id="miExportStatus"></span>

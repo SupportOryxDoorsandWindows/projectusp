@@ -308,6 +308,10 @@
       const it = document.createElement("script");
       it.src = "item-timeline.js?v=" + Date.now();
       document.body.appendChild(it);
+      // Purchase price export (Excel / PDF): Master Inventory + item panel.
+      const pe = document.createElement("script");
+      pe.src = "price-export.js?v=" + Date.now();
+      document.body.appendChild(pe);
       // Activity timeline (everyone).
       const t = document.createElement("script");
       t.src = "activity.js?v=" + Date.now();

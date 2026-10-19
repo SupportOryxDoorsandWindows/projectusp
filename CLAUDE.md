@@ -351,3 +351,14 @@ product lines — never treat one family's item as a match for another's:
   earlier purchase = compared with the Master cost. Kept in the description
   cell so the sweep's captured columns don't change. Item panel: "Purchase
   prices" list (last 50) above the timeline. Display only; nothing is written.
+- Export (2026-10-19): `price-export.js` (`window.ORYX_PRICE_EXPORT`, loaded
+  by boot.js). Master Inventory → Transaction History "💲 Purchase prices"
+  (`#miPriceBtn`) opens a window (item / from / to / supplier / Excel or PDF);
+  the item panel's list has "⬇ Excel" / "🖨 PDF" for one item. Rows come from
+  `purchaseReport` / `latestPerItem` in price-history.js (same purchase rule;
+  the change is worked out over the item's whole history BEFORE the filters).
+  Excel = 2 sheets ("All purchases", "Latest price per item"); PDF = a page
+  printed from a hidden iframe (the browser's "Save as PDF"; a new window
+  would be blocked because the data arrives after the click). All staff;
+  read-only. Prices before this system (e.g. the Zoho Check-In report) are NOT
+  loaded -- only with the user's say-so.
