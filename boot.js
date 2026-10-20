@@ -361,8 +361,8 @@
     const message = () => {
       const mine = ($("#gateEmail").value || $("#gateNewEmail").value || "").trim();
       return {
-        subject: "Product Selector - sign-in help",
-        body: `Hello${contact.name ? " " + contact.name : ""},\n\nI need help signing in to the Oryx Product Selector ` +
+        subject: "Oryx StockFlow - sign-in help",
+        body: `Hello${contact.name ? " " + contact.name : ""},\n\nI need help signing in to Oryx StockFlow ` +
           `(new account / new password link).\n\nMy work email: ${mine || "(please write it here)"}\n\nThank you.`,
       };
     };
