@@ -505,7 +505,7 @@ let recommendationState = createRecommendationState();
  * Answer composition
  * ------------------------------------------------------------------ */
 
-const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const nl = s => esc(s).replace(/\n/g, "<br>");
 
 function answerSizeQuestion(text, dims, context) {
