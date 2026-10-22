@@ -139,7 +139,10 @@ product lines — never treat one family's item as a match for another's:
   (`#miFilter`, filled by `drawFilter` with counts: All items; Stock:
   Normal / Low / Critical / Out of stock; Missing details: No cost / No
   photo; was a row of chips until 2026-10-14), 10 per page, Last
-  change column (`loadLastChangeByItem`). The item panel is
+  change column (`loadLastChangeByItem`).
+  List order: by item code, except L Angle / Box Section / Box / Flat Trim
+  items, which go last (`sortForList`, user's request 2026-10-22;
+  `tests/inventory-order.test.js`). The item panel is
   `item-timeline.js` (`window.ORYX_ITEM.open(item, {onAdjust})`): re-reads
   the item by id, then its `inventory_transactions` 6 at a time ("Show
   older"); "stock after" is worked back from the current stock
