@@ -344,7 +344,14 @@
   }
 
   let miPage = 0;
+  // Fabrication stock (L Angle, Box Section, Flat Trim) is listed after
+  // everything else, i.e. on the last page(s); otherwise by item code.
+  const LAST_PAGE_ITEMS = /\b(l angle|box section|box|flat trim)\b/i;
+  const sortForList = (items) => [...items].sort((a, b) =>
+    LAST_PAGE_ITEMS.test(a.description || "") - LAST_PAGE_ITEMS.test(b.description || ""));
+
   function renderMasterInventoryView(items, txs, photos, lastChange) {
+    items = sortForList(items);
     lastChange = lastChange || new Map();
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
     const codes = new Set(items.map((it) => String(it.item_code).toUpperCase()));
@@ -552,5 +559,5 @@
   }
 
   // Used by the other stock-screen files.
-  Object.assign(FP, { exportInventoryList, fillTxDocs, loadMasterInventoryView });
+  Object.assign(FP, { exportInventoryList, fillTxDocs, loadMasterInventoryView, sortForList });
 })();
