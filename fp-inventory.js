@@ -130,7 +130,7 @@
       for (let from = 0; from < 50000; from += PAGE) {
         const { data, error } = await sb.from("inventory_transactions")
           .select("item_id, created_at, performed_by_name")
-          .order("created_at", { ascending: false }).range(from, from + PAGE - 1);
+          .order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, from + PAGE - 1);
         if (error) throw error;
         for (const t of data) if (t.item_id && !last.has(t.item_id)) last.set(t.item_id, t);
         if (data.length < PAGE) break;

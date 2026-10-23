@@ -183,6 +183,9 @@ product lines — never treat one family's item as a match for another's:
   "Recent activity" was left out on purpose (the Activity page has it).
 - Rows that open the item panel carry `data-mi-row`, or item-timeline.js's
   outside-click rule closes the panel as soon as it opens.
+- Reading in pages of 1,000 (`.range`) must order by a unique column last
+  (`.order("id")`): one Check-in / Check-out shares one `created_at` (up to
+  181 lines), and without the tie-break a page edge can skip or repeat rows.
 
 ## Kanban replenishment (was "Minimum level")
 
