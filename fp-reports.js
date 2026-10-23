@@ -24,6 +24,7 @@
         .from("inventory_transactions")
         .select("*")
         .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw error;
       all.push(...data);

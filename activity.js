@@ -34,7 +34,7 @@
   async function pagedSelect(table, cols, orderCol, max) {
     const PAGE = 1000, all = [];
     for (let from = 0; from < max; from += PAGE) {
-      const { data, error } = await sb.from(table).select(cols).order(orderCol, { ascending: false }).range(from, from + PAGE - 1);
+      const { data, error } = await sb.from(table).select(cols).order(orderCol, { ascending: false }).order("id", { ascending: false }).range(from, from + PAGE - 1);
       if (error) throw error;
       all.push(...data);
       if (data.length < PAGE) break;

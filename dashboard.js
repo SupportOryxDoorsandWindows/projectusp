@@ -158,9 +158,9 @@
       try {
         const from = new Date(Date.now() - USE_DAYS * DAY).toISOString();
         const [items, txs, first, photos] = await Promise.all([
-          readAll(() => sb.from("inventory_items").select("id,item_code,description,bar_length_mm,current_qty,unit_cost,current_value,unit_of_measure,buffer_level,critical_level").order("item_code"), 20000),
+          readAll(() => sb.from("inventory_items").select("id,item_code,description,bar_length_mm,current_qty,unit_cost,current_value,unit_of_measure,buffer_level,critical_level").order("item_code").order("id"), 20000),
           readAll(() => sb.from("inventory_transactions").select("type,item_id,quantity,value,job_number,client,supplier,invoice_number,po_number,created_at")
-            .in("type", ["check_in", "check_out"]).gte("created_at", from).order("created_at", { ascending: false }), 50000),
+            .in("type", ["check_in", "check_out"]).gte("created_at", from).order("created_at", { ascending: false }).order("id", { ascending: false }), 50000),
           sb.from("inventory_transactions").select("created_at").order("created_at", { ascending: true }).limit(1),
           photosMap(),
         ]);
