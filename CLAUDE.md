@@ -131,7 +131,7 @@ product lines — never treat one family's item as a match for another's:
 ## UI layout (approved "Oryx Inventory — New UI Proposal", 12 pages)
 
 - Shell: left sidebar (`.side`, `nav.side-nav`; Products / Stock / Admin,
-  Dashboard and Reports are disabled "Soon" items) and a `.page-head` band
+  Reports is a disabled "Soon" item) and a `.page-head` band
   (title, subtitle, action) + `.page-body` per view. Tabs are still
   `nav button[data-v]` → `#v-<name>`; `window.ORYX_SHOW_VIEW(name)` switches.
   The approved-UI CSS is the block at the end of `index.html`'s `<style>`.
@@ -165,6 +165,24 @@ product lines — never treat one family's item as a match for another's:
   (security definer, Admins only, reads auth.users.last_sign_in_at).
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,
   allowed"); the Check-in sweep baseline was refreshed for that (case only).
+
+## Dashboard (2026-10-23, from the approved mock-up)
+
+- `dashboard.js` (loaded by boot.js; view `#v-dashboard`, sidebar
+  `#navDashboard`, no longer "Soon"). Read-only; re-reads every time it is
+  opened. Figures come from `summarise()` (`window.ORYX_DASH_CORE`, tested in
+  `tests/dashboard.test.js`): "Manual correction" lines (stock counts,
+  Adjust) are never usage or deliveries. Tiles: stock value, out of stock,
+  checked out / in in the last 30 days. Needs attention: Reorder (out of stock
+  AND used), Kanban Critical / Low (same counts as Master Inventory's Show
+  choices, via kanban.js), other out of stock, no cost, no photo; links open
+  Master Inventory with that Show choice. Product lines by the description's
+  first word (ZLS1, ZLS2, SMB1, ZLX/IZLX, other). "Most used" = last 30 days,
+  by number of jobs. "Running out soon" = stock / daily use over min(60 days,
+  time since the first recorded movement); red <= 14 days, amber <= 30.
+  "Recent activity" was left out on purpose (the Activity page has it).
+- Rows that open the item panel carry `data-mi-row`, or item-timeline.js's
+  outside-click rule closes the panel as soon as it opens.
 
 ## Kanban replenishment (was "Minimum level")
 

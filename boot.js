@@ -316,6 +316,10 @@
       const t = document.createElement("script");
       t.src = "activity.js?v=" + Date.now();
       document.body.appendChild(t);
+      // Dashboard (everyone, read-only).
+      const db = document.createElement("script");
+      db.src = "dashboard.js?v=" + Date.now();
+      document.body.appendChild(db);
       // What's New & Updates: bell, panel, history page, Admin publishing.
       const u = document.createElement("script");
       u.src = "updates.js?v=" + Date.now();
