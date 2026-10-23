@@ -156,6 +156,11 @@ product lines — never treat one family's item as a match for another's:
   `pointer-events:none` because boot.js checks `e.target.id`.
 - Check-out / Check-in: header stepper and the Check-in summary strip are a
   read-out (`updateFlowUi` in fp-main.js, driven by a MutationObserver).
+- Both previews redraw the whole table (`ciRender` / Check-out render) on
+  Edit, Save, Skip, Use this item, price look-ups...; the table's own scroll
+  box (`.fp-scroll`) keeps its position across redraws (`keepListScroll` /
+  `restoreListScroll` in fp-items-ui.js, 2026-10-23: it used to jump back
+  to the top, so the row being edited went out of view).
 - User Management "Last active" comes from `admin_user_last_active()`
   (security definer, Admins only, reads auth.users.last_sign_in_at).
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,

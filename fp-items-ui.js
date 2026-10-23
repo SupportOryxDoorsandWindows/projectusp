@@ -175,6 +175,19 @@
     });
   }
 
+  // The preview tables sit in their own scroll box (.fp-scroll). A redraw
+  // (Edit, Save, Skip...) replaces it, which put it back at the top, so the
+  // row just worked on vanished from view. Keep its position across redraws.
+  function keepListScroll(container) {
+    return container ? [...container.querySelectorAll(".fp-scroll")].map((el) => [el.scrollTop, el.scrollLeft]) : [];
+  }
+  function restoreListScroll(container, kept) {
+    if (!container) return;
+    container.querySelectorAll(".fp-scroll").forEach((el, n) => {
+      if (kept[n]) [el.scrollTop, el.scrollLeft] = kept[n];
+    });
+  }
+
   function wireCodePicker(prefix, itemsByCode, i) {
     const searchEl = document.getElementById(`${prefix}CodeSearch${i}`);
     const valueEl = document.getElementById(`${prefix}CodeValue${i}`);
@@ -219,6 +232,6 @@
   }
 
   // Used by the other stock-screen files.
-  Object.assign(FP, { codePickerOptions, itemPhotoButton, itemPhotoCell, keepOpenEdits, loadItemPhotos,
+  Object.assign(FP, { keepListScroll, restoreListScroll, codePickerOptions, itemPhotoButton, itemPhotoCell, keepOpenEdits, loadItemPhotos,
     openItemPhoto, pickedInventoryRow, rankPickerMatches, restoreOpenEdits, wireCodePicker });
 })();
