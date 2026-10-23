@@ -8,7 +8,7 @@
   const FP = (window.ORYX_FP = window.ORYX_FP || {});
   const { $, ciIsUnconvertedRollLine, confirmRequest, esc, extractPdfTextPerPage, fmt,
     invoiceRollLengthM, keptDocNote, knownRollLengthM, loadInventoryItems, lookupExactCode, money,
-    pdfFingerprint, readFnJson, wireDocRetry, itemPhotoButton, keepOpenEdits, loadItemPhotos,
+    pdfFingerprint, readFnJson, wireDocRetry, itemPhotoButton, keepOpenEdits, keepListScroll, restoreListScroll, loadItemPhotos,
     openItemPhoto, pickedInventoryRow, restoreOpenEdits, wireCodePicker, ciStatusChip,
     deletedItemsBox, CHECKIN_FN_URL, ciState, detectDocumentCurrencyInfo, detectShippingCharge,
     genericMoney, genericUnitMoney, loadExchangeRates, ocrPdfPages, RATE_SOURCE_LABEL,
@@ -533,6 +533,7 @@
       </div>`;
 
     const keptEdits = keepOpenEdits($("#ciOut"), ciState.rows);
+    const keptScroll = keepListScroll($("#ciOut"));
     $("#ciOut").innerHTML = `
       ${currencyCard}
       ${shippingCard}
@@ -581,6 +582,7 @@
       b.addEventListener("click", () => applyCiRowAction(+b.dataset.i, b.dataset.act));
     });
     restoreOpenEdits(keptEdits, ciState.rows);
+    restoreListScroll($("#ciOut"), keptScroll);
     // New item for a roll line: the "2 rolls × 30 m = 60 m" hint and the
     // unit follow the Metres per roll box as it's typed.
     ciState.rows.forEach((r, i) => {

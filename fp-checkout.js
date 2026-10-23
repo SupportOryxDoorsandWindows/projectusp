@@ -8,7 +8,7 @@
   const FP = (window.ORYX_FP = window.ORYX_FP || {});
   const { $, buildRows, CHECKOUT_FN_URL, confirmRequest, deleteBtnAttrs, esc, extractPdfText, fmt,
     keptDocNote, loadInventoryItems, money, parseJobHeader, parsePdf, pdfFingerprint, readFnJson,
-    recomputeAfterEdit, state, wireDocRetry, itemPhotoCell, keepOpenEdits, loadItemPhotos,
+    recomputeAfterEdit, state, wireDocRetry, itemPhotoCell, keepOpenEdits, keepListScroll, restoreListScroll, loadItemPhotos,
     openItemPhoto, pickedInventoryRow, restoreOpenEdits, wireCodePicker } = FP;
 
   function statusChip(status) {
@@ -290,6 +290,7 @@
       A future Check-in will correct it.</p>` : "";
 
     const keptEdits = keepOpenEdits($("#fpOut"), state.rows);
+    const keptScroll = keepListScroll($("#fpOut"));
     $("#fpOut").innerHTML = `
       <div class="fp-jobcard">
         <div class="fp-jobfield"><label>Job ref</label><strong>${esc(job.ref || "—")}</strong></div>
@@ -361,6 +362,7 @@
       if (search) search.focus({ preventScroll: true });
     };
     restoreOpenEdits(keptEdits, state.rows);
+    restoreListScroll($("#fpOut"), keptScroll);
     state.rows.forEach((r, i) => { if (r.editing) wireCodePicker("fpEdit", state.itemsByCode, i); });
   }
 
