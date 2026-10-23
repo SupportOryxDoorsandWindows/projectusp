@@ -1417,6 +1417,51 @@ details.act-card > .act-doc{margin-top:10px}
 .doc-note.warn{background:#FDF4E3; color:#7A5310}
 .doc-note .doc-btn{margin-left:6px}
 
+/* ---------- Dashboard (dashboard.js) ---------- */
+.db-tiles{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin:0 0 20px}
+.db-tile{background:var(--white); border:1px solid #DCE3E6; border-radius:14px; padding:18px 22px}
+.db-tile.dark{background:var(--brand); border-color:var(--brand); color:#E3EAED}
+.db-tile .db-k{font-size:13px; color:var(--text-muted)}
+.db-tile.dark .db-k, .db-tile.dark .db-sub{color:#C9D5DA}
+.db-tile .db-v{font-family:var(--font-display); font-weight:700; font-size:28px; color:var(--brand); margin:8px 0 4px; line-height:1.15}
+.db-tile .db-v small{font-size:16px; font-weight:600; margin-right:4px}
+.db-tile.dark .db-v{color:#fff} .db-tile.dark .db-v small{color:var(--accent)}
+.db-tile.bad .db-v{color:#B42318}
+.db-sub{font-size:13px; color:var(--text-muted)}
+.db-grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px}
+.db-card{background:var(--white); border:1px solid #DCE3E6; border-radius:14px; padding:22px 24px; min-width:0}
+.db-card-h{display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:6px}
+.db-card-h h2{margin:0; font-family:var(--font-display); font-weight:700; font-size:17px; color:var(--brand)}
+.db-card-h > span{font-size:13px; color:var(--text-muted)}
+.db-link{background:none; border:0; padding:0; color:var(--brand-hover); font:inherit; font-weight:600; font-size:13.5px; text-decoration:underline; cursor:pointer; white-space:nowrap}
+.db-link:hover{color:var(--brand)}
+.db-attn{display:flex; align-items:center; gap:14px; padding:13px 0; border-top:1px solid #EEF2F4}
+.db-ic{flex:none; width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:700}
+.db-ic.red{background:#FEE2E2; color:#991B1B} .db-ic.amber{background:#FEF3C7; color:#92400E} .db-ic.blue{background:#E4ECEF; color:var(--brand)}
+.db-attn-t{flex:1; min-width:0} .db-attn-t b{display:block; color:var(--brand)} .db-attn-t span{font-size:13px; color:var(--text-muted)}
+.db-attn-t code{font-size:12px; color:var(--text-muted); margin-left:4px}
+.db-ok{padding:14px 0; color:var(--text-muted); border-top:1px solid #EEF2F4}
+.db-fam{padding:10px 0}
+.db-fam-1{display:flex; justify-content:space-between; gap:12px; font-weight:600; color:var(--brand)}
+.db-fam-1 small{font-weight:400; color:var(--text-muted); margin-left:4px}
+.db-bar{height:12px; background:#EEF2F4; border-radius:4px; margin:8px 0 6px; overflow:hidden}
+.db-bar i{display:block; height:100%; background:var(--brand-hover); border-radius:0 4px 4px 0}
+.db-fam-2{font-size:13px; color:var(--text-muted)} .db-fam-2 em{font-style:normal; color:#B42318}
+.db-total{display:flex; justify-content:space-between; border-top:1px solid #EEF2F4; margin-top:10px; padding-top:12px; font-size:13.5px; color:var(--text-muted)}
+.db-total b{color:var(--brand)}
+.db-table{width:100%; border-collapse:collapse; font-size:13.5px}
+.db-table th{text-align:left; color:var(--text-muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; font-weight:600; padding:8px 0; white-space:nowrap}
+.db-table td{border-top:1px solid #EEF2F4; padding:10px 0; vertical-align:middle}
+.db-table th + th, .db-table td + td{padding-left:12px}
+.db-table .num{text-align:right; white-space:nowrap}
+.db-table code{font-size:12px; color:var(--text-muted)}
+.db-table .db-item{cursor:pointer} .db-table .db-item:hover b{text-decoration:underline}
+.db-days{display:inline-block; min-width:64px; text-align:center; font-weight:700; font-size:12.5px; border-radius:6px; padding:3px 8px; background:#E4ECEF; color:var(--brand)}
+.db-days.red{background:#FEE2E2; color:#991B1B} .db-days.amber{background:#FEF3C7; color:#92400E}
+.db-note{font-size:12.5px; color:var(--text-muted); border-top:1px solid #EEF2F4; margin-top:6px; padding-top:10px}
+@media (max-width:1100px){ .db-tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .db-grid{grid-template-columns:1fr} }
+@media (max-width:560px){ .db-tiles{grid-template-columns:1fr} .db-card{padding:18px 16px} .db-hide-sm{display:none} }
+
 /* ---------- What's New & Updates (updates.js): bell, panel, page, form ---------- */
 .upd-bell{position:relative; display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; flex:none;
   border-radius:50%; border:1px solid #C5D0D4; background:var(--white); color:var(--brand); cursor:pointer; padding:0}
@@ -1594,7 +1639,7 @@ details.act-card > .act-doc{margin-top:10px}
     <button type="button" data-v="systems"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>Systems</button>
     <button type="button" data-v="matrix"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V5M9 20V9M14 20V12M19 20V7M3 20h18"/></svg>Comparison</button>
     <div class="side-group">Stock</div>
-    <button type="button" disabled title="Coming soon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard <span class="soon">Soon</span></button>
+    <button type="button" data-v="dashboard" id="navDashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard</button>
     <button type="button" data-v="fp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Check-out</button>
     <button type="button" data-v="checkin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Check-in</button>
     <button type="button" data-v="master-inventory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></svg>Master Inventory</button>
@@ -1992,6 +2037,39 @@ details.act-card > .act-doc{margin-top:10px}
           <tbody id="miTxBody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================= DASHBOARD (dashboard.js) ============================= -->
+<section id="v-dashboard" class="view">
+  <div class="page-head">
+    <div><h1>Dashboard</h1><p>Your stock at a glance<span id="dbDate"></span></p></div>
+    <div class="page-actions">
+      <button class="btn-outline" type="button" data-db-go="checkin">+ New Check-in</button>
+      <button class="btn-yellow" type="button" data-db-go="fp">→ New Check-out</button>
+    </div>
+  </div>
+  <div class="page-body">
+    <div id="dbStatus" class="small muted"></div>
+    <div class="db-tiles" id="dbTiles"></div>
+    <div class="db-grid">
+      <section class="db-card" aria-labelledby="dbAttnH">
+        <div class="db-card-h"><h2 id="dbAttnH">Needs attention</h2><span id="dbAttnCount"></span></div>
+        <div id="dbAttn"></div>
+      </section>
+      <section class="db-card" aria-labelledby="dbFamH">
+        <div class="db-card-h"><h2 id="dbFamH">Stock value by product line</h2><span>AED, items in stock</span></div>
+        <div id="dbFam"></div>
+      </section>
+      <section class="db-card" aria-labelledby="dbUsedH">
+        <div class="db-card-h"><h2 id="dbUsedH">Most used · last 30 days</h2><button type="button" class="db-link" data-db-filter="all">Master Inventory</button></div>
+        <div id="dbUsed"></div>
+      </section>
+      <section class="db-card" aria-labelledby="dbSoonH">
+        <div class="db-card-h"><h2 id="dbSoonH">Running out soon</h2><span>At the current rate of use</span></div>
+        <div id="dbSoon"></div>
+      </section>
     </div>
   </div>
 </section>
