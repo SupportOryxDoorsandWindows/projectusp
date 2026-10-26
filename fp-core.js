@@ -788,15 +788,30 @@
     return active || candidates[0];
   }
 
+  // Items the job list gives in metres (fittings section, "2.63 m") while
+  // Master counts whole bars: the metres become bars of the item's own
+  // bar_length_mm, rounded up (2.63 m of 5100 mm bars = 1 bar). Only the
+  // items the stock team named (620001, 2026-10-26; not 220002/220003).
+  const METRES_TO_BARS_CODES = new Set(["620001"]);
+  function metresAsBars(e, item) {
+    const barMm = item ? Number(item.bar_length_mm) : 0;
+    if (e.kind !== "fitting" || e.unit !== "m" || !(barMm > 0)) return null;
+    if (!METRES_TO_BARS_CODES.has(String(item.item_code).toUpperCase())) return null;
+    // whole millimetres first, so 10.2 m / 5.1 m is exactly 2, never 3
+    return Math.ceil(Math.round(e.qty * 1000) / barMm);
+  }
+
   function buildRows(entries, itemsByCode) {
     const rows = [];
     for (const e of entries) {
       const candidates = lookupExactCode(itemsByCode, e.code);
       const item = pickInventoryRow(e, candidates);
 
-      const requiredQty = e.kind === "bar" ? e.bars : e.qty;
-      const unit = e.kind === "bar" ? "bars" : e.unit;
-      const pdfDetail = e.kind === "bar" ? `${e.bars} × ${e.barLenMm} mm` : "";
+      const asBars = metresAsBars(e, item);
+      const requiredQty = e.kind === "bar" ? e.bars : asBars != null ? asBars : e.qty;
+      const unit = e.kind === "bar" || asBars != null ? "bars" : e.unit;
+      const pdfDetail = e.kind === "bar" ? `${e.bars} × ${e.barLenMm} mm`
+        : asBars != null ? `${fmt(e.qty)} m → ${asBars} × ${Math.round(item.bar_length_mm)} mm` : "";
 
       if (!item) {
         rows.push({
@@ -868,7 +883,7 @@
   }
 
   // Used by the other stock-screen files.
-  Object.assign(FP, { $, CHECKOUT_FN_URL, buildRows, ciIsUnconvertedRollLine, confirmRequest, deleteBtnAttrs,
+  Object.assign(FP, { $, CHECKOUT_FN_URL, buildRows, metresAsBars, ciIsUnconvertedRollLine, confirmRequest, deleteBtnAttrs,
     esc, extractPdfText, extractPdfTextPerPage, findEmbeddedCodeSuggestion, findSeriesSuggestion,
     findUniqueDescriptionItem, fmt, fnHeaders, invoiceRollLengthM, keptDocNote, knownRollLengthM,
     loadInventoryItems, loadLibs, loadXlsxLib, lookupExactCode, money, normaliseForMatch,
