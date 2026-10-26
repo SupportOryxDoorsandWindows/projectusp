@@ -812,11 +812,13 @@
       const unit = e.kind === "bar" || asBars != null ? "bars" : e.unit;
       const pdfDetail = e.kind === "bar" ? `${e.bars} × ${e.barLenMm} mm`
         : asBars != null ? `${fmt(e.qty)} m → ${asBars} × ${Math.round(item.bar_length_mm)} mm` : "";
+      // what the job list itself asked for, kept for the line after an Edit
+      const jobListText = e.kind === "bar" ? pdfDetail : `${fmt(e.qty)} ${e.unit}`;
 
       if (!item) {
         rows.push({
           kind: e.kind, code: e.code, barLenMm: e.barLenMm,
-          description: e.description, pdfDetail,
+          description: e.description, pdfDetail, jobListText,
           requiredQty, unit,
           available: null, remaining: null,
           costPerUnit: 0, estValue: 0,
@@ -834,7 +836,7 @@
       const status = remaining < 0 ? "shortage" : "ok";
       rows.push({
         kind: e.kind, code: e.code, barLenMm: e.barLenMm,
-        description: item.description || e.description, pdfDetail,
+        description: item.description || e.description, pdfDetail, jobListText,
         requiredQty, unit,
         available: item.current_qty, remaining,
         costPerUnit: item.unit_cost || 0,
@@ -880,6 +882,17 @@
     row.decided = true;
     row.itemId = item.id;
     row.hasVariants = candidates.length > 1;
+    // The person picked this exact row (e.g. 5100 mm for a "2 × 2900 mm"
+    // line): say so, and show what is taken now -- the job list's own
+    // "2 × 2900 mm" alone read as if the edit had not been kept.
+    row.personPicked = !!(exactItemId && item.id === exactItemId);
+    const lenMm = Number(item.bar_length_mm) > 0 ? Math.round(item.bar_length_mm) : null;
+    const now = lenMm ? `${fmt(newQty)} × ${lenMm} mm` : "";
+    if (row.jobListText) {
+      row.pdfDetail = now ? `Job list: ${row.jobListText} · Now: ${now}` : `Job list: ${row.jobListText}`;
+    } else if (/^Added by hand/.test(row.pdfDetail || "")) {
+      row.pdfDetail = ["Added by hand", lenMm ? `${lenMm} mm` : ""].filter(Boolean).join(" · ");
+    }
   }
 
   // Used by the other stock-screen files.
