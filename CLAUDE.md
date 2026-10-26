@@ -161,6 +161,12 @@ product lines — never treat one family's item as a match for another's:
   box (`.fp-scroll`) keeps its position across redraws (`keepListScroll` /
   `restoreListScroll` in fp-items-ui.js, 2026-10-23: it used to jump back
   to the top, so the row being edited went out of view).
+- Check-in preview, USD / AUD document (2026-10-26, user's request: "the
+  invoice is in USD"): a "Value (USD)" column after Landed unit cost
+  (qty x landed unit cost, the invoice's own currency) and the invoice-currency
+  total on the bottom bar. Not shown for an AED document. The table then has
+  12 columns: CSS `.fp-checkin-table.has-orig` sets the widths/alignment, and
+  the sweep reads Status as the cell before Action.
 - User Management "Last active" comes from `admin_user_last_active()`
   (security definer, Admins only, reads auth.users.last_sign_in_at).
 - Status badges are sentence case now ("Matched", "Unmatched", "Below zero,

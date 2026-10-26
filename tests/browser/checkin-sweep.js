@@ -94,9 +94,10 @@ async function sweepFile(browser, file) {
   for (let k = 0; k < 30 && !(await p.$("#ciOut table tbody tr")); k++) await p.waitForTimeout(1000);
   await p.waitForTimeout(500);
   // Code · Description (first line) · Check-in qty · Unit cost (no "Stored" AED, which follows the rate) · Status
+  // (the cell before Action: a USD/AUD document has an extra Value column)
   const rows = () => p.$$eval("#ciOut .fp-checkin-table tbody tr, #ciOut table tbody tr", (trs) => [...new Set(trs)].map((tr) => {
     const c = [...tr.querySelectorAll("td")].map((td) => td.innerText.replace(/\s+/g, " ").trim());
-    return c.length < 10 ? null : [c[0], (tr.children[1].innerText.split("\n")[0] || "").trim(), c[3], c[5], c[9]].join(" | ");
+    return c.length < 10 ? null : [c[0], (tr.children[1].innerText.split("\n")[0] || "").trim(), c[3], c[5], c[c.length - 2]].join(" | ");
   }).filter(Boolean));
   const result = { file: path.basename(file), asRead: await rows() };
   // "Use this item" looks up that item's last purchase price and redraws the

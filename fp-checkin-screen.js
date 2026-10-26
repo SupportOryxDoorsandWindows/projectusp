@@ -129,6 +129,9 @@
     const codedUnmatched = unmatched - noCodeUnmatched - conflictUnmatched;
     const cur = ciState.currency;
     const curLabel = cur || "$"; // display only: "$" until the dollar is chosen
+    // Invoice-currency value beside the landed cost, so a USD/AUD line can be
+    // checked against the invoice's own total (none for an AED document).
+    const showOrigValue = cur !== "AED";
     const shipAlloc = ciShippingAllocation();
     const shippingActiveCount = ciState.rows.filter((r) => r.action === "add" || r.action === "create-new").length;
     const shippingPerItem = ciState.shippingAmountOriginal > 0 && shippingActiveCount > 0
@@ -160,7 +163,7 @@
             <label class="fp-newitem-ack"><input type="checkbox" id="ciNewAck${i}"> None of these match — this is genuinely a new item.</label>
           </div>` : "";
         return `<tr class="fp-editing">
-          <td colspan="11">
+          <td colspan="${showOrigValue ? 12 : 11}">
             <div class="fp-newitem-panel">
               <div class="fp-newitem-tag">Will create a new Master Inventory record</div>
               <h4>${r.code ? `${esc(r.code)} — ` : ""}${esc(r.description)}</h4>
@@ -252,6 +255,7 @@
       const shipAllocForRow = shipAlloc.get(i) || 0;
       const landedUnitCost = ciLandedUnitCost(i, shipAlloc);
       const aedValue = rate && landedUnitCost != null ? r.qty * landedUnitCost * rate : null;
+      const origValue = landedUnitCost != null ? r.qty * landedUnitCost : null;
       // Short-code warning now lives as a small badge next to the Code cell
       // instead of a bold paragraph under the Description -- same signal
       // (code may be truncated, never guessed/auto-completed), just less
@@ -369,6 +373,7 @@
         <td class="num">${unitCostDisplay}</td>
         <td class="num">${shipAllocForRow > 0 ? genericMoney(shipAllocForRow, curLabel) : "—"}</td>
         <td class="num">${landedUnitCostDisplay}</td>
+        ${showOrigValue ? `<td class="num">${origValue != null ? genericMoney(origValue, curLabel) : "—"}</td>` : ""}
         <td class="num">${aedValue != null ? money(aedValue) : "—"}</td>
         <td>${ciStatusChip(r, displayStatus)}</td>
         <td>${ciRenderRowActionButtons(i, r)}</td>
@@ -549,7 +554,7 @@
       ${lowConfBox}
       <div class="fp-section-h">Check-in preview</div>
       <div class="fp-scroll fp-checkin-scroll">
-        <table class="fp-table fp-checkin-table">
+        <table class="fp-table fp-checkin-table${showOrigValue ? " has-orig" : ""}">
           <thead><tr>
             <th>Code</th><th>Description</th>
             <th class="num">Current stock</th>
@@ -558,6 +563,7 @@
             <th class="num">Unit cost (${esc(curLabel)})</th>
             <th class="num">Shipping alloc. (${esc(curLabel)})</th>
             <th class="num">Landed unit cost (${esc(curLabel)})</th>
+            ${showOrigValue ? `<th class="num">Value (${esc(curLabel)})${ciState.shippingAmountOriginal > 0 ? " incl. shipping" : ""}</th>` : ""}
             <th class="num">Value (AED)${ciState.shippingAmountOriginal > 0 ? " incl. shipping" : ""}</th>
             <th>Status</th><th>Action</th>
           </tr></thead>
@@ -574,7 +580,8 @@
 
     const canConfirm = ciCanConfirm();
     $("#ciConfirmSummary").textContent =
-      `${t.totalItems} items · ${t.totalValueAed != null ? money(t.totalValueAed) : "—"}` + (t.skipped ? ` · ${t.skipped} skipped` : "");
+      `${t.totalItems} items · ${t.totalValueAed != null ? money(t.totalValueAed) : "—"}` +
+      (showOrigValue ? ` · ${genericMoney(t.totalValueOriginal, curLabel)}` : "") + (t.skipped ? ` · ${t.skipped} skipped` : "");
     $("#ciConfirmBar").hidden = !!ciState.done;
     $("#ciConfirm").disabled = !canConfirm || !!ciState.confirming;
 
