@@ -106,7 +106,7 @@ assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "spindle").map((o) =>
 
 // Check-out: 620001 (Mohair Holder, 5100 mm bars counted in pieces) comes
 // from the job list in metres; it is taken off as whole bars, rounded up.
-// Other items keep the job list's own number.
+// So are 220002 / 220003 (SMB1 Zip Track / Track Inner).
 {
   const stock = itemsMap([
     { id: "mh", item_code: "620001", description: "IZLX Drawbar Mohair Holder (STR)", unit_of_measure: "pcs", bar_length_mm: 5100, unit_cost: 54.96, current_qty: 262 },
@@ -120,8 +120,8 @@ assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "spindle").map((o) =>
   assert.strictEqual(a.remaining, 261);
   assert.strictEqual(b.requiredQty, 2, "exactly 2 bars' length is 2, not 3");
   assert.strictEqual(c.requiredQty, 3);
-  assert.strictEqual(d.requiredQty, 2.57, "220002 is not converted (only 620001)");
-  assert.strictEqual(d.unit, "m");
+  assert.strictEqual(d.requiredQty, 1, "220002 Zip Track: 2.57 m = 1 bar");
+  assert.strictEqual(d.unit, "bars");
 }
 
 // Check-out Edit: a "2 × 2900 mm" job line changed to the 5100 mm row shows
