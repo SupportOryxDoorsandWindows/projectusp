@@ -253,9 +253,9 @@
       const rowClass = r.decided && r.action === "skip" ? "fp-skipped" : "";
       const remainingClass = r.remaining != null && r.remaining < 0 ? 'style="color:var(--danger); font-weight:600"' : "";
       const displayStatus = r.decided && r.action === "skip" ? "skipped" : r.status;
-      const variantNote = r.hasVariants
-        ? `<div class="small muted">Code has multiple Master Inventory rows — the row with the best cost/length match was used.</div>`
-        : "";
+      const variantNote = !r.hasVariants ? ""
+        : r.personPicked ? `<div class="small muted">Code has multiple Master Inventory rows — you chose this one.</div>`
+        : `<div class="small muted">Code has multiple Master Inventory rows — the row with the best cost/length match was used.</div>`;
       const photoCell = r.itemId
         ? itemPhotoCell(state.photos, { item_code: r.code, description: r.description })
         : `<td><span class="fp-photo-none" title="Not in Master Inventory"></span></td>`;

@@ -35,7 +35,7 @@ const context = {
   crypto: { subtle: {} },
 };
 
-const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches, buildRows } = loadFp(context);
+const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches, buildRows, recomputeAfterEdit, state } = loadFp(context);
 
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -122,6 +122,20 @@ assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "spindle").map((o) =>
   assert.strictEqual(c.requiredQty, 3);
   assert.strictEqual(d.requiredQty, 2.57, "220002 is not converted (only 620001)");
   assert.strictEqual(d.unit, "m");
+}
+
+// Check-out Edit: a "2 × 2900 mm" job line changed to the 5100 mm row shows
+// what is taken now and that the person chose that row.
+{
+  const [row] = buildRows([{ kind: "bar", code: "310022", description: "Drawbar", bars: 2, barLenMm: 2900, totalLenM: 5.8 }], items);
+  assert.strictEqual(row.itemId, "a2900");
+  assert.strictEqual(row.pdfDetail, "2 × 2900 mm");
+  state.itemsByCode = items;
+  recomputeAfterEdit(row, "310022", "", 1, "bars", "a5100");
+  assert.strictEqual(row.itemId, "a5100");
+  assert.strictEqual(row.available, 96);
+  assert.strictEqual(row.pdfDetail, "Job list: 2 × 2900 mm · Now: 1 × 5100 mm");
+  assert.strictEqual(row.personPicked, true);
 }
 
 console.log("manual-entry tests passed");
