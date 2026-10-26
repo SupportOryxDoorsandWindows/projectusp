@@ -35,7 +35,7 @@ const context = {
   crypto: { subtle: {} },
 };
 
-const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches } = loadFp(context);
+const { codePickerOptions, pickedInventoryRow, applyCombinedStock, rankPickerMatches, buildRows } = loadFp(context);
 
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -102,5 +102,26 @@ const pickerOpts = [
 assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "3000").map((o) => o.code)), ["30001R", "30003R", "230001", "910010"]);
 assert.strictEqual(rankPickerMatches(pickerOpts, "").length, 5, "empty query lists everything");
 assert.deepStrictEqual(plain(rankPickerMatches(pickerOpts, "spindle").map((o) => o.code)), ["133001"]);
+
+
+// Check-out: 620001 (Mohair Holder, 5100 mm bars counted in pieces) comes
+// from the job list in metres; it is taken off as whole bars, rounded up.
+// Other items keep the job list's own number.
+{
+  const stock = itemsMap([
+    { id: "mh", item_code: "620001", description: "IZLX Drawbar Mohair Holder (STR)", unit_of_measure: "pcs", bar_length_mm: 5100, unit_cost: 54.96, current_qty: 262 },
+    { id: "zt", item_code: "220002", description: "SMB1 Zip Track", unit_of_measure: "pcs", bar_length_mm: 5100, unit_cost: 10, current_qty: 30 },
+  ]);
+  const fit = (code, qty) => ({ kind: "fitting", code, qty, unit: "m", description: code });
+  const [a, b, c, d] = buildRows([fit("620001", 2.63), fit("620001", 10.2), fit("620001", 10.21), fit("220002", 2.57)], stock);
+  assert.strictEqual(a.requiredQty, 1, "2.63 m = 1 bar of 5.1 m");
+  assert.strictEqual(a.unit, "bars");
+  assert.strictEqual(a.pdfDetail, "2.63 m → 1 × 5100 mm");
+  assert.strictEqual(a.remaining, 261);
+  assert.strictEqual(b.requiredQty, 2, "exactly 2 bars' length is 2, not 3");
+  assert.strictEqual(c.requiredQty, 3);
+  assert.strictEqual(d.requiredQty, 2.57, "220002 is not converted (only 620001)");
+  assert.strictEqual(d.unit, "m");
+}
 
 console.log("manual-entry tests passed");

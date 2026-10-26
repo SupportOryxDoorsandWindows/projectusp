@@ -84,6 +84,11 @@ product lines — never treat one family's item as a match for another's:
   under the same code, so anything that resolves a Check-in row must pick the
   exact length row by id, not just the code. The manual-entry and Edit
   pickers (`codePickerOptions`) list one option per length for such codes.
+- 620001 IZLX Drawbar Mohair Holder is one 5100 mm bar row counted in
+  pieces (2026-10-26). The job list gives it in metres ("2.63 m"), so
+  Check-out takes off metres / 5.1 rounded UP to whole bars (`metresAsBars`
+  in fp-core.js, `METRES_TO_BARS_CODES`). Only 620001: the user chose NOT
+  to apply it to 220002 / 220003, which are given the same way.
 - Negative stock is allowed on Check-out (corrected by a later Check-in);
   the preview only has to show it. `applyCombinedStock` totals every line of
   the same Master row so duplicates still show the shortage.
