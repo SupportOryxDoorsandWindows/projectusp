@@ -791,8 +791,8 @@
   // Items the job list gives in metres (fittings section, "2.63 m") while
   // Master counts whole bars: the metres become bars of the item's own
   // bar_length_mm, rounded up (2.63 m of 5100 mm bars = 1 bar). Only the
-  // items the stock team named (620001, 2026-10-26; not 220002/220003).
-  const METRES_TO_BARS_CODES = new Set(["620001"]);
+  // items the stock team named (620001, then 220002 / 220003, 2026-10-26).
+  const METRES_TO_BARS_CODES = new Set(["620001", "220002", "220003"]);
   function metresAsBars(e, item) {
     const barMm = item ? Number(item.bar_length_mm) : 0;
     if (e.kind !== "fitting" || e.unit !== "m" || !(barMm > 0)) return null;
