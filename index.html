@@ -1572,6 +1572,45 @@ details.act-card > .act-doc{margin-top:10px}
 .upd-flash{position:fixed; bottom:22px; left:50%; transform:translateX(-50%); z-index:80; background:var(--brand); color:var(--white);
   border-radius:var(--r-sm); padding:10px 16px; font-size:14px; box-shadow:var(--sh-raised)}
 .upd-flash[hidden]{display:none}
+
+/* Delivery Notes (delivery-notes.js) */
+.dn-body{display:flex; flex-direction:column; gap:16px}
+.dn-file-btn{cursor:pointer; display:inline-flex; align-items:center}
+.dn-toolbar{display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; justify-content:space-between}
+.dn-toolbar .pill-row{margin:0}
+.dn-search{display:flex; flex-direction:column; flex:1; min-width:220px; max-width:420px}
+.dn-scroll{overflow-x:auto}
+.dn-list-card,.dn-detail{padding:0}
+.dn-table tr[data-dn-id]{cursor:pointer}
+.dn-table tr.sel td{background:#FFF8E5}
+.dn-table tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.dn-empty{padding:24px; text-align:center; color:var(--text-muted)}
+.dn-detail{padding:20px 22px; display:flex; flex-direction:column; gap:16px}
+.dn-detail-h{display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; align-items:flex-start}
+.dn-detail-st{display:flex; gap:10px; align-items:center}
+.dn-flags{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px}
+.dn-flags li{background:#FDF1D8; color:#8A5A0F; border-radius:8px; padding:8px 12px; font-size:13px}
+.dn-msg{border-radius:8px; padding:10px 14px; font-size:14px}
+.dn-msg.ok{background:#E3F1EA; color:#1F6B45}
+.dn-msg.bad{background:#FBE7E6; color:#A23A33}
+.dn-ok-text{color:#1F6B45} .dn-bad-text{color:#A23A33}
+.dn-form{display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap:12px}
+.dn-field{display:flex; flex-direction:column}
+.dn-wide{grid-column:1 / -1}
+.dn-field input,.dn-field textarea{width:100%; box-sizing:border-box}
+input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
+.dn-lines textarea,.dn-lines input{width:100%; box-sizing:border-box; font:inherit; resize:vertical}
+.dn-lines td{vertical-align:top}
+.dn-pre{white-space:pre-line}
+.dn-row{display:flex; flex-wrap:wrap; gap:10px; align-items:center}
+.dn-probs{margin:0; padding-left:18px; color:#8A5A0F; font-size:13px}
+.dn-h3{font-family:var(--font-display); font-size:15px; color:var(--brand); margin:0 0 8px}
+.dn-history{margin:0; padding-left:18px; font-size:13px; display:flex; flex-direction:column; gap:4px}
+.dn-sheet-wrap{overflow-x:auto; padding:14px; background:#F3F5F6; border-radius:10px}
+.dn-after{margin-top:12px}
+.dn-after-ok,.dn-after-bad{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; border-radius:10px; padding:10px 14px; font-size:13.5px}
+.dn-after-ok{background:#E3F1EA; color:#1F6B45}
+.dn-after-bad{background:#FBE7E6; color:#A23A33}
 </style>
 </head>
 <body>
@@ -1664,6 +1703,7 @@ details.act-card > .act-doc{margin-top:10px}
     <button type="button" data-v="dashboard" id="navDashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard</button>
     <button type="button" data-v="fp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Check-out</button>
     <button type="button" data-v="checkin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Check-in</button>
+    <button type="button" data-v="delivery-notes" id="navDeliveryNotes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>Delivery Notes</button>
     <button type="button" data-v="master-inventory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></svg>Master Inventory</button>
     <button type="button" data-v="activity" id="navActivity"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Activity</button>
     <button type="button" disabled title="Coming soon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg>Reports <span class="soon">Soon</span></button>
@@ -2064,6 +2104,28 @@ details.act-card > .act-doc{margin-top:10px}
 </section>
 
 <!-- ============================= DASHBOARD (dashboard.js) ============================= -->
+<!-- ==================== DELIVERY NOTES (delivery-notes.js) ==================== -->
+<section id="v-delivery-notes" class="view">
+  <div class="page-head">
+    <div><h1>Delivery Notes</h1><p>Powder coating and finished goods notes, prepared from each checked-out job list</p></div>
+    <div class="page-actions">
+      <label class="btn-outline dn-file-btn" for="dnPrepFile">Prepare from a job list</label>
+      <input id="dnPrepFile" type="file" accept="application/pdf,.pdf" hidden>
+    </div>
+  </div>
+  <div class="page-body dn-body">
+    <span id="dnPrepStatus" class="small muted" role="status"></span>
+    <div class="dn-toolbar">
+      <div class="pill-row dn-filters" role="group" aria-label="Show" id="dnFilters"></div>
+      <div class="dn-search"><label class="field-label" for="dnSearch">Search</label>
+        <input id="dnSearch" type="search" autocomplete="off" placeholder="Order, customer, DN number, driver…"></div>
+      <button type="button" class="btn-outline btn-sm" id="dnReload">Reload</button>
+    </div>
+    <div id="dnList"></div>
+    <div id="dnDetail"></div>
+  </div>
+</section>
+
 <section id="v-dashboard" class="view">
   <div class="page-head">
     <div><h1>Dashboard</h1><p>Your stock at a glance<span id="dbDate"></span></p></div>

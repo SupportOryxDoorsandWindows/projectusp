@@ -290,6 +290,39 @@ product lines — never treat one family's item as a match for another's:
 - Before redeploying checkin/checkout run `node tests/edge/keep-pdf.js
   --deno <deno>` (runs the real function sources against a local stand-in).
 
+## Delivery notes (2026-10-27, tab "Delivery Notes")
+
+- `delivery-notes.js` (loaded by boot.js; view `#v-delivery-notes`, sidebar
+  `#navDeliveryNotes`; pure parts `window.ORYX_DN_CORE`, tested in
+  `tests/delivery-notes.test.js`). SQL: `supabase/sql/delivery_notes.sql`
+  (tables `delivery_notes`, `delivery_note_history`,
+  `delivery_note_correctors`; staff-only read; written ONLY through
+  `prepare_delivery_notes` / `save_delivery_note` / `confirm_delivery_note` /
+  `correct_delivery_note` / `set_delivery_note_corrector`), tested on local
+  Postgres with `tests/sql/delivery-notes.test.sql`.
+- Never touches the stock: fp-checkout.js calls `ORYX_DN.afterCheckout()`
+  only after its Check-out was saved (PDF Check-outs only); the server only
+  accepts a job list whose SHA-256 is on a saved Check-out, one note of each
+  kind per job list. A failure shows "Try again"; "Prepare from a job list"
+  on the page does the same for older Check-outs.
+- Powder coating note = one line per part type from FP Pro's own bar "Code:"
+  (`barGroup`: 60-IS/ZLX_80-OS/SMB_60-IS/"70" = HOUSING, RECIEVER, DRAWBAR,
+  TOP/BOTTOM_TRACK + SMB track pairs = TRACK, RECESS_CHANNEL, TRACK_FILLER
+  (630148), 15X30... = BOX SECTION; MAGNET/ROLLER/MOHAIR not coated; anything
+  else "not recognised" = flagged, never guessed) + COMPONENTS = pieces of the
+  accessories on Freedom's coating list (`COAT_PCS`). Job lists carry no RAL
+  code: it is typed, and the note stays "Needs review" without it.
+  Finished goods = one line per "Items list" screen (Location + product +
+  size, qty), Box Section sizes in Comments (like DN-5470).
+- Confirm checks RAL (coating) / address / driver / date / lines and gives the
+  DN number from its OWN series `DN-SF-0001` (the current program's DN numbers
+  are still in use; Renato to decide on one series). Confirmed = locked;
+  only Admins + `delivery_note_correctors` correct (reason required, the
+  version before kept in `delivery_note_history.before`).
+- Browser test: `tests/browser/delivery-notes-flow.js` (stand-in backend; also
+  prints the Check-out payload so a run on the old code proves the stock lines
+  are identical).
+
 ## Checking a Check-in change (every time)
 
 - A fix made for one invoice must behave the same on ALL sample invoices.

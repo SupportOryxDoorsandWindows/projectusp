@@ -320,6 +320,10 @@
       const db = document.createElement("script");
       db.src = "dashboard.js?v=" + Date.now();
       document.body.appendChild(db);
+      // Delivery Notes (prepared after a Check-out; its own tab).
+      const dn = document.createElement("script");
+      dn.src = "delivery-notes.js?v=" + Date.now();
+      document.body.appendChild(dn);
       // What's New & Updates: bell, panel, history page, Admin publishing.
       const u = document.createElement("script");
       u.src = "updates.js?v=" + Date.now();
