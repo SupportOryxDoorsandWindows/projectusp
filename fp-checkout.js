@@ -449,6 +449,14 @@
       </div>`;
     wireDocRetry($("#fpDone"), "check_out", pdfFile, pdfHash);
     $("#fpNew").addEventListener("click", resetAll);
+    // Delivery notes (delivery-notes.js): prepared from the same job list now
+    // that the Check-out is saved. Never affects it; a failure only shows
+    // "Try again" below the done message. Hand entry (no PDF) has none.
+    if (pdfHash && window.ORYX_DN) {
+      try {
+        window.ORYX_DN.afterCheckout({ container: $("#fpDone .fp-done"), file: pdfFile, hash: pdfHash, job: jobRef, client });
+      } catch (e) { console.error("delivery notes", e); }
+    }
   }
 
   /* --------------------------- Analyse pipeline -------------- */
