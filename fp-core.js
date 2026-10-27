@@ -270,7 +270,19 @@
       const totalLenM = parseFloat(m[4]);
       const codeM = desc.match(/(\d+)\s*[-–]/);
       const code = codeM ? codeM[1] : "";
-      out.push({ kind: "bar", code, description: desc, bars, barLenMm, totalLenM });
+      // A bar with no item code (Smartscreen "Freedom SMB Housing - 60 (IS)",
+      // "Box Section 20x40") used to be dropped without a word; it now shows
+      // as an unmatched row for staff to Edit or Acknowledge (2026-10-27).
+      out.push({ kind: "bar", code, description: desc, bars, barLenMm, totalLenM,
+        ...(code ? {} : { needsCheck: "No item code on the job list — Edit to pick the Master Inventory item, or Acknowledge." }) });
+      // "310010/310013-ZLS1 Housing 70 IS/OS": the line above takes 310013
+      // (as before); the first code gets its own row to check, never deducted
+      // by itself (how many bars of each is the stock team's call).
+      const combo = desc.match(/^(\d+)\s*\/\s*(\d+)\s*[-–]/);
+      if (combo && combo[2] === code) {
+        out.push({ kind: "bar", code: combo[1], description: desc, bars, barLenMm, totalLenM,
+          needsCheck: `The job list counts ${combo[1]} and ${combo[2]} together and only ${combo[2]} is taken off. Edit to set how many ${combo[1]} bars, or Acknowledge.` });
+      }
     }
     return out;
   }
@@ -281,9 +293,10 @@
   function aggregate(entries) {
     const byKey = new Map();
     for (const e of entries) {
-      if (!e.code) continue;
+      if (!e.code && !e.needsCheck) continue;
+      // Rows to check stay apart from normal rows of the same code.
       const key = e.kind === "bar"
-        ? `bar|${e.code}|${e.barLenMm}`
+        ? `bar|${e.needsCheck ? "check|" + e.description + "|" : ""}${e.code}|${e.barLenMm}`
         : `fit|${e.code}|${e.unit}`;
       const cur = byKey.get(key);
       if (cur) {
@@ -804,7 +817,9 @@
   function buildRows(entries, itemsByCode) {
     const rows = [];
     for (const e of entries) {
-      const candidates = lookupExactCode(itemsByCode, e.code);
+      // A row to check is never matched by itself, so it is never deducted
+      // unless someone Edits it.
+      const candidates = e.needsCheck ? [] : lookupExactCode(itemsByCode, e.code);
       const item = pickInventoryRow(e, candidates);
 
       const asBars = metresAsBars(e, item);
@@ -825,6 +840,7 @@
           status: "unmatched", baseStatus: "unmatched",
           action: "pending", decided: false,
           itemId: null, hasVariants: false, editing: false,
+          checkNote: e.needsCheck || null,
         });
         continue;
       }
@@ -855,6 +871,7 @@
   // Code, Description, Quantity or Unit in the Allocation Preview. Mirrors
   // the single-entry logic in buildRows() above.
   function recomputeAfterEdit(row, newCode, newDescription, newQty, newUnit, exactItemId) {
+    row.checkNote = null;
     row.code = newCode;
     row.description = newDescription;
     row.requiredQty = newQty;

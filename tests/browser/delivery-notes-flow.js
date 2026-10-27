@@ -5,7 +5,7 @@
 // Also prints the Check-out payload (the stock lines sent), so the same run
 // on the code before the change can show it is identical.
 //
-//   node tests/browser/delivery-notes-flow.js --pdf <job list> --libs <folder> --items <inventory.json> [--repo <checkout>] [--shot <png>]
+//   node tests/browser/delivery-notes-flow.js --pdf <job list> --libs <folder> --items <inventory.json> [--repo <checkout>] [--shot <png>] [--preview-shot <png>]
 //
 // --libs   as in checkin-sweep.js (pdfjs-dist@4.7.76 as "pdfjs",
 //          supabase-js@2.45.4, xlsx-js-style@1.2.0), npm pack + tar -x.
@@ -18,7 +18,7 @@ const { chromium } = require(require("child_process").execSync("npm root -g").to
 
 const args = process.argv.slice(2);
 const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : null; };
-const pdf = opt("--pdf"), libDir = opt("--libs"), itemsFile = opt("--items"), shot = opt("--shot");
+const pdf = opt("--pdf"), libDir = opt("--libs"), itemsFile = opt("--items"), shot = opt("--shot"), previewShot = opt("--preview-shot");
 const repo = path.resolve(opt("--repo") || path.join(__dirname, "../.."));
 if (!pdf || !libDir || !itemsFile) { console.error("usage: --pdf <file> --libs <folder> --items <json> [--repo <dir>] [--shot <png>]"); process.exit(2); }
 const items = JSON.parse(fs.readFileSync(itemsFile, "utf8"));
@@ -132,6 +132,8 @@ function rpc(name, a) {
   await p.setInputFiles("#fpPdf", pdf);
   await p.click("#fpExtract");
   await p.waitForSelector("#fpOut table tbody tr", { timeout: 60000 });
+  console.log("UNMATCHED " + JSON.stringify(await p.$$eval("#fpOut table tbody tr", (trs) => trs.filter((t) => /Unmatched/i.test(t.innerText)).map((t) => t.innerText.replace(/\s+/g, " ").trim()))));
+  if (previewShot) await p.locator("#fpOut").screenshot({ path: previewShot });
   for (let k = 0; k < 80; k++) { const b = p.locator('#fpOut button[data-act="skip"]:not(.on):text-is("Acknowledge")').first(); if (!(await b.count())) break; await b.click(); await p.waitForTimeout(50); }
   if (!(await p.inputValue("#fpClient"))) await p.fill("#fpClient", "Flow Test Client");
   await p.click("#fpConfirm");

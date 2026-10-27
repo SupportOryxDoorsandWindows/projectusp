@@ -89,6 +89,15 @@ product lines — never treat one family's item as a match for another's:
   The job list gives them in metres ("2.63 m"), so Check-out takes off
   metres / 5.1 rounded UP to whole bars (`metresAsBars` in fp-core.js,
   `METRES_TO_BARS_CODES`). Only the codes in that list.
+- Check-out bars without a usable item code (2026-10-27): Smartscreen bars
+  ("Freedom SMB Housing - 60 (IS)") and Box Sections have no code on the job
+  list and were silently dropped; they now become unmatched rows with a
+  `checkNote` (`needsCheck` in `parseBars`) to Edit or Acknowledge. A combined
+  "310010/310013-..." line still takes off 310013 as before, plus a row to
+  check for 310010 that is NEVER matched by itself. Acknowledging every such
+  row deducts exactly what the old code did (tests/checkout-bars.test.js;
+  browser comparison on 4 job lists). Matching them automatically waits on the
+  stock team (SMB "Pair" counts, IS/OS split, whether Box Sections are stock).
 - Negative stock is allowed on Check-out (corrected by a later Check-in);
   the preview only has to show it. `applyCombinedStock` totals every line of
   the same Master row so duplicates still show the shortage.
