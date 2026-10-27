@@ -265,6 +265,7 @@
         <td>${esc(r.description)}
           ${r.pdfDetail ? `<div class="small muted">${esc(r.pdfDetail)}</div>` : ""}
           ${r.checkNote ? `<div class="small" style="color:#8A5A0F">${esc(r.checkNote)}</div>` : ""}
+          ${r.sourceNote ? `<div class="small muted">${esc(r.sourceNote)}</div>` : ""}
           ${variantNote}</td>
         <td class="num">${fmt(r.requiredQty)} ${esc(r.unit)}</td>
         <td class="num">${r.available != null ? fmt(r.available) : "—"}</td>

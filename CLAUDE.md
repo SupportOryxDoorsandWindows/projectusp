@@ -89,15 +89,18 @@ product lines — never treat one family's item as a match for another's:
   The job list gives them in metres ("2.63 m"), so Check-out takes off
   metres / 5.1 rounded UP to whole bars (`metresAsBars` in fp-core.js,
   `METRES_TO_BARS_CODES`). Only the codes in that list.
-- Check-out bars without a usable item code (2026-10-27): Smartscreen bars
-  ("Freedom SMB Housing - 60 (IS)") and Box Sections have no code on the job
-  list and were silently dropped; they now become unmatched rows with a
-  `checkNote` (`needsCheck` in `parseBars`) to Edit or Acknowledge. A combined
-  "310010/310013-..." line still takes off 310013 as before, plus a row to
-  check for 310010 that is NEVER matched by itself. Acknowledging every such
-  row deducts exactly what the old code did (tests/checkout-bars.test.js;
-  browser comparison on 4 job lists). Matching them automatically waits on the
-  stock team (SMB "Pair" counts, IS/OS split, whether Box Sections are stock).
+- Check-out bars without a usable item code (2026-10-27; they used to be
+  dropped without a word). Stock team's answers, in `parseBars`:
+  Smartscreen bars map by name (`SMB_BAR_CODES`: Housing 60/80 IS/OS =
+  210025/210022/210031/210028, Drawbar 210016, Track Fixed - Pair 210010,
+  Retainer - Pair 210007; "Pair" = the bars as printed). "310010/310013-..."
+  = half IS + half OS (2 bars = 1 + 1); an odd count becomes two rows to check
+  (`needsCheck`, never matched by themselves). Box Section 15x30 / 20x40
+  (`BOX_SECTIONS_FROM_STOCK`) = Master code `10002-<size>`; while that item
+  doesn't exist the row is unmatched with a note (`ifMissing`). Anything else
+  without a code (SMB Roller Tube, other Box Section sizes) = unmatched row to
+  Edit or Acknowledge. Matched rows show where they came from (`sourceNote`).
+  Tests: tests/checkout-bars.test.js; browser comparison on 4 job lists.
 - Negative stock is allowed on Check-out (corrected by a later Check-in);
   the preview only has to show it. `applyCombinedStock` totals every line of
   the same Master row so duplicates still show the shortage.

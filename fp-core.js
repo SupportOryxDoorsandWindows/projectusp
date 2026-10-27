@@ -259,6 +259,19 @@
     return out;
   }
 
+  // Bars FP Pro prints without an item code, and the Master item each one is
+  // (stock team, 2026-10-27). "Pair" bars count as printed: 2 bars = 2 bars.
+  const SMB_BAR_CODES = {
+    "FREEDOM SMB HOUSING - 60 (IS)": "210025", "FREEDOM SMB HOUSING - 60 (OS)": "210022",
+    "FREEDOM SMB HOUSING - 80 (IS)": "210031", "FREEDOM SMB HOUSING - 80 (OS)": "210028",
+    "FREEDOM SMB DRAWBAR": "210016",
+    "FREEDOM SMB TRACK FIXED - PAIR": "210010", "FREEDOM SMB RETAINER - PAIR": "210007",
+  };
+  // Box Sections taken off stock at Check-out (only these sizes, stock team
+  // 2026-10-27), as Master code 10002-<size> like the other Box Sections.
+  const BOX_SECTIONS_FROM_STOCK = new Set(["15x30", "20x40"]);
+  const NO_CODE_NOTE = "No item code on the job list — Edit to pick the Master Inventory item, or Acknowledge.";
+
   function parseBars(text) {
     const out = [];
     const re = /Bars:\s*(\d+)\s*x\s*(\d+)[\s\S]*?Description:\s*([^\n]+?)\s*Total length:\s*([\d.]+)\s*m/g;
@@ -268,21 +281,34 @@
       const barLenMm = parseInt(m[2], 10);
       const desc = m[3].trim();
       const totalLenM = parseFloat(m[4]);
+      const bar = (extra) => ({ kind: "bar", code: "", description: desc, bars, barLenMm, totalLenM, ...extra });
       const codeM = desc.match(/(\d+)\s*[-–]/);
       const code = codeM ? codeM[1] : "";
-      // A bar with no item code (Smartscreen "Freedom SMB Housing - 60 (IS)",
-      // "Box Section 20x40") used to be dropped without a word; it now shows
-      // as an unmatched row for staff to Edit or Acknowledge (2026-10-27).
-      out.push({ kind: "bar", code, description: desc, bars, barLenMm, totalLenM,
-        ...(code ? {} : { needsCheck: "No item code on the job list — Edit to pick the Master Inventory item, or Acknowledge." }) });
-      // "310010/310013-ZLS1 Housing 70 IS/OS": the line above takes 310013
-      // (as before); the first code gets its own row to check, never deducted
-      // by itself (how many bars of each is the stock team's call).
+      // "310010/310013-ZLS1 Housing 70 IS/OS": the bars are half IS, half OS
+      // (2 bars = 1 + 1, stock team 2026-10-27). An odd count can't be split,
+      // so both become rows to check, never taken off by themselves.
       const combo = desc.match(/^(\d+)\s*\/\s*(\d+)\s*[-–]/);
       if (combo && combo[2] === code) {
-        out.push({ kind: "bar", code: combo[1], description: desc, bars, barLenMm, totalLenM,
-          needsCheck: `The job list counts ${combo[1]} and ${combo[2]} together and only ${combo[2]} is taken off. Edit to set how many ${combo[1]} bars, or Acknowledge.` });
+        const from = `From "${desc}" — ${bars} × ${barLenMm} mm, half each`;
+        if (bars % 2 === 0) {
+          for (const c of [combo[1], combo[2]]) out.push(bar({ code: c, bars: bars / 2, totalLenM: totalLenM / 2, sourceNote: from }));
+        } else {
+          for (const c of [combo[1], combo[2]]) out.push(bar({ code: c, needsCheck: `The job list counts ${combo[1]} and ${combo[2]} together (${bars} bars), which can't be split evenly. Edit to set the bars, or Acknowledge.` }));
+        }
+        continue;
       }
+      if (code) { out.push(bar({ code })); continue; }
+      // No item code (2026-10-27: these used to be dropped without a word).
+      const smb = SMB_BAR_CODES[desc.toUpperCase().replace(/\s+/g, " ")];
+      if (smb) { out.push(bar({ code: smb, sourceNote: `From "${desc}" on the job list` })); continue; }
+      const box = desc.match(/^Box Section\s+(\d+)\s*x\s*(\d+)$/i);
+      const size = box && `${box[1]}x${box[2]}`;
+      if (size && BOX_SECTIONS_FROM_STOCK.has(size)) {
+        out.push(bar({ code: `10002-${size}`, sourceNote: `From "${desc}" on the job list`,
+          ifMissing: `${size} Box Section isn't in Master Inventory yet (code 10002-${size}). Add it, or Edit / Acknowledge.` }));
+        continue;
+      }
+      out.push(bar({ needsCheck: NO_CODE_NOTE }));
     }
     return out;
   }
@@ -840,7 +866,7 @@
           status: "unmatched", baseStatus: "unmatched",
           action: "pending", decided: false,
           itemId: null, hasVariants: false, editing: false,
-          checkNote: e.needsCheck || null,
+          checkNote: e.needsCheck || e.ifMissing || null,
         });
         continue;
       }
@@ -860,6 +886,7 @@
         status, baseStatus: status,
         action: "deduct",
         decided: true,
+        sourceNote: e.sourceNote || null,
         itemId: item.id,
         hasVariants: candidates.length > 1, editing: false,
       });
