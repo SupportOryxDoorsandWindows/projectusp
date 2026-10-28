@@ -143,6 +143,13 @@ async function readDownload(p, click) {
   check(panels === "29", "panels read: " + panels);
   await p.click('[data-act="to-settings"]');
   await p.waitForSelector("#fcLimit");
+  check(/950 \+ 830 \+ 20 = 1800 mm → 1800 mm roll, 0 mm spare/.test(await p.innerText("#fcAllowEx")), "allowance example at 20 mm");
+  await p.fill("#fcAllow", "30");
+  check(/950 \+ 830 \+ 30 = 1810 mm → no standard roll fits/.test(await p.innerText("#fcAllowEx")), "allowance example at 30 mm");
+  await p.fill("#fcAllow", "-5");
+  await p.click('[data-act="calculate"]');
+  check(/Allowance: a number of millimetres, 0 or more/.test(await p.innerText(".fc-note.bad")), "negative allowance rejected");
+  await p.fill("#fcAllow", "20");
   // Not limited first: compare the three plans.
   await p.uncheck("#fcLimit");
   await p.click('[data-act="compare"]');
@@ -174,11 +181,14 @@ async function readDownload(p, click) {
   check(db.plans.length === 1 && db.plans[0].plan.cuts.length > 0, "approved plan saved with its cuts");
   const exp = await readDownload(p, '[data-act="export"]');
   check(/v1\.xlsx$/.test(exp.name), "approved export: " + exp.name);
-  check(JSON.stringify(exp.wb.SheetNames) === JSON.stringify(["Summary", "Cut list", "Piece references", "Production batches", "Rolls"]), "sheets: " + exp.wb.SheetNames.join(", "));
+  check(JSON.stringify(exp.wb.SheetNames) === JSON.stringify(["Summary", "Cutting results", "Piece references", "Production batches", "Rolls"]), "sheets: " + exp.wb.SheetNames.join(", "));
   const pr = X.utils.sheet_to_json(exp.wb.Sheets["Piece references"], { header: 1 }).slice(3).filter((r) => r[0]);
   const ids = pr.map((r) => r[0]);
   check(ids.length === 29 && new Set(ids).size === 29 && pr.every((r) => r[8]), "every panel once, each with its cut (" + ids.length + ")");
-  const cutIds = X.utils.sheet_to_json(exp.wb.Sheets["Cut list"], { header: 1 }).slice(3).filter((r) => r[0]).flatMap((r) => String(r[5]).split(", "));
+  const res = X.utils.sheet_to_json(exp.wb.Sheets["Cutting results"], { header: 1 });
+  check(JSON.stringify(res[2]) === JSON.stringify(["Cut ID", "Level", "Ref #", "Location", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Spare width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"]), "the 14 result columns, in order");
+  check(res.slice(3).every((r) => r[8] === String(r[7]).split(" + ").slice(0, -1).reduce((a, w) => a + Number(w), 0) + 20 && /\+ 20 allowance$/.test(r[7]) && r[9] === r[4] - r[8] && r[8] <= r[4]), "used width = panels + 20 allowance, spare = stock - used");
+  const cutIds = res.slice(3).filter((r) => r[0]).flatMap((r) => String(r[13]).split(", "));
   check(cutIds.length === 29 && new Set(cutIds).size === 29, "cut list holds each panel once");
   const sum = X.utils.sheet_to_json(exp.wb.Sheets.Summary, { header: 1 });
   check(sum.some((r) => /^APPROVED · version 1/.test(String(r[1] || ""))), "summary says approved");

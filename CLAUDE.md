@@ -392,6 +392,24 @@ product lines — never treat one family's item as a match for another's:
   those rules are agreed.
 - Browser test: `tests/browser/film-cutting-flow.js --libs <folder>` (stand-in
   backend; writes a made-up job list unless `--xlsx`).
+- WIDTH ALLOWANCE (2026-10-29, "Feature_Development_Prompt.docx" + the
+  user's answers): used width = sum of panel widths + ONE allowance per cut
+  (default 20 mm, editable, `checkAllowance`: >= 0, whole mm or one
+  decimal, <= 500). It REPLACES the 1 mm blade (no gap added) and applies
+  to every cut, also a single panel (1000 + 20 -> 1200 roll). Roll widths
+  fixed `ROLLS` = 1000/1200/1500/1800; smallest that fits; a panel with
+  width + allowance > 1800 is listed as not cut. Cut length stays the
+  height in the file (2680; the prompt's 2660 sample row is layout only).
+  Each cut keeps `allowance` / `used` / `spare` (per-cut allowance possible
+  later). Results = the 14 columns in order (Cut ID, Level, Ref #,
+  Location, Stock width (mm), Cut length (mm), Pieces, Pattern (mm), Used
+  width incl. gaps, Spare width (mm), Stock area (m²), Panel area (m²),
+  Yield, Piece IDs), Cut IDs R001...; `verifyPlan` also flags a yield over
+  100%. Also reads a piece list (Piece, Level, Ref, Location, Type,
+  Width, Height, File row; IDs/rows kept; duplicates = error; the
+  workbook's "Piece references" with a Rule column is read once).
+  Real Etihad file at 20 mm: By level 573.73 m2 / 157 cuts, By location
+  598.15 / 187. "Testing mode" banner + "Start a new test".
 
 ## Checking a Check-in change (every time)
 
