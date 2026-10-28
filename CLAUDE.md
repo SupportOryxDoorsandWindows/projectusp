@@ -350,6 +350,49 @@ product lines — never treat one family's item as a match for another's:
   `tests/sql/delivery-notes-test-mode.test.sql` (after the real-notes SQL test),
   `tests/browser/delivery-notes-test-mode.js`.
 
+## Film Cutting (2026-10-28, Admins only, tab "Film Cutting")
+
+- `film-cutting.js` (loaded by boot.js; view `#v-film-cutting`, sidebar
+  `#navFilmCutting` in the Admin group, hidden unless `isAdmin()`; a
+  non-Admin who opens the view gets "Admins only" and no requests). Pure
+  parts `window.ORYX_CUT_CORE`, tested in `tests/film-cutting.test.js`
+  (calculation tests need `HIGHS_PATH=<node_modules/highs>`, else skipped).
+  Smart film (not mesh): job list = Excel like "SSF2026-225 ER AUH1.xlsx"
+  (Ref #, Location, unlabeled type column, Width, Height, Qty, LEVEL rows;
+  rows above the first LEVEL row are named after the level before it, with a
+  CHECK). Never touches stock; the upload is never changed.
+- Rules confirmed by the team 2026-10-28: 1 mm blade between panels, no edge
+  trim, rolls 1000/1200/1500/1800 x 50 m, only the same height shares a cut,
+  panels never turned, least film then fewest cuts, default By level,
+  production order 1000 -> 1200 -> 1800 -> 1500, heights as in the file
+  (2680), stay within the rolls on hand; a cut never runs across two rolls
+  (still to confirm: are short roll ends used / kept?).
+- Maths: exact integer programming with HiGHS (highs-js 1.15.3, MIT, from
+  jsDelivr, run in a Web Worker; script + wasm fetched by the page and
+  handed over via `instantiateWasm`). Per (scope group, height): "full"
+  patterns + covering. Rolls on hand: if the free plan doesn't go on the
+  rolls, one model for all groups with per-roll capacity (y = cuts of one
+  height on one roll), film only, 60 s limit; not proven -> says so with the
+  LP floor ("at most x m2 above the best possible"). `verifyPlan` re-checks
+  every plan before it is shown. Real file: By level 566.762 m2 / 154 cuts,
+  Whole job 557.180 / 138 (~25 s), By location 591.717 / 187, Level 5
+  218.933 / 64; both order blocks (4x1000, 2x1200, 2x1500, 2x1800 rolls)
+  589.84 m2, not proven, <= 2.22 m2 above best; one block = not enough film.
+  GLPK was tried first and was far weaker on the rolls-on-hand case.
+- SQL `supabase/sql/film_cutting.sql` (+ `film_cutting_rollback.sql`):
+  `film_cut_plans` (approved plans, version per job), `film_cut_log`
+  (imported / calculated / approved / exported). ONE access rule
+  `film_cut_access()` (= `is_admin()`) for both read policies and the
+  functions `approve_film_cut_plan(jsonb)` / `log_film_cut(...)`; no write
+  policies. Tested on local Postgres: `tests/sql/film-cutting.test.sql`.
+- Excel export (new file, xlsx-js-style): Summary (status, settings,
+  formulas, checks), Cut list, Piece references (every panel once, with its
+  cut), Production batches, Rolls. Draft exports say DRAFT / NOT APPROVED.
+- Phase 2 (production sequence, installation release) not built: only once
+  those rules are agreed.
+- Browser test: `tests/browser/film-cutting-flow.js --libs <folder>` (stand-in
+  backend; writes a made-up job list unless `--xlsx`).
+
 ## Checking a Check-in change (every time)
 
 - A fix made for one invoice must behave the same on ALL sample invoices.
