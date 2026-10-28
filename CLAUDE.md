@@ -204,6 +204,9 @@ product lines — never treat one family's item as a match for another's:
   by number of jobs. "Running out soon" = stock / daily use over min(60 days,
   time since the first recorded movement); red <= 14 days, amber <= 30.
   "Recent activity" was left out on purpose (the Activity page has it).
+- First page after sign-in (2026-10-29, user's request): the Dashboard
+  (`class="on"` on `#navDashboard` / `#v-dashboard` in index.html, was Ask
+  the bot); dashboard.js reads it at load if it is still the open view.
 - Rows that open the item panel carry `data-mi-row`, or item-timeline.js's
   outside-click rule closes the panel as soon as it opens.
 - Reading in pages of 1,000 (`.range`) must order by a unique column last

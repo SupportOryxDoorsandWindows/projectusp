@@ -1761,12 +1761,12 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
   </div>
   <nav class="side-nav" aria-label="Main">
     <div class="side-group">Products</div>
-    <button type="button" data-v="ask" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Ask the bot</button>
+    <button type="button" data-v="ask"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Ask the bot</button>
     <button type="button" data-v="check"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M9 5v14M15 9v6M12 9h6"/></svg>Opening checker</button>
     <button type="button" data-v="systems"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>Systems</button>
     <button type="button" data-v="matrix"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V5M9 20V9M14 20V12M19 20V7M3 20h18"/></svg>Comparison</button>
     <div class="side-group">Stock</div>
-    <button type="button" data-v="dashboard" id="navDashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard</button>
+    <button type="button" data-v="dashboard" id="navDashboard" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard</button>
     <button type="button" data-v="fp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Check-out</button>
     <button type="button" data-v="checkin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Check-in</button>
     <button type="button" data-v="delivery-notes" id="navDeliveryNotes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>Delivery Notes</button>
@@ -1787,7 +1787,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 <main>
 
 <!-- ============================= ASK (proposal page 1) ============================= -->
-<section id="v-ask" class="view on">
+<section id="v-ask" class="view">
   <div class="page-head">
     <div><h1>Ask the bot</h1><p>Answers come from the systems data. Sizes are nominal; the technical team confirms the final panels.</p></div>
     <div class="page-actions"><button class="btn-yellow" id="newChat" type="button">New chat</button></div>
@@ -2203,7 +2203,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
   <div class="page-body fc-body" id="fcBody"></div>
 </section>
 
-<section id="v-dashboard" class="view">
+<section id="v-dashboard" class="view on">
   <div class="page-head">
     <div><h1>Dashboard</h1><p>Your stock at a glance<span id="dbDate"></span></p></div>
     <div class="page-actions">

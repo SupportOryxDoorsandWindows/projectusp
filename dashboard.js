@@ -251,4 +251,8 @@
   if (nav) nav.addEventListener("click", () => { load(); });
   // Read again every time the Dashboard is opened (stock changes elsewhere).
   window.ORYX_DASH = { reload: load };
+  // The Dashboard is the first page after sign-in (user's request
+  // 2026-10-29): read it now unless the person already went elsewhere.
+  const view = $("#v-dashboard");
+  if (view && view.classList.contains("on")) load();
 })();
