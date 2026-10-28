@@ -3,11 +3,18 @@
  * -> calculate -> review -> approve (saved, with who/when) -> Excel export.
  * Never touches stock or Master Inventory; the uploaded file is never changed.
  *
- * Model (confirmed by the team, 2026-10-28):
+ * Model (confirmed by the team, 2026-10-28; allowance rule 2026-10-29 from
+ * "Feature_Development_Prompt.docx" + the user's answers):
  *  - a CUT is one length of film off one roll; its length = the panels'
- *    height (only panels of the SAME height share a cut), the panels sit
- *    side by side across the roll (their widths + 1 mm blade between them
- *    must fit the roll width minus the edge trim on each side);
+ *    height as in the file (only panels of the SAME height share a cut), the
+ *    panels sit side by side across the roll;
+ *  - Used width = sum of the panel widths + ONE allowance per cut (default
+ *    20 mm, editable; it covers the blade/gaps, nothing else is added; also
+ *    for a cut with one panel): 950 + 830 + 20 = 1800 fits the 1800 roll,
+ *    + 30 = 1810 does not. Spare width = roll width - used width. The
+ *    allowance is kept on every cut (c.allowance) so it could differ per
+ *    cut later;
+ *  - roll widths are fixed: 1000 / 1200 / 1500 / 1800 mm;
  *  - panels are never turned (no panel here is short enough to be turned);
  *  - film used = roll width x cut length; least film first, then fewest cuts;
  *  - scope: By level / Whole job / By location (panels of different groups
@@ -27,8 +34,7 @@
   const CALC_VERSION = "film-cut-1";
   const DEFAULTS = {
     rolls: [1000, 1200, 1500, 1800],
-    blade: 1,            // mm between panels on the same cut
-    trim: 0,             // mm lost at EACH edge of the roll
+    allowance: 20,       // mm per cut, on top of the panel widths
     scope: "level",      // "level" | "whole" | "location"
     level: "",           // "" = all levels
     order: [1000, 1200, 1800, 1500],
@@ -58,6 +64,10 @@
         else if (cols.ref == null && /^ref\b/.test(s)) cols.ref = c;
         else if (cols.location == null && /^(location|room)\b/.test(s)) cols.location = c;
         else if (cols.type == null && /^type\b/.test(s)) cols.type = c;
+        else if (cols.piece == null && /^piece( id)?$/.test(s)) cols.piece = c;
+        else if (cols.level == null && /^level$/.test(s)) cols.level = c;
+        else if (cols.srcRow == null && /^(file|source) row$/.test(s)) cols.srcRow = c;
+        else if (cols.rule == null && /^rule$/.test(s)) cols.rule = c;
       });
       if (cols.width != null && cols.height != null) {
         // The type column has no header in the Etihad file (column C,
@@ -75,6 +85,53 @@
   // SheetJS sheet_to_json(header: 1). Formulas are never worked out here.
   // Returns {pieces, issues, header, levels} -- pieces are numbered P001...
   // in file order; a row with Qty n gives n pieces.
+  // A list of pieces, one row per piece (e.g. the "Piece references" sheet
+  // of a cutting workbook, or this page's own export): Piece, Level, Ref,
+  // Location, Type, Width (mm), Height (mm), File row. The piece IDs and
+  // file rows are kept as they are. A "Rule" column (the workbook lists the
+  // same panels once per rule) -> the rows of the first rule only, after
+  // checking every rule lists the same panels.
+  function readPieceList(grid, header, sheetName, issues, add) {
+    const C = header.cols;
+    let rows = [];
+    for (let r = header.row + 1; r < grid.length; r++) {
+      const row = grid[r] || [];
+      if (row.every((v) => !txt(v))) continue;
+      rows.push({ r, row });
+    }
+    if (C.rule != null && rows.length) {
+      const rules = [...new Set(rows.map((x) => txt(x.row[C.rule])))];
+      if (rules.length > 1) {
+        const sig = (rule) => rows.filter((x) => txt(x.row[C.rule]) === rule).map((x) => [txt(x.row[C.piece]), txt(x.row[C.width]), txt(x.row[C.height])].join("|")).sort().join(";");
+        const first = sig(rules[0]);
+        if (rules.some((r) => sig(r) !== first)) {
+          add("ERROR", "The sheet lists different panels for each rule (" + rules.join(", ") + ")", "Upload a sheet with one row per panel.");
+          return [];
+        }
+        add("INFO", "The sheet lists the same " + rows.filter((x) => txt(x.row[C.rule]) === rules[0]).length + " panels once per rule (" + rules.join(", ") + ")", "Read once, from the \"" + rules[0] + "\" rows.");
+        rows = rows.filter((x) => txt(x.row[C.rule]) === rules[0]);
+      }
+    }
+    const pieces = [], seen = new Map();
+    for (const { r, row } of rows) {
+      const id = txt(row[C.piece]);
+      const w = num(row[C.width]), h = num(row[C.height]);
+      const where = "Row " + (r + 1) + (id ? " · " + id : "");
+      if (!id) { add("ERROR", where + ": no piece ID", "Every row needs its piece ID.", r); continue; }
+      if (w == null || h == null || Number.isNaN(w) || Number.isNaN(h)) { add("ERROR", where + ": width or height is missing or not a number", "Width \"" + txt(row[C.width]) + "\", height \"" + txt(row[C.height]) + "\". Fix the file and upload it again.", r); continue; }
+      if (w <= 0 || h <= 0) { add("ERROR", where + ": width or height is zero or below", w + " × " + h + " mm.", r); continue; }
+      if (w !== Math.round(w) || h !== Math.round(h)) { add("ERROR", where + ": size is not whole millimetres", w + " × " + h + " mm.", r); continue; }
+      if (seen.has(id)) { add("ERROR", where + ": piece ID " + id + " is used twice (also row " + seen.get(id) + ")", "Each piece needs its own ID.", r); continue; }
+      seen.set(id, r + 1);
+      const sr = C.srcRow != null ? num(row[C.srcRow]) : null;
+      pieces.push({
+        id, level: C.level != null ? txt(row[C.level]) : "", ref: C.ref != null ? txt(row[C.ref]) : "", loc: C.location != null ? txt(row[C.location]) : "",
+        type: C.type != null ? txt(row[C.type]) : "", w, h, row: r + 1, srcRow: Number.isFinite(sr) ? sr : null, of: "",
+      });
+    }
+    return pieces;
+  }
+
   function readSheet(grid, sheetName) {
     const issues = [];
     const add = (kind, title, text, row) => issues.push({ kind, title, text: text || "", row: row == null ? null : row + 1 });
@@ -88,6 +145,10 @@
       return { pieces: [], issues, header: null, levels: [] };
     }
     const C = header.cols;
+    if (C.piece != null) {
+      const pieces = readPieceList(grid, header, sheetName, issues, add);
+      return finishRead(pieces, issues, add, header, sheetName);
+    }
     if (C.qty == null) add("ERROR", "No \"Qty\" column found", "Every panel row needs a quantity.");
     const pieces = [];
     let level = null, levelRow = null, firstLevelSeen = null;
@@ -156,6 +217,11 @@
       add("CHECK", "Rows " + a + "–" + b + " have no LEVEL row above them: called \"" + name + "\"", firstLevelSeen ? "The first LEVEL row in the file is \"" + firstLevelSeen.name.toUpperCase() + "\"." : "The file has no LEVEL rows.");
     }
     for (const i of issues) i.title = i.title.replace("\u0001", "No level");
+    return finishRead(pieces, issues, add, header, sheetName);
+  }
+
+  // Checks for both layouts (planned as they are, never changed).
+  function finishRead(pieces, issues, add, header, sheetName) {
     // Things worth a second look (planned as they are).
     const seenLoc = new Set();
     for (const p of pieces) {
@@ -171,40 +237,57 @@
       const rows = [...new Set(curved.map((p) => p.row))];
       add("CHECK", curved.length + " curved panel" + (curved.length === 1 ? "" : "s") + " (row" + (rows.length === 1 ? " " : "s ") + rows.join(", ") + ")", "Planned as straight panels. Confirm the template before cutting.");
     }
-    return { pieces, issues, header: { row: header.row + 1, cols: C, sheet: sheetName || "" }, levels };
+    // Missing optional details: shown, never filled in.
+    const noLevel = pieces.filter((p) => !p.level), noRef = pieces.filter((p) => !p.ref), noLoc = pieces.filter((p) => !p.loc);
+    const ids = (ps) => ps.slice(0, 8).map((p) => p.id).join(", ") + (ps.length > 8 ? " …" : "");
+    if (noLevel.length) add("CHECK", noLevel.length + " panel" + (noLevel.length === 1 ? " has" : "s have") + " no level (" + ids(noLevel) + ")", "Planned together as \"No level\".");
+    if (noRef.length) add("CHECK", noRef.length + " panel" + (noRef.length === 1 ? " has" : "s have") + " no Ref # (" + ids(noRef) + ")", "Left blank.");
+    if (noLoc.length) add("CHECK", noLoc.length + " panel" + (noLoc.length === 1 ? " has" : "s have") + " no location (" + ids(noLoc) + ")", "Left blank.");
+    for (const p of pieces) if (!p.level) p.level = "No level";
+    const levels = [];
+    for (const p of pieces) if (!levels.includes(p.level)) levels.push(p.level);
+    return { pieces, issues, header: { row: header.row + 1, cols: header.cols, sheet: sheetName || "" }, levels };
   }
 
   // ---------------------------------------------------------------- planning
   const scopeKey = (scope, p) => scope === "whole" ? "Whole job" : scope === "location" ? p.level + " · Ref " + p.ref : p.level;
   const SCOPE_NAMES = { level: "By level", whole: "Whole job", location: "By location" };
 
-  // Width a set of panel widths takes across the roll (blade between panels).
-  const across = (widths, blade) => widths.reduce((a, b) => a + b, 0) + blade * Math.max(0, widths.length - 1);
-  const usable = (W, trim) => W - 2 * trim;
+  const ROLLS = [1000, 1200, 1500, 1800];
+  // Used width of a cut: the panel widths + the cut's allowance.
+  const sumW = (widths) => widths.reduce((a, b) => a + b, 0);
+  const across = (widths, allowance) => sumW(widths) + allowance;
+  // The allowance as typed: a number, 0 or more (whole mm or one decimal).
+  function checkAllowance(v) {
+    const t = String(v == null ? "" : v).trim();
+    if (!/^\d+(\.\d)?$/.test(t)) return { ok: false, error: "Allowance: a number of millimetres, 0 or more (e.g. 20, 25, 30)." };
+    const n = Number(t);
+    if (n > 500) return { ok: false, error: "Allowance: at most 500 mm." };
+    return { ok: true, value: n };
+  }
 
   // Every way of putting panels side by side (counts = {width: how many}),
   // kept only when nothing else fits beside them on the narrowest roll that
   // takes them (a "full" pattern). Covering the panels with full patterns
   // loses nothing: taking a panel out of a cut never makes it invalid.
-  // forRolls: which roll widths a pattern may be cut from ("narrowest" or
-  // "any" roll it fits -- the second is needed when stock is limited).
-  function patterns(counts, rolls, blade, trim, any) {
+  // A pattern fits roll R when its panel widths + allowance <= R. any: a
+  // pattern may also be cut from a wider roll (needed with stock).
+  function patterns(counts, rolls, allowance, any) {
     const ws = Object.keys(counts).map(Number).sort((a, b) => b - a);
     const rs = rolls.slice().sort((a, b) => a - b);
-    const maxU = usable(rs[rs.length - 1], trim);
+    const maxU = rs[rs.length - 1] - allowance;
     const out = [];
     const pat = {};
-    const rec = (i, used, n) => {
+    const rec = (i, fit, n) => {
       if (i === ws.length) {
         if (!n) return;
-        const fit = used - blade; // used includes one blade per panel
         for (const R of rs) {
-          const U = usable(R, trim);
+          const U = R - allowance;
           if (fit > U) continue;
           // full: no remaining panel would still fit on R
           let full = true;
           for (const w of ws) {
-            if ((pat[w] || 0) < counts[w] && fit + blade + w <= U) { full = false; break; }
+            if ((pat[w] || 0) < counts[w] && fit + w <= U) { full = false; break; }
           }
           if (full) out.push({ pat: Object.assign({}, pat), W: R, fit });
           if (!any) break;
@@ -213,8 +296,8 @@
       }
       const w = ws[i];
       for (let k = 0; k <= counts[w]; k++) {
-        const u = used + k * (w + blade);
-        if (u - blade > maxU && k > 0) break;
+        const u = fit + k * w;
+        if (u > maxU && k > 0) break;
         if (k) pat[w] = k; else delete pat[w];
         rec(i + 1, u, n + k);
       }
@@ -261,7 +344,7 @@
     const link = {}; // "h|W" -> pattern variables
     groups.forEach((g, gi) => {
       g.counts = countsOf(g.pieces);
-      g.pats = patterns(g.counts, S.rolls, S.blade, S.trim, !!stock);
+      g.pats = patterns(g.counts, S.rolls, S.allowance, !!stock);
       const cover = {};
       g.pats.forEach((p, i) => {
         if (stock && !(stock[p.W] && stock[p.W].length)) return;
@@ -332,7 +415,7 @@
           for (let k = 0; k < pt.pat[w] && pool[w] && pool[w].length; k++) ps.push(pool[w].shift());
         }
         if (!ps.length) continue;
-        cuts.push({ scope: g.scope, W: pt.W, L: g.h, pieces: ps });
+        cuts.push({ scope: g.scope, W: pt.W, L: g.h, allowance: S.allowance, pieces: ps });
       }
     });
     return cuts;
@@ -345,26 +428,19 @@
     return order;
   }
 
-  function levelShort(level) {
-    const m = /^Level\s+(\S+)/i.exec(level || "");
-    return m ? "L" + m[1] : "X";
-  }
-
   // Number the cuts and work out totals. Cuts are listed by batch (roll
   // width in production order), then scope group, then length.
   function finish(cuts, pieces, S, unfit) {
     const order = batchOrder(S);
     const scopeOrder = [];
     for (const p of pieces) { const k = scopeKey(S.scope, p); if (!scopeOrder.includes(k)) scopeOrder.push(k); }
-    cuts.sort((a, b) => order.indexOf(a.W) - order.indexOf(b.W) || scopeOrder.indexOf(a.scope) - scopeOrder.indexOf(b.scope) || b.L - a.L || across(b.pieces.map((p) => p.w), S.blade) - across(a.pieces.map((p) => p.w), S.blade) || (a.pieces[0].id < b.pieces[0].id ? -1 : 1));
-    const seq = {};
-    cuts.forEach((c) => {
-      const pre = S.scope === "whole" ? "W" : levelShort(c.pieces[0].level);
-      seq[pre] = (seq[pre] || 0) + 1;
-      c.id = pre + "-" + String(seq[pre]).padStart(3, "0");
+    cuts.sort((a, b) => order.indexOf(a.W) - order.indexOf(b.W) || scopeOrder.indexOf(a.scope) - scopeOrder.indexOf(b.scope) || b.L - a.L || sumW(b.pieces.map((p) => p.w)) - sumW(a.pieces.map((p) => p.w)) || (a.pieces[0].id < b.pieces[0].id ? -1 : 1));
+    cuts.forEach((c, i) => {
+      c.id = "R" + String(i + 1).padStart(3, "0");
       c.batch = order.indexOf(c.W) + 1;
-      c.across = across(c.pieces.map((p) => p.w), S.blade);
-      c.spare = usable(c.W, S.trim) - c.across;
+      if (c.allowance == null) c.allowance = S.allowance;
+      c.used = across(c.pieces.map((p) => p.w), c.allowance);
+      c.spare = c.W - c.used;
       c.film = c.W * c.L / 1e6;
       c.panels = c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6;
     });
@@ -440,16 +516,20 @@
     return { ok, rolls: out, short };
   }
 
-  // settings: {rolls, blade, trim, scope, level, order, timeLimit, stock}
+  // settings: {allowance, scope, level, order, timeLimit, stock} (roll widths
+  // are fixed: ROLLS; settings.rolls is only for tests)
   // stock: null (no limit) or {W: [metres of each roll, ...]}.
   // solve(lpText, {timeLimit, mip}) -> Promise<{status, values}> (fromHighs).
   async function plan(allPieces, settings, solve, onStep) {
     const S = Object.assign({}, DEFAULTS, settings || {});
-    S.rolls = (S.rolls || []).map(Number).filter((w) => w > 0).sort((a, b) => a - b);
+    S.rolls = (S.rolls || ROLLS).map(Number).filter((w) => w > 0).sort((a, b) => a - b);
     if (!S.rolls.length) throw new Error("No roll widths.");
     const step = onStep || (() => {});
     const pieces = S.level ? allPieces.filter((p) => p.level === S.level) : allPieces.slice();
-    const maxU = usable(S.rolls[S.rolls.length - 1], S.trim);
+    const chk = checkAllowance(S.allowance);
+    if (!chk.ok) throw new Error(chk.error);
+    S.allowance = chk.value;
+    const maxU = S.rolls[S.rolls.length - 1] - S.allowance;
     const unfit = pieces.filter((p) => p.w > maxU);
     const fitting = pieces.filter((p) => p.w <= maxU);
     const groups = groupsOf(fitting, S.scope);
@@ -506,7 +586,7 @@
 
   function meta(S, pieces, groups, how) {
     return {
-      settings: { rolls: S.rolls, blade: S.blade, trim: S.trim, scope: S.scope, level: S.level, order: batchOrder(S), stock: S.stock || null },
+      settings: { rolls: S.rolls, allowance: S.allowance, scope: S.scope, level: S.level, order: batchOrder(S), stock: S.stock || null },
       scopeName: SCOPE_NAMES[S.scope] || S.scope,
       pieceCount: pieces.length, groups: groups.length, how, version: CALC_VERSION,
     };
@@ -533,7 +613,11 @@
         seen.set(p.id, (seen.get(p.id) || 0) + 1);
         ws.push(o.w);
       }
-      if (across(ws, S.blade) > usable(c.W, S.trim)) problems.push(c.id + ": panels take " + across(ws, S.blade) + " mm, roll gives " + usable(c.W, S.trim) + " mm");
+      if (c.allowance !== S.allowance) problems.push(c.id + ": allowance " + c.allowance + " mm ≠ the setting " + S.allowance + " mm");
+      if (across(ws, c.allowance) > c.W) problems.push(c.id + ": panels + allowance take " + across(ws, c.allowance) + " mm, roll gives " + c.W + " mm");
+      if (c.used != null && c.used !== across(ws, c.allowance)) problems.push(c.id + ": used width " + c.used + " ≠ " + across(ws, c.allowance));
+      const film = c.W * c.L, panels = c.pieces.reduce((a, p) => a + p.w * p.h, 0);
+      if (!(film > 0) || panels > film) problems.push(c.id + ": panel area is more than the film (" + panels / 1e6 + " > " + film / 1e6 + " m²)");
     }
     const unfit = new Set((result.unfit || []).map((p) => p.id));
     for (const p of pieces) {
@@ -545,8 +629,10 @@
     return problems;
   }
 
-  // Short text for "Panels across": 900 + 890.
-  const pattern = (c) => c.pieces.map((p) => p.w).join(" + ");
+  // "Pattern (mm)": 950 + 830 + 20 allowance.
+  const allowanceOf = (c) => (c.allowance == null ? 0 : c.allowance);
+  const pattern = (c) => c.pieces.map((p) => p.w).join(" + ") + (allowanceOf(c) ? " + " + allowanceOf(c) + " allowance" : "");
+  const usedOf = (c) => (c.used != null ? c.used : c.across != null ? c.across : across(c.pieces.map((p) => p.w), allowanceOf(c)));
   const uniq = (xs) => [...new Set(xs.filter((x) => x !== "" && x != null))];
   const r3 = (x) => Math.round(x * 1000) / 1000;
 
@@ -564,12 +650,11 @@
       ["Calculator", result.version + (result.optimal ? " · least film proven" : " · best found in the time allowed, not proven the least film") +
         (result.floor ? " (at most " + r3(T.film - result.floor) + " m² above the best possible)" : "")],
       ["Roll widths (mm)", S.rolls.join(", ")],
-      ["Blade between panels (mm)", S.blade],
-      ["Edge trim, each side (mm)", S.trim],
+      ["Width allowance per cut (mm)", S.allowance != null ? S.allowance : "— (older plan: " + (S.blade != null ? S.blade + " mm blade between panels" : "?") + ")"],
       ["Production order (roll widths)", S.order.join(" → ")],
       [],
       ["Panels planned", T.pieces],
-      ["Panels not cut (wider than the widest roll)", (result.unfit || []).length],
+      ["Panels not cut (no standard roll fits width + allowance)", (result.unfit || []).length],
       ["Film cut from the rolls (m²)", r3(T.film)],
       ["Panel area (m²)", r3(T.panels)],
       ["Offcut (m²)", r3(T.offcut)],
@@ -578,8 +663,10 @@
       [],
       ["How it is worked out"],
       ["Film of a cut (m²) = roll width (m) × cut length (m); cut length = the panels' height"],
-      ["Panels on one cut: same height; widths + 1 blade between each must fit the roll width minus the edge trim on both sides"],
-      ["Film used (%) = panel area ÷ film; offcut = film − panel area"],
+      ["Used width incl. gaps (mm) = sum of the panel widths + the allowance (one per cut); it must not be more than the stock width"],
+      ["Stock width = the smallest standard roll (1000 / 1200 / 1500 / 1800 mm) the cut fits; spare width = stock width − used width"],
+      ["Stock area (m²) = stock width × cut length ÷ 1,000,000; panel area (m²) = sum of panel width × height ÷ 1,000,000 (the allowance is not panel area)"],
+      ["Yield = panel area ÷ stock area; film used (%) of the whole plan = all panel area ÷ all stock area"],
       ["Panels are never turned. Production sequence and installation release are not part of this version."],
     ];
     if (info.issues && info.issues.length) {
@@ -589,20 +676,22 @@
     if (result.stock) {
       summary.push([], ["Rolls on hand", result.stock.infeasible ? "NOT ENOUGH FILM — this plan does not fit the rolls entered" : result.stock.ok ? "The plan fits the rolls entered" : "Some cuts could not be placed on a roll"]);
     }
+    // The 14 columns of the cutting results (names and order as asked).
+    const uniqJ = (xs, many) => { const u = uniq(xs); return u.length > 1 && many ? many : u.join(", "); };
     const cuts = {
-      head: ["Cut", "Batch", "Roll width (mm)", "Cut length (mm)", "Panels across (mm)", "Piece IDs", "Level", "Ref", "Location", "Across used (mm)", "Spare (mm)", "Film (m²)", "Panels (m²)", "Used (%)", "Roll no."],
-      rows: result.cuts.map((c) => [c.id, c.batch, c.W, c.L, pattern(c), c.pieces.map((p) => p.id).join(", "),
-        uniq(c.pieces.map((p) => p.level)).join(", "), uniq(c.pieces.map((p) => p.ref)).join(", "), uniq(c.pieces.map((p) => p.loc)).join(", "),
-        c.across, c.spare, r3(c.film), r3(c.panels), Math.round(c.panels / c.film * 1000) / 10, c.roll == null ? "" : c.roll]),
+      head: ["Cut ID", "Level", "Ref #", "Location", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Spare width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"],
+      rows: result.cuts.map((c) => [c.id, uniqJ(c.pieces.map((p) => p.level), "Mixed"), uniq(c.pieces.map((p) => p.ref)).join(", "), uniqJ(c.pieces.map((p) => p.loc), "Multiple locations"),
+        c.W, c.L, c.pieces.length, pattern(c), usedOf(c), c.W - usedOf(c), r3(c.W * c.L / 1e6), r3(c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6),
+        c.pieces.reduce((a, p) => a + p.w * p.h, 0) / (c.W * c.L), c.pieces.map((p) => p.id).join(", ")]),
     };
     const byPiece = new Map();
     for (const c of result.cuts) for (const p of c.pieces) byPiece.set(p.id, { p, c });
     const all = [...byPiece.values()].map((x) => x.p).concat(result.unfit || []).sort((a, b) => (a.id < b.id ? -1 : 1));
     const pieces = {
-      head: ["Piece", "Level", "Ref", "Location", "Type", "Width (mm)", "Height (mm)", "File row", "Cut", "Batch", "Roll width (mm)"],
+      head: ["Piece", "Level", "Ref", "Location", "Type", "Width (mm)", "Height (mm)", "File row", "Cut ID", "Batch", "Stock width (mm)", "Roll no."],
       rows: all.map((p) => {
         const x = byPiece.get(p.id);
-        return [p.id, p.level, p.ref, p.loc, p.type || "", p.w, p.h, p.row, x ? x.c.id : "NOT CUT: wider than the widest roll", x ? x.c.batch : "", x ? x.c.W : ""];
+        return [p.id, p.level, p.ref, p.loc, p.type || "", p.w, p.h, p.srcRow != null ? p.srcRow : p.row, x ? x.c.id : "NOT CUT: no standard roll fits (width + allowance)", x ? x.c.batch : "", x ? x.c.W : "", x && x.c.roll != null ? x.c.roll : ""];
       }),
     };
     const batches = {
@@ -622,7 +711,7 @@
 
   window.ORYX_CUT_CORE = {
     CALC_VERSION, DEFAULTS, SCOPE_NAMES,
-    readSheet, findHeader, patterns, groupsOf, buildModel, lpText, fromHighs, plan, verifyPlan,
+    ROLLS, checkAllowance, readSheet, findHeader, patterns, groupsOf, buildModel, lpText, fromHighs, plan, verifyPlan,
     placeOnRolls, batchOrder, across, pattern, scopeKey, exportRows,
   };
 })();
@@ -756,7 +845,7 @@
   const ui = {
     step: "upload", busy: false, progress: "", msg: null,
     file: null, book: null, sheets: [], sheet: "", read: null, job: "", showAll: false,
-    settings: { scope: "level", level: "", rolls: "1000, 1200, 1500, 1800", blade: "1", trim: "0", order: "1000, 1200, 1800, 1500" },
+    settings: { scope: "level", level: "", allowance: "20", order: "1000, 1200, 1800, 1500" },
     limit: true, stock: {}, result: null, compare: null, approved: null, confirming: false, checked: false, note: "",
     saved: [], savedMsg: "", logWarn: "", cutsAll: false,
   };
@@ -806,7 +895,7 @@
 
   // ---------------------------------------------------------------- settings
   const numList = (s) => String(s || "").split(/[,;\s]+/).filter(Boolean).map(Number);
-  function rollWidths() { return [...new Set(numList(ui.settings.rolls))].filter((w) => w > 0).sort((a, b) => a - b); }
+  const rollWidths = () => C.ROLLS.slice();
   function stockRow(W) { return ui.stock[W] || (ui.stock[W] = { n: "", len: "50", part: "" }); }
   // {W: [metres, ...]} from the form; problems listed in errs.
   function stockOf(errs) {
@@ -825,17 +914,15 @@
     const errs = [];
     const S = ui.settings;
     const rolls = rollWidths();
-    if (!rolls.length || numList(S.rolls).some((w) => !(Number.isInteger(w) && w >= 100 && w <= 5000))) errs.push("Roll widths: whole millimetres between 100 and 5000, separated by commas.");
-    const blade = Number(S.blade), trim = Number(S.trim);
-    if (!(Number.isInteger(blade) && blade >= 0 && blade <= 20)) errs.push("Blade: whole millimetres, 0 to 20.");
-    if (!(Number.isInteger(trim) && trim >= 0 && trim <= 100)) errs.push("Edge trim: whole millimetres, 0 to 100.");
+    const al = C.checkAllowance(S.allowance);
+    if (!al.ok) errs.push(al.error);
     const order = numList(S.order).filter((w) => rolls.includes(w));
     let stock = null;
     if (ui.limit) {
       stock = stockOf(errs);
       if (!Object.values(stock).some((l) => l.length)) errs.push("Enter the rolls on hand, or untick \"Stay within the rolls on hand\".");
     }
-    return { errs, s: { scope: scope || S.scope, level: S.level, rolls, blade, trim, order, stock, timeLimit: 60 } };
+    return { errs, s: { scope: scope || S.scope, level: S.level, rolls, allowance: al.value, order, stock, timeLimit: 60 } };
   }
 
   async function calculate() {
@@ -848,7 +935,7 @@
       if (problems.length) throw new Error("the plan failed its own check (" + problems.slice(0, 3).join("; ") + "). Nothing is shown");
       ui.result = r; ui.approved = null; ui.confirming = false; ui.checked = false; ui.cutsAll = false;
       ui.step = "results";
-      log("calculated", null, { scope: s.scope, level: s.level || "all", film_m2: Math.round(r.totals.film * 1000) / 1000, cuts: r.totals.cuts, optimal: r.optimal, stock: !!s.stock, version: r.version });
+      log("calculated", null, { scope: s.scope, level: s.level || "all", allowance_mm: s.allowance, film_m2: Math.round(r.totals.film * 1000) / 1000, cuts: r.totals.cuts, optimal: r.optimal, stock: !!s.stock, version: r.version });
     } catch (e) {
       ui.msg = ["bad", "Couldn't calculate: " + (e.message || e) + "."];
     }
@@ -878,10 +965,10 @@
 
   // ---------------------------------------------------------------- approve / export
   function planJson(r) {
-    const piece = (p) => ({ id: p.id, level: p.level, ref: p.ref, loc: p.loc, type: p.type, w: p.w, h: p.h, row: p.row });
+    const piece = (p) => ({ id: p.id, level: p.level, ref: p.ref, loc: p.loc, type: p.type, w: p.w, h: p.h, row: p.row, srcRow: p.srcRow == null ? null : p.srcRow });
     return {
       scopeName: r.scopeName, version: r.version, optimal: r.optimal, floor: r.floor || null, settings: r.settings, totals: r.totals, byWidth: r.byWidth,
-      cuts: r.cuts.map((c) => ({ id: c.id, batch: c.batch, scope: c.scope, W: c.W, L: c.L, across: c.across, spare: c.spare, film: c.film, panels: c.panels, roll: c.roll == null ? null : c.roll, pieces: c.pieces.map(piece) })),
+      cuts: r.cuts.map((c) => ({ id: c.id, batch: c.batch, scope: c.scope, W: c.W, L: c.L, allowance: c.allowance, used: c.used, spare: c.spare, film: c.film, panels: c.panels, roll: c.roll == null ? null : c.roll, pieces: c.pieces.map(piece) })),
       unfit: (r.unfit || []).map(piece), stock: r.stock, how: r.how, pieceCount: r.pieceCount,
       issues: ui.read ? ui.read.issues : [],
     };
@@ -913,8 +1000,11 @@
   const S_TITLE = { font: { bold: true, sz: 14, color: { rgb: BRAND } } };
   const S_HEAD = { fill: { fgColor: { rgb: BRAND } }, font: { bold: true, color: { rgb: "FFFFFF" } }, alignment: { vertical: "center", wrapText: true } };
   const S_BOLD = { font: { bold: true, color: { rgb: BRAND } } };
-  function table(X, title, t, widths) {
+  function table(X, title, t, widths, formats) {
     const ws = X.utils.aoa_to_sheet([[title], [], t.head, ...t.rows]);
+    for (const [c, z] of Object.entries(formats || {})) {
+      for (let r = 0; r < t.rows.length; r++) { const cell = ws[X.utils.encode_cell({ r: r + 3, c: Number(c) })]; if (cell && typeof cell.v === "number") cell.z = z; }
+    }
     ws["!cols"] = widths.map((w) => ({ wch: w }));
     ws.A1.s = S_TITLE;
     for (let c = 0; c < t.head.length; c++) ws[X.utils.encode_cell({ r: 2, c })].s = S_HEAD;
@@ -933,8 +1023,8 @@
       ws.A1.s = S_TITLE;
       e.summary.forEach((row, i) => { if (row.length === 1 && ws["A" + (i + 3)]) ws["A" + (i + 3)].s = S_BOLD; });
       X.utils.book_append_sheet(wb, ws, "Summary");
-      X.utils.book_append_sheet(wb, table(X, "Cut list — " + result.scopeName, e.cuts, [9, 7, 10, 10, 22, 26, 12, 8, 22, 10, 9, 9, 9, 8, 8]), "Cut list");
-      X.utils.book_append_sheet(wb, table(X, "Piece references", e.pieces, [8, 10, 6, 24, 8, 10, 10, 8, 34, 7, 10]), "Piece references");
+      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 8, 24, 10, 10, 7, 26, 12, 10, 10, 10, 8, 26], { 10: "0.000", 11: "0.000", 12: "0.0%" }), "Cutting results");
+      X.utils.book_append_sheet(wb, table(X, "Piece references", e.pieces, [8, 10, 6, 24, 8, 10, 10, 8, 40, 7, 12, 8]), "Piece references");
       X.utils.book_append_sheet(wb, table(X, "Production batches (one roll width at a time)", e.batches, [8, 14, 8, 12, 12]), "Production batches");
       if (e.rolls) X.utils.book_append_sheet(wb, table(X, "Cuts on each roll", e.rolls, [14, 8, 14, 8, 12, 12, 60]), "Rolls");
       const scope = (result.scopeName || "").replace(/\s+/g, " ");
@@ -987,7 +1077,7 @@
     const r = ui.read;
     let h = `<div class="card fc-file">
       <div><div class="fc-file-name">${ui.file ? esc(ui.file.name) : "Choose the job list"}</div>
-        <div class="small muted">${ui.file ? "Read in your browser · never changed · nothing saved until you approve a plan" : "Excel file with Width (mm), Height (mm) and Qty columns, and LEVEL rows. Stock is never touched."}</div></div>
+        <div class="small muted">${ui.file ? "Read in your browser · never changed · nothing saved until you approve a plan" : "The job list (Width (mm), Height (mm), Qty and LEVEL rows) or a piece list (Piece, Level, Ref, Location, Type, Width (mm), Height (mm), File row)."}</div></div>
       <label class="btn-${ui.file ? "outline" : "yellow"} fc-file-btn" for="fcFile">${ui.file ? "Upload another file" : "Upload the job list"}</label>
       <input id="fcFile" type="file" accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden>
     </div>`;
@@ -1013,7 +1103,7 @@
       h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Panels read (${rows.length === r.pieces.length ? "all " + r.pieces.length : "first " + rows.length + " of " + r.pieces.length})</h2>
         <span class="small muted">Heights as in the file (measured + allowance)</span></div>
         <div class="fc-scroll"><table class="fc-table"><thead><tr><th>Piece</th><th>Level</th><th>Ref</th><th>Location</th><th>Type</th><th class="r">Width (mm)</th><th class="r">Height (mm)</th><th class="r">File row</th></tr></thead><tbody>
-        ${rows.map((p) => `<tr><td class="mono">${esc(p.id)}</td><td>${esc(p.level)}</td><td>${esc(p.ref)}</td><td>${esc(p.loc)}</td><td>${esc(p.type)}</td><td class="r">${p.w}</td><td class="r">${p.h}</td><td class="r muted">${p.row}${p.of ? " · " + esc(p.of) : ""}</td></tr>`).join("")}
+        ${rows.map((p) => `<tr><td class="mono">${esc(p.id)}</td><td>${esc(p.level)}</td><td>${esc(p.ref)}</td><td>${esc(p.loc)}</td><td>${esc(p.type)}</td><td class="r">${p.w}</td><td class="r">${p.h}</td><td class="r muted">${p.srcRow != null ? p.srcRow : p.row}${p.of ? " · " + esc(p.of) : ""}</td></tr>`).join("")}
         </tbody></table></div>
         ${r.pieces.length > rows.length ? `<div class="fc-more"><button type="button" class="btn-outline btn-sm" data-act="all-pieces">Show all ${r.pieces.length}</button></div>` : ""}</div>`;
       h += `<div class="fc-bar"><span>${errs ? "Fix the " + (errs === 1 ? "error" : errs + " errors") + " in the file and upload it again." : r.pieces.length + " panels ready. Nothing is saved until you approve a plan. Stock is never touched."}</span>
@@ -1034,6 +1124,15 @@
       </tbody></table></div>` : ""}</div>`;
   }
 
+  // "950 + 830 + 20 = 1800 mm → 1800 roll" with the allowance as typed.
+  function allowanceExample() {
+    const a = C.checkAllowance(ui.settings.allowance);
+    if (!a.ok) return `<span class="fc-bad">${esc(a.error)}</span>`;
+    const need = 950 + 830 + a.value;
+    const roll = C.ROLLS.find((W) => need <= W);
+    return `Each cut: panel widths + ${a.value} mm allowance must fit the roll. Example: 950 + 830 + ${a.value} = ${need} mm → ${roll ? roll + " mm roll, " + (roll - need) + " mm spare" : "<b>no standard roll fits</b> (widest is " + C.ROLLS[C.ROLLS.length - 1] + " mm)"}.`;
+  }
+
   function drawSettings() {
     const S = ui.settings, r = ui.read;
     const rolls = rollWidths();
@@ -1043,12 +1142,12 @@
       <p class="small muted fc-tight">${esc(scopes.find((x) => x[0] === S.scope)[2])}.</p>
       <div class="fc-form">
         <div class="fc-field"><label class="field-label" for="fcLevel">Levels</label><select id="fcLevel"><option value="">All levels (${r.pieces.length} panels)</option>${r.levels.map((l) => `<option value="${esc(l)}" ${S.level === l ? "selected" : ""}>${esc(l)} only (${r.pieces.filter((p) => p.level === l).length} panels)</option>`).join("")}</select></div>
-        <div class="fc-field"><label class="field-label" for="fcRolls">Roll widths (mm)</label><input id="fcRolls" value="${esc(S.rolls)}" inputmode="numeric"></div>
-        <div class="fc-field"><label class="field-label" for="fcBlade">Blade between panels (mm)</label><input id="fcBlade" value="${esc(S.blade)}" inputmode="numeric"></div>
-        <div class="fc-field"><label class="field-label" for="fcTrim">Edge trim, each side (mm)</label><input id="fcTrim" value="${esc(S.trim)}" inputmode="numeric"></div>
+        <div class="fc-field"><label class="field-label" for="fcAllow">Width allowance per cut (mm)</label><input id="fcAllow" value="${esc(S.allowance)}" inputmode="decimal" aria-describedby="fcAllowEx"></div>
+        <div class="fc-field"><span class="field-label">Standard roll widths (mm)</span><div class="fc-fixed">${C.ROLLS.join(" · ")}</div></div>
         <div class="fc-field"><label class="field-label" for="fcOrder">Production order (roll widths)</label><input id="fcOrder" value="${esc(S.order)}"></div>
       </div>
-      <p class="small muted fc-tight">Only panels of the same height share a cut. Panels are never turned.</p></div>`;
+      <p class="small fc-tight" id="fcAllowEx">${allowanceExample()}</p>
+      <p class="small muted fc-tight">Only panels of the same height share a cut. Panels are never turned. The smallest roll that fits is used.</p></div>`;
     const errs = [];
     const st = stockOf(errs);
     h += `<div class="card fc-tbl-card"><div class="fc-card-h"><div><h2 class="card-title">Film rolls in stock</h2>
@@ -1083,7 +1182,7 @@
     const r = ui.result, T = r.totals, S = r.settings;
     const infeasible = r.stock && r.stock.infeasible;
     let h = "";
-    h += `<div class="kpis fc-kpis">${tile("Film", m2(T.film), "cut from the rolls")}${tile("Panels", m2(T.panels), T.pieces + " panels on glass")}${tile("Film used", pct(T.yield), "offcuts " + m2(T.offcut))}${tile("Cuts", String(T.cuts), "across " + Object.keys(r.byWidth).length + " roll width" + (Object.keys(r.byWidth).length === 1 ? "" : "s"))}</div>`;
+    h += `<div class="kpis fc-kpis">${tile("Film", m2(T.film), "cut from the rolls")}${tile("Panels", m2(T.panels), T.pieces + " panels on glass")}${tile("Film used", pct(T.yield), "offcuts " + m2(T.offcut))}${tile("Cuts", String(T.cuts), "allowance " + S.allowance + " mm per cut")}</div>`;
     if (infeasible) {
       h += `<div class="fc-note bad"><b>Not enough film in the rolls entered.</b> ${r.stock.proven ? "No plan fits them." : "No plan that fits them was found in the time allowed."} Below is the plan with unlimited film; it needs:
         <ul>${Object.keys(r.stock.need).map((W) => `<li>${W} mm: ${m(r.stock.need[W])} (in stock ${m(r.stock.have[W] || 0)})</li>`).join("")}</ul>Add rolls, or change the plan, then calculate again. This plan can't be approved.</div>`;
@@ -1092,7 +1191,7 @@
     } else {
       h += `<div class="fc-note warn"><b>Best plan found in the time allowed — not proven the least film.</b>${r.floor ? " At most " + m2(Math.max(0, T.film - r.floor)) + " more than the best possible." : ""} Every one of the ${T.pieces} panels is in exactly one cut.</div>`;
     }
-    if (r.unfit.length) h += `<div class="fc-note bad"><b>${r.unfit.length} panel${r.unfit.length === 1 ? " is" : "s are"} wider than the widest roll and not cut:</b> ${r.unfit.map((p) => esc(p.id + " (" + p.w + " × " + p.h + " mm, row " + p.row + ")")).join(", ")}</div>`;
+    if (r.unfit.length) h += `<div class="fc-note bad"><b>${r.unfit.length} panel${r.unfit.length === 1 ? "" : "s"} can't go on any standard roll (width + ${esc(S.allowance)} mm allowance is more than ${C.ROLLS[C.ROLLS.length - 1]} mm), so ${r.unfit.length === 1 ? "it is" : "they are"} not cut:</b> ${r.unfit.map((p) => esc(p.id + " (" + p.w + " × " + p.h + " mm, file row " + (p.srcRow != null ? p.srcRow : p.row) + ")")).join(", ")}</div>`;
     // rolls on hand
     if (r.stock && !infeasible) {
       h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Rolls on hand</h2>${r.stock.ok ? `<span class="badge ok">Fits the rolls</span>` : `<span class="badge no">Doesn't fit</span>`}</div>
@@ -1109,14 +1208,14 @@
       ${Object.keys(r.byWidth).map(Number).sort((a, b) => r.byWidth[a].batch - r.byWidth[b].batch).map((W) => { const b = r.byWidth[W];
         return `<tr><td>${b.batch}</td><td><b>${W} mm</b></td><td class="r">${b.cuts}</td><td class="r">${m(b.metres)}</td><td class="r">${m2(b.film)}</td></tr>`; }).join("")}
       </tbody></table></div></div>`;
-    // cut list
+    // cut list: the 14 columns of the cutting workbook / prompt, in order
     const cuts = ui.cutsAll ? r.cuts : r.cuts.slice(0, 15);
-    h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Cut list (${cuts.length === r.cuts.length ? "all " + r.cuts.length : cuts.length + " of " + r.cuts.length + " shown"})</h2>
-      <span class="small muted">Each cut: one roll width, one length, the panels side by side</span></div>
-      <div class="fc-scroll"><table class="fc-table"><thead><tr><th>Cut</th><th>Batch</th><th>Roll</th><th class="r">Length (mm)</th><th>Panels across (mm)</th><th>Piece IDs</th><th>Rooms</th><th class="r">Spare (mm)</th><th class="r">Used</th>${r.stock ? "<th class=\"r\">Roll no.</th>" : ""}</tr></thead><tbody>
-      ${cuts.map((c) => `<tr><td class="mono">${esc(c.id)}</td><td>${c.batch}</td><td><b>${c.W}</b></td><td class="r">${c.L}</td><td>${esc(C.pattern(c))}</td>
-        <td class="mono">${esc(c.pieces.map((p) => p.id).join(", "))}</td><td>${esc([...new Set(c.pieces.map((p) => (S.scope === "level" || S.level ? "" : p.level + " ") + "Ref " + p.ref))].join(", "))}</td>
-        <td class="r">${c.spare}</td><td class="r">${Math.round(c.panels / c.film * 100)} %</td>${r.stock ? `<td class="r">${c.roll == null ? "—" : c.roll}</td>` : ""}</tr>`).join("")}
+    const e = C.exportRows(r, {});
+    const rowsById = new Map(e.cuts.rows.map((x) => [x[0], x]));
+    h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Cutting results (${cuts.length === r.cuts.length ? "all " + r.cuts.length : cuts.length + " of " + r.cuts.length + " shown"})</h2>
+      <span class="small muted">One row per cut · used width = panel widths + ${esc(S.allowance)} mm allowance</span></div>
+      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t, i) => `<th class="${i >= 4 && i <= 12 && i !== 7 ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
+      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => `<td class="${i === 0 || i === 13 ? "mono" : ""}${i >= 4 && i <= 12 && i !== 7 ? " r" : ""}">${esc(i === 10 || i === 11 ? v.toFixed(3) : i === 12 ? (Math.round(v * 1000) / 10).toFixed(1) + "%" : v)}</td>`).join("")}</tr>`; }).join("")}
       </tbody></table></div>
       ${r.cuts.length > cuts.length ? `<div class="fc-more"><button type="button" class="btn-outline btn-sm" data-act="all-cuts">Show all ${r.cuts.length} cuts</button></div>` : ""}</div>`;
     // approve + export
@@ -1134,7 +1233,8 @@
     }
     h += `<div class="fc-row">${!a && !infeasible && !ui.confirming ? `<button type="button" class="btn-yellow" data-act="approve" ${ui.checked && ui.job.trim() ? "" : "disabled"}>Approve plan</button>` : ""}
       <button type="button" class="btn-outline" data-act="export">${a ? "Export to Excel" : "Export draft to Excel"}</button>
-      <button type="button" class="btn-outline" data-act="to-settings">Change settings</button></div>
+      <button type="button" class="btn-outline" data-act="to-settings">Change settings</button>
+      <button type="button" class="btn-outline" data-act="reset">Start a new test</button></div>
       <p class="small muted fc-tight">Production sequence and installation release come later (Phase 2), once those rules are agreed.</p></div>`;
     return h;
   }
@@ -1145,8 +1245,8 @@
     drawing = true;
     try {
       const head = $("#fcHeadSub");
-      if (head) head.textContent = ui.read && ui.step !== "upload" ? (ui.job || "") + " · " + (ui.result && ui.step === "results" ? ui.result.scopeName + (ui.result.settings.level ? " · " + ui.result.settings.level : " · all levels") + " · " + ui.result.pieceCount + " panels · blade " + ui.result.settings.blade + " mm" : ui.read.pieces.length + " panels") : "Plan how smart film is cut from the rolls, with the least film";
-      let h = stepper();
+      if (head) head.textContent = ui.read && ui.step !== "upload" ? (ui.job || "") + " · " + (ui.result && ui.step === "results" ? ui.result.scopeName + (ui.result.settings.level ? " · " + ui.result.settings.level : " · all levels") + " · " + ui.result.pieceCount + " panels · allowance " + ui.result.settings.allowance + " mm" : ui.read.pieces.length + " panels") : "Plan how smart film is cut from the rolls, with the least film";
+      let h = `<div class="fc-test" role="note"><b>Testing mode</b> · prototype for Admins · nothing here changes stock, Check-in or Check-out</div>` + stepper();
       if (ui.msg) h += `<div class="fc-note ${ui.msg[0] === "ok" ? "ok" : "bad"}" role="status">${esc(ui.msg[1])}</div>`;
       if (ui.logWarn) h += `<div class="fc-note warn small">${esc(ui.logWarn)}</div>`;
       if (ui.busy) h += `<div class="fc-note busy" role="status"><span class="fc-spin" aria-hidden="true"></span>${esc(ui.progress || "Working…")}</div>`;
@@ -1164,6 +1264,11 @@
     const act = b.dataset.act;
     if (act === "to-settings") { ui.step = "settings"; ui.msg = null; render(); window.scrollTo(0, 0); }
     else if (act === "back-upload") { ui.step = "upload"; ui.msg = null; render(); }
+    else if (act === "reset") {
+      Object.assign(ui, { step: "upload", msg: null, file: null, book: null, sheets: [], sheet: "", read: null, job: "", showAll: false,
+        result: null, compare: null, approved: null, confirming: false, checked: false, note: "", cutsAll: false });
+      render(); window.scrollTo(0, 0);
+    }
     else if (act === "all-pieces") { ui.showAll = true; render(); }
     else if (act === "all-cuts") { ui.cutsAll = true; render(); }
     else if (act === "scope") { ui.settings.scope = b.dataset.scope; render(); }
@@ -1183,14 +1288,19 @@
     else if (t.id === "fcLevel") { ui.settings.level = t.value; ui.compare = null; render(); }
     else if (t.id === "fcLimit") { ui.limit = t.checked; ui.compare = null; render(); }
     else if (t.id === "fcChecked") { ui.checked = t.checked; render(); }
-    else if (t.id === "fcRolls") { ui.settings.rolls = t.value; ui.compare = null; render(); }
+
   });
   body.addEventListener("input", (e) => {
     const t = e.target;
     if (t.id === "fcJob") { ui.job = t.value; return; }
     if (t.id === "fcNote") { ui.note = t.value; return; }
-    const k = { fcBlade: "blade", fcTrim: "trim", fcOrder: "order" }[t.id];
-    if (k) { ui.settings[k] = t.value; ui.compare = null; return; }
+    if (t.id === "fcAllow") {
+      ui.settings.allowance = t.value; ui.compare = null;
+      const ex = body.querySelector("#fcAllowEx");
+      if (ex) ex.innerHTML = allowanceExample();
+      return;
+    }
+    if (t.id === "fcOrder") { ui.settings.order = t.value; ui.compare = null; return; }
     if (t.dataset.stock) {
       stockRow(Number(t.dataset.stock))[t.dataset.k] = t.value;
       ui.compare = null;
