@@ -168,6 +168,10 @@ async function readDownload(p, click) {
   const note = await p.innerText(".fc-note");
   check(/Least film possible/.test(note), "result says least film: " + note.slice(0, 80));
   check(await p.isVisible("text=Fits the rolls"), "fits the rolls on hand");
+  const rollsTile = await p.innerText(".fc-kpis .kpi:nth-child(5)");
+  check(/Rolls\s+\d+ of 5/.test(rollsTile), "rolls tile: " + rollsTile.replace(/\s+/g, " "));
+  const each = await p.innerText(".fc-tbl-card:has(h2:text-is('Rolls on hand'))");
+  check(!/0 cuts/.test(each) && /1 roll not used \(50\.0 m each\)/.test(each), "unused rolls in one line, not listed");
   check((await p.$$(".fc-approve [data-act=approve][disabled]")).length === 1, "Approve disabled until the plan is ticked as checked");
   if (shot) await p.screenshot({ path: shot, fullPage: true });
   // Draft export
