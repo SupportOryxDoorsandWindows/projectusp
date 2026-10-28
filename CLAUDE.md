@@ -356,7 +356,8 @@ product lines — never treat one family's item as a match for another's:
 ## Film Cutting (2026-10-28, Admins only, tab "Film Cutting")
 
 - `film-cutting.js` (loaded by boot.js; view `#v-film-cutting`, sidebar
-  `#navFilmCutting` in the Admin group, hidden unless `isAdmin()`; a
+  `#navFilmCutting` under its own sidebar heading "Optimization" above
+  Stock (2026-10-29; heading hidden with the button), hidden unless `isAdmin()`; a
   non-Admin who opens the view gets "Admins only" and no requests). Pure
   parts `window.ORYX_CUT_CORE`, tested in `tests/film-cutting.test.js`
   (calculation tests need `HIGHS_PATH=<node_modules/highs>`, else skipped).
