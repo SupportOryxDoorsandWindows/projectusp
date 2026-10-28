@@ -418,6 +418,9 @@ product lines — never treat one family's item as a match for another's:
   (`rollCount`: with rolls on hand "used of entered", per width; without,
   full 50 m rolls needed). "Each roll" lists only rolls with cuts, then
   "+ n rolls not used (50.0 m each)". The Excel Rolls sheet keeps every roll.
+  Results table + Excel got a "Roll no." column after Location (user's
+  request; now 15 columns): the roll of that width the cut is placed on
+  (`rollUse`: the rolls on hand, else full 50 m rolls).
 
 ## Checking a Check-in change (every time)
 

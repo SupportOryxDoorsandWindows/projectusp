@@ -459,33 +459,37 @@
     };
   }
 
-  // How many rolls the plan takes, per width. With rolls on hand: the rolls
-  // that get at least one cut, out of the rolls entered. Without: full rolls
-  // of rollLength metres it needs (cuts placed longest first, never across
-  // two rolls), out of nothing ("of" = null).
-  function rollCount(result, rollLength) {
-    const byWidth = {};
-    let used = 0, total = 0;
+  // Which roll each cut comes from: {rollOf: {cutId: n}, byWidth: {W:
+  // {used, of}}}. With rolls on hand: the rolls the plan placed them on (of =
+  // rolls entered). Without: full rolls of rollLength metres, cuts placed
+  // longest first, never across two rolls (of = null).
+  function rollUse(result, rollLength) {
+    const rollOf = {}, byWidth = {};
     if (result.stock && result.stock.rolls && !result.stock.infeasible) {
       for (const W of Object.keys(result.stock.rolls).map(Number).sort((a, b) => a - b)) {
         const list = result.stock.rolls[W];
-        const u = list.filter((r) => r.cuts.length).length;
         if (!list.length) continue;
-        byWidth[W] = { used: u, of: list.length };
-        used += u; total += list.length;
+        for (const r of list) for (const id of r.cuts) rollOf[id] = r.n;
+        byWidth[W] = { used: list.filter((r) => r.cuts.length).length, of: list.length };
       }
-      return { used, of: total, byWidth };
+      return { rollOf, byWidth };
     }
-    const widths = [...new Set(result.cuts.map((c) => c.W))].sort((a, b) => a - b);
-    for (const W of widths) {
+    for (const W of [...new Set(result.cuts.map((c) => c.W))].sort((a, b) => a - b)) {
       const cs = result.cuts.filter((c) => c.W === W);
-      const n = Math.max(1, Math.ceil(cs.reduce((a, c) => a + c.L, 0) / 1000 / rollLength) + cs.length); // enough rolls to place them
+      const n = Math.ceil(cs.reduce((a, c) => a + c.L, 0) / 1000 / rollLength) + cs.length; // enough rolls to place them
       const place = placeOnRolls(cs.map((c) => ({ id: c.id, W, L: c.L })), { [W]: new Array(n).fill(rollLength) });
-      const u = place.rolls[W].filter((r) => r.cuts.length).length;
-      byWidth[W] = { used: u, of: null };
-      used += u;
+      for (const r of place.rolls[W]) for (const id of r.cuts) rollOf[id] = r.n;
+      byWidth[W] = { used: place.rolls[W].filter((r) => r.cuts.length).length, of: null };
     }
-    return { used, of: null, byWidth };
+    return { rollOf, byWidth };
+  }
+  // How many rolls the plan takes: {used, of, byWidth} (of = null: no rolls
+  // on hand entered, full rollLength rolls needed).
+  function rollCount(result, rollLength) {
+    const { byWidth } = rollUse(result, rollLength);
+    let used = 0, of = 0;
+    for (const W in byWidth) { used += byWidth[W].used; of = byWidth[W].of == null ? null : of == null ? null : of + byWidth[W].of; }
+    return { used, of: Object.keys(byWidth).length ? of : null, byWidth };
   }
 
   // Place the cuts on the real rolls (rolls = {W: [metres, metres, ...]}):
@@ -706,10 +710,13 @@
       summary.push([], ["Rolls on hand", result.stock.infeasible ? "NOT ENOUGH FILM — this plan does not fit the rolls entered" : result.stock.ok ? "The plan fits the rolls entered" : "Some cuts could not be placed on a roll"]);
     }
     // The 14 columns of the cutting results (names and order as asked).
+    // Roll no.: the roll on hand the cut is placed on, else the 50 m roll.
+    const use = rollUse(result, 50);
     const uniqJ = (xs, many) => { const u = uniq(xs); return u.length > 1 && many ? many : u.join(", "); };
     const cuts = {
-      head: ["Cut ID", "Level", "Ref #", "Location", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Spare width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"],
+      head: ["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Spare width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"],
       rows: result.cuts.map((c) => [c.id, uniqJ(c.pieces.map((p) => p.level), "Mixed"), uniq(c.pieces.map((p) => p.ref)).join(", "), uniqJ(c.pieces.map((p) => p.loc), "Multiple locations"),
+        use.rollOf[c.id] != null ? use.rollOf[c.id] : "",
         c.W, c.L, c.pieces.length, pattern(c), usedOf(c), c.W - usedOf(c), r3(c.W * c.L / 1e6), r3(c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6),
         c.pieces.reduce((a, p) => a + p.w * p.h, 0) / (c.W * c.L), c.pieces.map((p) => p.id).join(", ")]),
     };
@@ -741,7 +748,7 @@
   window.ORYX_CUT_CORE = {
     CALC_VERSION, DEFAULTS, SCOPE_NAMES,
     ROLLS, checkAllowance, readSheet, findHeader, patterns, groupsOf, buildModel, lpText, fromHighs, plan, verifyPlan,
-    placeOnRolls, rollCount, batchOrder, across, pattern, scopeKey, exportRows,
+    placeOnRolls, rollUse, rollCount, batchOrder, across, pattern, scopeKey, exportRows,
   };
 })();
 
@@ -1052,7 +1059,7 @@
       ws.A1.s = S_TITLE;
       e.summary.forEach((row, i) => { if (row.length === 1 && ws["A" + (i + 3)]) ws["A" + (i + 3)].s = S_BOLD; });
       X.utils.book_append_sheet(wb, ws, "Summary");
-      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 8, 24, 10, 10, 7, 26, 12, 10, 10, 10, 8, 26], { 10: "0.000", 11: "0.000", 12: "0.0%" }), "Cutting results");
+      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 8, 24, 8, 10, 10, 7, 26, 12, 10, 10, 10, 8, 26], { 11: "0.000", 12: "0.000", 13: "0.0%" }), "Cutting results");
       X.utils.book_append_sheet(wb, table(X, "Piece references", e.pieces, [8, 10, 6, 24, 8, 10, 10, 8, 40, 7, 12, 8]), "Piece references");
       X.utils.book_append_sheet(wb, table(X, "Production batches (one roll width at a time)", e.batches, [8, 14, 8, 12, 12]), "Production batches");
       if (e.rolls) X.utils.book_append_sheet(wb, table(X, "Cuts on each roll", e.rolls, [14, 8, 14, 8, 12, 12, 60]), "Rolls");
@@ -1263,8 +1270,8 @@
     const rowsById = new Map(e.cuts.rows.map((x) => [x[0], x]));
     h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Cutting results (${cuts.length === r.cuts.length ? "all " + r.cuts.length : cuts.length + " of " + r.cuts.length + " shown"})</h2>
       <span class="small muted">One row per cut · used width = panel widths + ${esc(S.allowance)} mm allowance</span></div>
-      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t, i) => `<th class="${i >= 4 && i <= 12 && i !== 7 ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
-      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => `<td class="${i === 0 || i === 13 ? "mono" : ""}${i >= 4 && i <= 12 && i !== 7 ? " r" : ""}">${esc(i === 10 || i === 11 ? v.toFixed(3) : i === 12 ? (Math.round(v * 1000) / 10).toFixed(1) + "%" : v)}</td>`).join("")}</tr>`; }).join("")}
+      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t, i) => `<th class="${i >= 4 && i <= 13 && i !== 8 ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
+      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => `<td class="${i === 0 || i === 14 ? "mono" : ""}${i >= 4 && i <= 13 && i !== 8 ? " r" : ""}">${esc(i === 4 ? (v === "" ? "—" : "Roll " + v) : i === 11 || i === 12 ? v.toFixed(3) : i === 13 ? (Math.round(v * 1000) / 10).toFixed(1) + "%" : v)}</td>`).join("")}</tr>`; }).join("")}
       </tbody></table></div>
       ${r.cuts.length > cuts.length ? `<div class="fc-more"><button type="button" class="btn-outline btn-sm" data-act="all-cuts">Show all ${r.cuts.length} cuts</button></div>` : ""}</div>`;
     // approve + export
