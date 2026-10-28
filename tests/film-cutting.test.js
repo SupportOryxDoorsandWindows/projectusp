@@ -2,7 +2,7 @@
 // list, the cutting rules and the plan check. The rows below are made up in
 // the layout of the Etihad Rail smart-film list (SSF2026-225 ER AUH1.xlsx is
 // a customer file and is not committed). The rule (2026-10-29): used width
-// = panel widths + ONE allowance per cut (default 20 mm), never more than
+// = panel widths + ONE allowance per cut (default 30 mm, was 20), never more than
 // the roll (1000 / 1200 / 1500 / 1800). On that real file with 20 mm: By
 // level 573.73 m2 / 157 cuts, By location 598.15 / 187. (Before, with a
 // 1 mm blade between panels: 566.762 / 154 and 591.717 / 187, the same as
@@ -134,12 +134,13 @@ assert.deepEqual(plain(C.checkAllowance("0")), { ok: true, value: 0 });
 assert.deepEqual(plain(C.checkAllowance("22.5")), { ok: true, value: 22.5 });
 for (const bad of ["-5", "", "abc", "20mm", "1e2", "2.25", "600", null]) assert.equal(C.checkAllowance(bad).ok, false, "rejected: " + bad);
 assert.deepEqual(plain(C.ROLLS), [1000, 1200, 1500, 1800]);
+assert.equal(C.DEFAULTS.allowance, 30, "30 mm per cut to start with (2026-10-29)");
 // Production order: the team's order, other widths after.
 assert.deepEqual(plain(C.batchOrder({ rolls: [1000, 1200, 1500, 1800, 2000], order: [1000, 1200, 1800, 1500] })), [1000, 1200, 1800, 1500, 2000]);
 assert.deepEqual(plain(C.batchOrder({ rolls: [1000, 1500], order: [1000, 1200, 1800, 1500] })), [1000, 1500]);
 
 // LP text for HiGHS.
-const m = C.buildModel(C.groupsOf([{ id: "P1", level: "L", w: 950, h: 2000 }, { id: "P2", level: "L", w: 830, h: 2000 }], "level"), Object.assign({}, C.DEFAULTS), null);
+const m = C.buildModel(C.groupsOf([{ id: "P1", level: "L", w: 950, h: 2000 }, { id: "P2", level: "L", w: 830, h: 2000 }], "level"), Object.assign({}, C.DEFAULTS, { allowance: 20 }), null);
 const text = C.lpText(m);
 assert.equal(text, "Minimize\n film: 2000000001 x0_0 + 2000000001 x0_1 + 3600000001 x0_2\nSubject To\n d0_830: 1 x0_0 + 1 x0_2 >= 1\n d0_950: 1 x0_1 + 1 x0_2 >= 1\nGeneral\n x0_0 x0_1 x0_2\nEnd\n");
 assert.ok(!/General/.test(C.lpText(m, true)));
@@ -215,7 +216,7 @@ for (const where of [process.env.HIGHS_PATH, "highs"].filter(Boolean)) {
   assert.equal(r.settings.allowance, 30);
   await assert.rejects(C.plan(ex, { scope: "level", allowance: -5 }, solve), /Allowance/);
   // Too wide for any roll with the allowance: 1790 + 20 > 1800 -> reported.
-  r = await C.plan([P("P1", "Level 5", "1", 1790, 2680), P("P2", "Level 5", "1", 1780, 2680)], { scope: "level" }, solve);
+  r = await C.plan([P("P1", "Level 5", "1", 1790, 2680), P("P2", "Level 5", "1", 1780, 2680)], { scope: "level", allowance: 20 }, solve);
   assert.deepEqual(plain(r.unfit.map((p) => p.id)), ["P1"]); assert.deepEqual(plain(r.cuts.map((c) => [c.W, c.spare])), [[1800, 0]]);
   // Different heights never share a cut.
   r = await C.plan([P("P1", "Level 5", "1", 500, 2000), P("P2", "Level 5", "1", 400, 2100)], { scope: "level" }, solve);

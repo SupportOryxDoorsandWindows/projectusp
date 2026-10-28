@@ -9,7 +9,7 @@
  *    height as in the file (only panels of the SAME height share a cut), the
  *    panels sit side by side across the roll;
  *  - Used width = sum of the panel widths + ONE allowance per cut (default
- *    20 mm, editable; it covers the blade/gaps, nothing else is added; also
+ *    30 mm since 2026-10-29, was 20; editable; it covers the blade/gaps, nothing else is added; also
  *    for a cut with one panel): 950 + 830 + 20 = 1800 fits the 1800 roll,
  *    + 30 = 1810 does not. Spare width = roll width - used width. The
  *    allowance is kept on every cut (c.allowance) so it could differ per
@@ -34,7 +34,7 @@
   const CALC_VERSION = "film-cut-1";
   const DEFAULTS = {
     rolls: [1000, 1200, 1500, 1800],
-    allowance: 20,       // mm per cut, on top of the panel widths
+    allowance: 30,       // mm per cut, on top of the panel widths (30 since 2026-10-29)
     scope: "level",      // "level" | "whole" | "location"
     level: "",           // "" = all levels
     order: [1000, 1200, 1800, 1500],
@@ -881,7 +881,7 @@
   const ui = {
     step: "upload", busy: false, progress: "", msg: null,
     file: null, book: null, sheets: [], sheet: "", read: null, job: "", showAll: false,
-    settings: { scope: "level", level: "", allowance: "20", order: "1000, 1200, 1800, 1500" },
+    settings: { scope: "level", level: "", allowance: "30", order: "1000, 1200, 1800, 1500" },
     limit: true, stock: {}, result: null, compare: null, approved: null, confirming: false, checked: false, note: "",
     saved: [], savedMsg: "", logWarn: "", cutsAll: false,
   };
