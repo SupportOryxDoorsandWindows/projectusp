@@ -459,6 +459,35 @@
     };
   }
 
+  // How many rolls the plan takes, per width. With rolls on hand: the rolls
+  // that get at least one cut, out of the rolls entered. Without: full rolls
+  // of rollLength metres it needs (cuts placed longest first, never across
+  // two rolls), out of nothing ("of" = null).
+  function rollCount(result, rollLength) {
+    const byWidth = {};
+    let used = 0, total = 0;
+    if (result.stock && result.stock.rolls && !result.stock.infeasible) {
+      for (const W of Object.keys(result.stock.rolls).map(Number).sort((a, b) => a - b)) {
+        const list = result.stock.rolls[W];
+        const u = list.filter((r) => r.cuts.length).length;
+        if (!list.length) continue;
+        byWidth[W] = { used: u, of: list.length };
+        used += u; total += list.length;
+      }
+      return { used, of: total, byWidth };
+    }
+    const widths = [...new Set(result.cuts.map((c) => c.W))].sort((a, b) => a - b);
+    for (const W of widths) {
+      const cs = result.cuts.filter((c) => c.W === W);
+      const n = Math.max(1, Math.ceil(cs.reduce((a, c) => a + c.L, 0) / 1000 / rollLength) + cs.length); // enough rolls to place them
+      const place = placeOnRolls(cs.map((c) => ({ id: c.id, W, L: c.L })), { [W]: new Array(n).fill(rollLength) });
+      const u = place.rolls[W].filter((r) => r.cuts.length).length;
+      byWidth[W] = { used: u, of: null };
+      used += u;
+    }
+    return { used, of: null, byWidth };
+  }
+
   // Place the cuts on the real rolls (rolls = {W: [metres, metres, ...]}):
   // longest cut first, on the first roll it still fits; a cut never runs
   // across two rolls. Returns {ok, rolls: {W: [{start, left, cuts}]}, short}.
@@ -712,7 +741,7 @@
   window.ORYX_CUT_CORE = {
     CALC_VERSION, DEFAULTS, SCOPE_NAMES,
     ROLLS, checkAllowance, readSheet, findHeader, patterns, groupsOf, buildModel, lpText, fromHighs, plan, verifyPlan,
-    placeOnRolls, batchOrder, across, pattern, scopeKey, exportRows,
+    placeOnRolls, rollCount, batchOrder, across, pattern, scopeKey, exportRows,
   };
 })();
 
@@ -1178,11 +1207,31 @@
     return h;
   }
 
+  // Rolls the plan takes: "4 of 46" with rolls on hand, else full 50 m rolls.
+  function rollsTile(r) {
+    if (r.stock && r.stock.infeasible) return "";
+    const rc = C.rollCount(r, 50);
+    const per = Object.keys(rc.byWidth).map((W) => W + ": " + rc.byWidth[W].used + (rc.byWidth[W].of != null ? " of " + rc.byWidth[W].of : "")).join(" · ");
+    return rc.of != null ? tile("Rolls", rc.used + " of " + rc.of, per)
+      : tile("Rolls (50 m)", String(rc.used), per + " · no rolls on hand entered");
+  }
+  // Only the rolls the plan uses; the unused ones in one line.
+  function rollLines(rolls) {
+    if (!rolls.length) return "none";
+    const used = rolls.filter((x) => x.cuts.length), unused = rolls.filter((x) => !x.cuts.length);
+    const lines = used.map((x) => `Roll ${x.n} (${m(x.start)}): ${x.cuts.length} cut${x.cuts.length === 1 ? "" : "s"}, ${m(x.left)} left`);
+    if (unused.length) {
+      const same = unused.every((x) => x.start === unused[0].start);
+      lines.push(`<span class="muted">${used.length ? "+ " : ""}${unused.length} roll${unused.length === 1 ? "" : "s"} not used (${same ? m(unused[0].start) + " each" : m(unused.reduce((a, x) => a + x.start, 0)) + " in all"})</span>`);
+    }
+    return lines.join("<br>");
+  }
+
   function drawResults() {
     const r = ui.result, T = r.totals, S = r.settings;
     const infeasible = r.stock && r.stock.infeasible;
     let h = "";
-    h += `<div class="kpis fc-kpis">${tile("Film", m2(T.film), "cut from the rolls")}${tile("Panels", m2(T.panels), T.pieces + " panels on glass")}${tile("Film used", pct(T.yield), "offcuts " + m2(T.offcut))}${tile("Cuts", String(T.cuts), "allowance " + S.allowance + " mm per cut")}</div>`;
+    h += `<div class="kpis fc-kpis">${tile("Film", m2(T.film), "cut from the rolls")}${tile("Panels", m2(T.panels), T.pieces + " panels on glass")}${tile("Film used", pct(T.yield), "offcuts " + m2(T.offcut))}${tile("Cuts", String(T.cuts), "allowance " + S.allowance + " mm per cut")}${rollsTile(r)}</div>`;
     if (infeasible) {
       h += `<div class="fc-note bad"><b>Not enough film in the rolls entered.</b> ${r.stock.proven ? "No plan fits them." : "No plan that fits them was found in the time allowed."} Below is the plan with unlimited film; it needs:
         <ul>${Object.keys(r.stock.need).map((W) => `<li>${W} mm: ${m(r.stock.need[W])} (in stock ${m(r.stock.have[W] || 0)})</li>`).join("")}</ul>Add rolls, or change the plan, then calculate again. This plan can't be approved.</div>`;
@@ -1198,7 +1247,7 @@
         <div class="fc-scroll"><table class="fc-table"><thead><tr><th>Roll width</th><th class="r">In stock</th><th class="r">Plan uses</th><th>Each roll</th></tr></thead><tbody>
         ${Object.keys(r.stock.rolls).map(Number).sort((a, b) => a - b).map((W) => { const rolls = r.stock.rolls[W]; const use = r.byWidth[W] ? r.byWidth[W].metres : 0;
           return `<tr><td><b>${W} mm</b></td><td class="r">${m(r.stock.have[W] || 0)}</td><td class="r">${m(use)}</td>
-          <td class="small">${rolls.length ? rolls.map((x) => `Roll ${x.n} (${m(x.start)}): ${x.cuts.length} cut${x.cuts.length === 1 ? "" : "s"}, ${m(x.left)} left`).join("<br>") : "none"}</td></tr>`; }).join("")}
+          <td class="small">${rollLines(rolls)}</td></tr>`; }).join("")}
         </tbody></table></div>
         ${r.stock.ok ? "" : `<p class="small fc-warn fc-pad">Short: ${Object.keys(r.stock.short).map((W) => W + " mm " + m(r.stock.short[W])).join(", ")}.</p>`}</div>`;
     }

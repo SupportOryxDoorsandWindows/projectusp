@@ -261,6 +261,11 @@ for (const where of [process.env.HIGHS_PATH, "highs"].filter(Boolean)) {
 
   // Rolls on hand. Three 950 x 2680 panels: unlimited = three 1000 cuts.
   const three = [1, 2, 3].map((i) => P("P" + i, "Level 5", "1", 950, 2680));
+  r = await C.plan(three, { scope: "level", rolls: [1000, 1200] }, solve);
+  assert.deepEqual(plain(C.rollCount(r, 50)), { used: 1, of: null, byWidth: { 1000: { used: 1, of: null } } }, "3 x 2.68 m: one 50 m roll");
+  assert.deepEqual(plain(C.rollCount(r, 5)), { used: 3, of: null, byWidth: { 1000: { used: 3, of: null } } }, "5 m rolls hold one 2.68 m cut each");
+  r = await C.plan(three, { scope: "level", rolls: [1000, 1200], stock: { 1000: [10, 50, 50], 1200: [] } }, solve);
+  assert.deepEqual(plain(C.rollCount(r, 50)), { used: 1, of: 3, byWidth: { 1000: { used: 1, of: 3 } } }, "1 of the 3 rolls on hand");
   r = await C.plan(three, { scope: "level", rolls: [1000, 1200], stock: { 1000: [10], 1200: [] } }, solve);
   assert.equal(r.stock.ok, true); assert.deepEqual(plain(r.cuts.map((c) => c.roll)), [1, 1, 1]);
   assert.ok(Math.abs(r.stock.rolls[1000][0].left - (10 - 3 * 2.68)) < 1e-9);

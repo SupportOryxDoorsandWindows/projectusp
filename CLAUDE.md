@@ -414,6 +414,10 @@ product lines — never treat one family's item as a match for another's:
   workbook's "Piece references" with a Rule column is read once).
   Real Etihad file at 20 mm: By level 573.73 m2 / 157 cuts, By location
   598.15 / 187. "Testing mode" banner + "Start a new test".
+- Rolls (2026-10-29, user's request): results show a 5th tile "Rolls"
+  (`rollCount`: with rolls on hand "used of entered", per width; without,
+  full 50 m rolls needed). "Each roll" lists only rolls with cuts, then
+  "+ n rolls not used (50.0 m each)". The Excel Rolls sheet keeps every roll.
 
 ## Checking a Check-in change (every time)
 
