@@ -16,6 +16,10 @@
  * ORYX_DN.afterCheckout() only AFTER its Check-out was saved, and the server
  * (supabase/sql/delivery_notes.sql) only accepts a job list that is on a
  * saved Check-out, one note of each kind per job list.
+ * Admin TEST mode (2026-10-28, supabase/sql/delivery_notes_test_mode.sql):
+ * "Test with a job list" prepares notes from ANY job list without a Check-out
+ * (no stock), marked TEST, numbered TEST-0001, Admins only, deletable; they
+ * appear only under the "Test notes" filter.
  * Pure parts (window.ORYX_DN_CORE) are tested in tests/delivery-notes.test.js.
  */
 (function (root) {
@@ -222,13 +226,15 @@
     .dn-sheet td{border-bottom:1px solid #D5DADD;padding:7px 6px;white-space:pre-line;vertical-align:top}
     .dn-sheet .legal{text-align:center;font-weight:700;font-size:10.5px;line-height:1.6}
     .dn-sheet .sign{display:flex;flex-direction:column;gap:12px}
-    .dn-sheet .stamp{align-self:flex-start;border:1.5px solid #8A5A0F;color:#8A5A0F;padding:3px 10px;font-weight:700;letter-spacing:.08em;font-size:11px}`;
+    .dn-sheet .stamp{align-self:flex-start;border:1.5px solid #8A5A0F;color:#8A5A0F;padding:3px 10px;font-weight:700;letter-spacing:.08em;font-size:11px}
+    .dn-sheet .test{border:2px dashed #A23A33;color:#A23A33;text-align:center;padding:8px;font-weight:700;letter-spacing:.08em;font-size:14px}`;
 
   // The printed note, in the layout of the current delivery notes (DN-5470 etc.).
   function sheetHtml(n) {
     const pc = n.kind === "powder_coating";
     const comments = (l) => (pc ? n.ral_code || "" : l.comments || "");
     return `<div class="dn-sheet">
+      ${n.is_test ? `<div class="test">TEST – NOT A REAL DELIVERY NOTE</div>` : ""}
       <div class="sh"><div class="co">ORYX DOOR SYSTEMS LLC</div><div><h3>DELIVERY NOTE</h3><div class="kind">${pc ? "POWDER COATING" : "FINISHED GOODS"}</div></div></div>
       <div class="hdr">
         <div><span>Delivery Address:</span><b>${esc(n.delivery_address || "")}</b></div><div><span>Company Name:</span><b>Oryx Doors and Windows</b></div>
@@ -276,6 +282,7 @@
     if (/line_description_invalid/.test(m)) return "Every line needs a description.";
     if (/date_invalid/.test(m)) return "The delivery date isn't a valid date.";
     if (/not_confirmed/.test(m)) return "Only a confirmed note can be corrected.";
+    if (/not_a_test_note/.test(m)) return "Only test notes can be deleted.";
     return "It didn't work: " + (m || "unknown error") + ". Try again; if it keeps failing, tell the admin.";
   }
 
@@ -310,11 +317,12 @@
         lines: built.fgLines.filter((l) => l.qty > 0).map((l) => ({ description: l.description, qty: l.qty, comments: l.comments })), flags: built.flags.filter((f) => /finished items/i.test(f)) },
     ].filter((n) => n.lines.length);
   }
-  async function prepareFrom(job, hash, fileName, jobNumber, client) {
+  // test = Admin test mode: any job list, no Check-out, marked TEST.
+  async function prepareFrom(job, hash, fileName, jobNumber, client, test) {
     const built = C.buildNotes(job);
     const notes = notesPayload(built);
     if (!notes.length) return { created: 0, existing: 0, nothing: true };
-    const { data, error } = await sb.rpc("prepare_delivery_notes", {
+    const { data, error } = await sb.rpc(test ? "prepare_delivery_test_notes" : "prepare_delivery_notes", {
       p_hash: hash, p_job: jobNumber || job.job, p_client: client || job.client, p_doc_name: fileName, p_notes: notes,
     });
     if (error) throw error;
@@ -355,10 +363,14 @@
   const ui = { notes: [], selected: null, draft: null, history: [], canCorrect: false, correcting: false, busy: false, msg: null, filter: "open", search: "", focusHash: null, prepMsg: null };
   const status = (n) => (n.dn_number ? (n.corrected_count > 0 ? "corrected" : "confirmed") : n.kind === "powder_coating" && !String(n.ral_code || "").trim() ? "review" : "prepared");
   const pill = (s) => `<span class="badge ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
+  const testBadge = (n) => (n.is_test ? ` <span class="badge no" title="Test note: no stock involved, not a real delivery note">TEST</span>` : "");
+  const isAdmin = () => !!(AUTH.isAdmin && AUTH.isAdmin());
 
   async function load() {
     const list = $("#dnList");
     if (!list) return;
+    const tl = $("#dnTestLabel");
+    if (tl) tl.hidden = !isAdmin();
     list.innerHTML = `<p class="small muted">Loading…</p>`;
     const [notes, corr] = await Promise.all([
       sb.from("delivery_notes").select("*").order("created_at", { ascending: false }).order("kind").order("id").limit(500),
@@ -369,13 +381,14 @@
     ui.canCorrect = !corr.error && corr.data === true;
     if (ui.focusHash) {
       const first = ui.notes.find((n) => n.source_document_hash === ui.focusHash);
-      if (first) { ui.selected = first.id; ui.filter = "all"; }
+      if (first) { ui.selected = first.id; ui.filter = first.is_test ? "test" : "all"; }
       ui.focusHash = null;
     }
     if (ui.selected) await selectNote(ui.selected, true); else render();
   }
   async function selectNote(id, keepMsg) {
     if (!keepMsg || id !== ui.selected) ui.msg = null;
+    ui.confirmDelete = false;
     ui.selected = id; ui.correcting = false;
     const n = ui.notes.find((x) => x.id === id);
     ui.draft = n ? JSON.parse(JSON.stringify(n)) : null;
@@ -389,6 +402,8 @@
     const q = ui.search.trim().toLowerCase();
     return ui.notes.filter((n) => {
       const s = status(n);
+      // Test notes (Admins only) never mix with the real ones.
+      if ((ui.filter === "test") !== !!n.is_test) return false;
       if (ui.filter === "open" && (s === "confirmed" || s === "corrected")) return false;
       if (ui.filter === "done" && !(s === "confirmed" || s === "corrected")) return false;
       if (!q) return true;
@@ -409,17 +424,25 @@
     const list = $("#dnList"), detail = $("#dnDetail");
     if (!list) return;
     const rows = visible();
-    const counts = { open: 0, done: 0 };
-    ui.notes.forEach((n) => { const s = status(n); if (s === "confirmed" || s === "corrected") counts.done++; else counts.open++; });
-    $("#dnFilters").innerHTML = [["open", `Waiting (${counts.open})`], ["done", `Confirmed (${counts.done})`], ["all", `All (${ui.notes.length})`]]
+    const counts = { open: 0, done: 0, real: 0, test: 0 };
+    ui.notes.forEach((n) => {
+      if (n.is_test) { counts.test++; return; }
+      counts.real++;
+      const s = status(n); if (s === "confirmed" || s === "corrected") counts.done++; else counts.open++;
+    });
+    const filters = [["open", `Waiting (${counts.open})`], ["done", `Confirmed (${counts.done})`], ["all", `All (${counts.real})`]];
+    if (isAdmin()) filters.push(["test", `Test notes (${counts.test})`]);
+    $("#dnFilters").innerHTML = filters
       .map(([k, t]) => `<button type="button" class="ghost${ui.filter === k ? " on" : ""}" data-dn-filter="${k}" aria-pressed="${ui.filter === k}">${t}</button>`).join("");
-    list.innerHTML = !ui.notes.length
+    list.innerHTML = ui.filter === "test" && !rows.length
+      ? `<div class="card dn-empty">No test notes. Use "Test with a job list" above: any FP Pro job list, no Check-out and no stock involved.</div>`
+      : !ui.notes.length
       ? `<div class="card dn-empty">No delivery notes yet. They're prepared automatically when a job list is checked out. For a job that was checked out before this page existed, use "Prepare from a job list" above.</div>`
       : !rows.length ? `<div class="card dn-empty">Nothing here. Try another filter.</div>`
       : `<div class="card dn-list-card"><div class="dn-scroll"><table class="fp-table dn-table">
           <thead><tr><th>Note</th><th>Order</th><th>Customer</th><th>Status</th><th>DN No</th><th>Delivery</th><th>Prepared</th></tr></thead><tbody>
           ${rows.map((n) => `<tr data-dn-id="${esc(n.id)}" tabindex="0" class="${ui.selected === n.id ? "sel" : ""}">
-            <td><b>${KIND[n.kind]}</b></td><td>${esc(n.job_number)}</td><td>${esc(n.customer_ref || n.client)}</td><td>${pill(status(n))}</td>
+            <td><b>${KIND[n.kind]}</b>${testBadge(n)}</td><td>${esc(n.job_number)}</td><td>${esc(n.customer_ref || n.client)}</td><td>${pill(status(n))}</td>
             <td>${esc(n.dn_number || "—")}</td><td>${esc([C.fmtDate(n.delivery_date), n.delivered_by].filter(Boolean).join(" · ") || "—")}</td><td class="small muted">${esc(when(n.created_at))}</td></tr>`).join("")}
           </tbody></table></div></div>`;
     detail.innerHTML = ui.draft ? detailHtml(ui.draft) : "";
@@ -435,10 +458,11 @@
       <input id="${id}" data-f="${key}" type="${type || "text"}" value="${esc(n[key] || "")}" ${dis} class="${need && !String(n[key] || "").trim() ? "dn-need" : ""}"></div>`;
     let h = `<div class="card dn-detail">
       <div class="dn-detail-h">
-        <div><h2 class="card-title" style="margin:0">${KIND[n.kind]} · Order ${esc(n.job_number)}</h2>
+        <div><h2 class="card-title" style="margin:0">${KIND[n.kind]} · Order ${esc(n.job_number)}${testBadge(n)}</h2>
           <div class="small muted">${esc(n.client || "")} · from ${esc(n.source_document_name || "job list")}${n.created_by_name ? " · prepared by " + esc(n.created_by_name) : ""}</div></div>
         <div class="dn-detail-st">${pill(st)}${saved.dn_number ? `<b>${esc(saved.dn_number)}</b>` : ""}</div>
       </div>`;
+    if (n.is_test) h += `<div class="dn-msg bad">Test note: made from the job list only, no Check-out and no stock involved. It is numbered TEST-…, seen only by Admins, and can be deleted.</div>`;
     if (!saved.dn_number && (n.flags || []).length) h += `<ul class="dn-flags">${n.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`;
     if (ui.msg) h += `<div class="dn-msg ${ui.msg.kind}" role="status">${esc(ui.msg.text)}</div>`;
     h += `<div class="dn-form">
@@ -475,6 +499,11 @@
     } else {
       h += `<div class="dn-row dn-actions"><button type="button" class="btn-dark" id="dnPrint">Print</button>
         ${ui.canCorrect ? `<button type="button" class="btn-outline" id="dnStartCorr">Correct this note</button>` : `<span class="small muted">Confirmed notes are locked. Only Admins and named people (Renato) can correct them.</span>`}</div>`;
+    }
+    if (n.is_test && isAdmin() && !ui.correcting) {
+      h += ui.confirmDelete
+        ? `<div class="dn-row dn-delete"><span>Delete this test note for good?</span><button type="button" class="btn-outline btn-sm" id="dnDeleteYes" ${ui.busy ? "disabled" : ""}>Delete</button><button type="button" class="btn-outline btn-sm" id="dnDeleteNo">Keep</button></div>`
+        : `<div class="dn-row"><button type="button" class="btn-outline btn-sm" id="dnDeleteAsk">Delete test note</button></div>`;
     }
     if (ui.history.length) {
       h += `<div><h3 class="dn-h3">History</h3><ul class="dn-history">${ui.history.map((x) => `<li><b>${esc(when(x.created_at))}</b> · ${esc(
@@ -514,6 +543,17 @@
       send("correct_delivery_note", { p_id: d.id, p_fields: C.fieldsOf(d), p_reason: reason }, "Correction saved. The DN number stays the same.");
     });
     on("dnPrint", () => printNote(ui.notes.find((x) => x.id === d.id)));
+    on("dnDeleteAsk", () => { ui.confirmDelete = true; refresh(); });
+    on("dnDeleteNo", () => { ui.confirmDelete = false; refresh(); });
+    on("dnDeleteYes", async () => {
+      ui.busy = true; refresh();
+      const { error } = await sb.rpc("delete_test_delivery_note", { p_id: d.id });
+      ui.busy = false; ui.confirmDelete = false;
+      if (error) { ui.msg = { kind: "bad", text: explain(error) }; refresh(); return; }
+      ui.selected = null; ui.draft = null;
+      const st = $("#dnPrepStatus"); st.textContent = "Test note deleted."; st.className = "small dn-ok-text";
+      await load();
+    });
   }
 
   async function send(fn, args, okText) {
@@ -551,15 +591,16 @@
   // "Prepare from a job list": for jobs checked out before this page existed,
   // or when preparing after a Check-out failed. The server only accepts a job
   // list that is on a saved Check-out, and never makes a second copy.
-  async function prepareFromFile(file) {
+  async function prepareFromFile(file, test) {
     const st = $("#dnPrepStatus");
     st.textContent = "Reading the job list…"; st.className = "small muted";
     try {
       const { job, hash } = await readJobListFile(file);
-      const r = await prepareFrom(job, hash, file.name);
+      const r = await prepareFrom(job, hash, file.name, null, null, test);
+      const what = test ? "test note" : "delivery note";
       st.textContent = r.nothing ? "Nothing on this job list goes for coating or delivery."
-        : r.created ? `Prepared ${r.created} delivery note${r.created === 1 ? "" : "s"} for Order ${job.job}.`
-        : `This job list's delivery notes already exist (Order ${job.job}).`;
+        : r.created ? `Prepared ${r.created} ${what}${r.created === 1 ? "" : "s"} for Order ${job.job}.${test ? " No stock was touched." : ""}`
+        : `This job list's ${what}s already exist (Order ${job.job}).`;
       st.className = "small dn-ok-text";
       ui.focusHash = hash;
       await load();
@@ -586,7 +627,11 @@
   const reload = $("#dnReload");
   if (reload) reload.addEventListener("click", () => load());
   const pf = $("#dnPrepFile");
-  if (pf) pf.addEventListener("change", () => { const f = pf.files[0]; pf.value = ""; if (f) prepareFromFile(f); });
+  if (pf) pf.addEventListener("change", () => { const f = pf.files[0]; pf.value = ""; if (f) prepareFromFile(f, false); });
+  // Admin test mode (the server checks again): any job list, no Check-out.
+  const tf = $("#dnTestFile"), tl = $("#dnTestLabel");
+  if (tl) tl.hidden = !isAdmin();
+  if (tf) tf.addEventListener("change", () => { const f = tf.files[0]; tf.value = ""; if (f && isAdmin()) prepareFromFile(f, true); });
 
   window.ORYX_DN = { afterCheckout, open: openPage };
 })();
