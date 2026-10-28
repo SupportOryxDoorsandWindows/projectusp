@@ -1608,6 +1608,8 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 .dn-history{margin:0; padding-left:18px; font-size:13px; display:flex; flex-direction:column; gap:4px}
 .dn-sheet-wrap{overflow-x:auto; padding:14px; background:#F3F5F6; border-radius:10px}
 .dn-after{margin-top:12px}
+.dn-delete{background:#FBE7E6; color:#A23A33; border-radius:8px; padding:8px 12px}
+.dn-file-btn[hidden]{display:none}
 .dn-after-ok,.dn-after-bad{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; border-radius:10px; padding:10px 14px; font-size:13.5px}
 .dn-after-ok{background:#E3F1EA; color:#1F6B45}
 .dn-after-bad{background:#FBE7E6; color:#A23A33}
@@ -2109,6 +2111,8 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
   <div class="page-head">
     <div><h1>Delivery Notes</h1><p>Powder coating and finished goods notes, prepared from each checked-out job list</p></div>
     <div class="page-actions">
+      <label class="btn-outline dn-file-btn" id="dnTestLabel" for="dnTestFile" hidden title="Admins: try the delivery notes with any job list. No Check-out, no stock.">Test with a job list</label>
+      <input id="dnTestFile" type="file" accept="application/pdf,.pdf" hidden>
       <label class="btn-outline dn-file-btn" for="dnPrepFile">Prepare from a job list</label>
       <input id="dnPrepFile" type="file" accept="application/pdf,.pdf" hidden>
     </div>

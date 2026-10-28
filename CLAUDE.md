@@ -334,6 +334,21 @@ product lines — never treat one family's item as a match for another's:
 - Browser test: `tests/browser/delivery-notes-flow.js` (stand-in backend; also
   prints the Check-out payload so a run on the old code proves the stock lines
   are identical).
+- Admin TEST mode (2026-10-28, `supabase/sql/delivery_notes_test_mode.sql`,
+  run after delivery_notes.sql; it replaces prepare/save/confirm/correct):
+  "Test with a job list" (`#dnTestFile`, Admins only) calls
+  `prepare_delivery_test_notes` -- ANY job list, no Check-out, no stock.
+  `is_test` notes: TEST-0001 series (`delivery_note_test_number_seq`), read
+  policy hides them (and their history) from non-Admins, only Admins act on
+  them (`dn_check_access`), `delete_test_delivery_note` deletes ONLY test
+  notes. A test note is filed under SHA-256 of "test:" + the job list's
+  fingerprint (`dn_insert_notes`; the page computes the same to find it), so
+  testing a job list never blocks its real notes and nothing in
+  delivery_notes.sql is dropped (a DROP makes the Supabase connector ask a
+  confirmation question that did not reach the user, 2026-10-28). They show only under the "Test notes" filter and the
+  printed note says "TEST – NOT A REAL DELIVERY NOTE". Tests:
+  `tests/sql/delivery-notes-test-mode.test.sql` (after the real-notes SQL test),
+  `tests/browser/delivery-notes-test-mode.js`.
 
 ## Checking a Check-in change (every time)
 

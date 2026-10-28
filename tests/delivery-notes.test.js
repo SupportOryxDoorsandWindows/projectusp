@@ -136,4 +136,9 @@ assert.ok(sheet.includes("&lt;b&gt;x&lt;/b&gt;") && !sheet.includes("<b>x</b>"),
 assert.ok(!sheet.includes("DRAFT"), "a confirmed note has no draft stamp");
 assert.ok(C.sheetHtml({ kind: "finished_goods", lines: [] }).includes("DRAFT"), "an unconfirmed note is marked DRAFT");
 
+// A test note (Admin test mode) says so across the top of the printed note.
+const testSheet = C.sheetHtml({ kind: "finished_goods", is_test: true, dn_number: "TEST-0001", lines: [] });
+assert.ok(testSheet.includes("TEST – NOT A REAL DELIVERY NOTE") && testSheet.includes("TEST-0001"));
+assert.ok(!sheet.includes("NOT A REAL"), "a real note has no test banner");
+
 console.log("delivery-notes tests passed");
