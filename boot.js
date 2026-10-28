@@ -324,6 +324,10 @@
       const dn = document.createElement("script");
       dn.src = "delivery-notes.js?v=" + Date.now();
       document.body.appendChild(dn);
+      // Film Cutting (Admins only; its own tab, hidden for everyone else).
+      const fc = document.createElement("script");
+      fc.src = "film-cutting.js?v=" + Date.now();
+      document.body.appendChild(fc);
       // What's New & Updates: bell, panel, history page, Admin publishing.
       const u = document.createElement("script");
       u.src = "updates.js?v=" + Date.now();
