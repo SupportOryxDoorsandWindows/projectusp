@@ -398,7 +398,8 @@ product lines — never treat one family's item as a match for another's:
   backend; writes a made-up job list unless `--xlsx`).
 - WIDTH ALLOWANCE (2026-10-29, "Feature_Development_Prompt.docx" + the
   user's answers): used width = sum of panel widths + ONE allowance per cut
-  (default 20 mm, editable, `checkAllowance`: >= 0, whole mm or one
+  (default 30 mm since 2026-10-29 -- "for each film 30mm", confirmed per
+  CUT, not per panel; was 20 mm; editable, `checkAllowance`: >= 0, whole mm or one
   decimal, <= 500). It REPLACES the 1 mm blade (no gap added) and applies
   to every cut, also a single panel (1000 + 20 -> 1200 roll). Roll widths
   fixed `ROLLS` = 1000/1200/1500/1800; smallest that fits; a panel with

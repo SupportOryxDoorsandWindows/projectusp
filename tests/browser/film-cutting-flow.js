@@ -143,9 +143,10 @@ async function readDownload(p, click) {
   check(panels === "29", "panels read: " + panels);
   await p.click('[data-act="to-settings"]');
   await p.waitForSelector("#fcLimit");
-  check(/950 \+ 830 \+ 20 = 1800 mm → 1800 mm roll, 0 mm spare/.test(await p.innerText("#fcAllowEx")), "allowance example at 20 mm");
-  await p.fill("#fcAllow", "30");
+  check((await p.inputValue("#fcAllow")) === "30", "allowance starts at 30 mm");
   check(/950 \+ 830 \+ 30 = 1810 mm → no standard roll fits/.test(await p.innerText("#fcAllowEx")), "allowance example at 30 mm");
+  await p.fill("#fcAllow", "20");
+  check(/950 \+ 830 \+ 20 = 1800 mm → 1800 mm roll, 0 mm spare/.test(await p.innerText("#fcAllowEx")), "allowance example at 20 mm");
   await p.fill("#fcAllow", "-5");
   await p.click('[data-act="calculate"]');
   check(/Allowance: a number of millimetres, 0 or more/.test(await p.innerText(".fc-note.bad")), "negative allowance rejected");
@@ -196,6 +197,7 @@ async function readDownload(p, click) {
   check(cutIds.length === 29 && new Set(cutIds).size === 29, "cut list holds each panel once");
   const sum = X.utils.sheet_to_json(exp.wb.Sheets.Summary, { header: 1 });
   check(sum.some((r) => /^APPROVED · version 1/.test(String(r[1] || ""))), "summary says approved");
+  await p.waitForFunction(() => true, null, { timeout: 1000 }); await p.waitForTimeout(800); // the record is written just after the download starts
   check(db.log.map((l) => l.action).join(",") === "imported,calculated,exported,approved,exported", "record: " + db.log.map((l) => l.action).join(","));
   // Saved plans list + export from it
   await p.click('[data-act="to-settings"]'); await p.click('[data-act="back-upload"]');
