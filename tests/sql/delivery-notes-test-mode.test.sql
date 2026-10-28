@@ -31,8 +31,11 @@ reset role; select set_config('request.jwt.claims', :A, false); set role authent
 insert into r select '2 admin prepares test notes (no check-out)', public.prepare_delivery_test_notes(:HT, '26371F', 'Monique Hageman', 'test.pdf', :NOTES)::text;
 insert into r select '3 again: no duplicates', public.prepare_delivery_test_notes(:HT, '26371F', 'Monique Hageman', 'test.pdf', :NOTES)::text;
 insert into r select '4 admin also tests a job list that has real notes', public.prepare_delivery_test_notes(:H, '26371F', 'Monique Hageman', 'test.pdf', :NOTES)::text;
-insert into ids select 'tpc', id from public.delivery_notes where is_test and kind = 'powder_coating' and source_document_hash = :HT;
-insert into ids select 'tfg', id from public.delivery_notes where is_test and kind = 'finished_goods' and source_document_hash = :HT;
+-- Test notes are filed under SHA-256 of "test:" + the job list's fingerprint
+-- (the browser computes the same value to find them).
+insert into ids select 'tpc', id from public.delivery_notes where is_test and kind = 'powder_coating' and source_document_hash = '0ee7703bda1ad918110096d36864b2d2f2b2b2d05d91936573711486afab7d4a';
+insert into ids select 'tfg', id from public.delivery_notes where is_test and kind = 'finished_goods' and source_document_hash = '0ee7703bda1ad918110096d36864b2d2f2b2b2d05d91936573711486afab7d4a';
+insert into r select '4b test notes filed apart from the real ones', format('found=%s real_untouched=%s', (select count(*) from ids where k in ('tpc','tfg')), (select count(*) from public.delivery_notes where source_document_hash = :H and not is_test));
 insert into r select '5 admin sees test notes', count(*)::text from public.delivery_notes where is_test;
 insert into r select '6 confirm test note: TEST series', dn_number from public.confirm_delivery_note((select v from ids where k='tpc'), '{"ral_code":"RAL9010","delivered_by":"Test","delivery_date":"2026-10-28"}');
 insert into r select '7 admin corrects a test note', format('corrected=%s', corrected_count) from public.correct_delivery_note((select v from ids where k='tpc'), '{"ral_code":"RAL9016"}', 'test');

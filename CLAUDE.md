@@ -341,8 +341,11 @@ product lines — never treat one family's item as a match for another's:
   `is_test` notes: TEST-0001 series (`delivery_note_test_number_seq`), read
   policy hides them (and their history) from non-Admins, only Admins act on
   them (`dn_check_access`), `delete_test_delivery_note` deletes ONLY test
-  notes. Unique is now (job list, kind, is_test), so testing a job list never
-  blocks its real notes. They show only under the "Test notes" filter and the
+  notes. A test note is filed under SHA-256 of "test:" + the job list's
+  fingerprint (`dn_insert_notes`; the page computes the same to find it), so
+  testing a job list never blocks its real notes and nothing in
+  delivery_notes.sql is dropped (a DROP makes the Supabase connector ask a
+  confirmation question that did not reach the user, 2026-10-28). They show only under the "Test notes" filter and the
   printed note says "TEST – NOT A REAL DELIVERY NOTE". Tests:
   `tests/sql/delivery-notes-test-mode.test.sql` (after the real-notes SQL test),
   `tests/browser/delivery-notes-test-mode.js`.

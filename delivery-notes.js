@@ -380,9 +380,12 @@
     ui.notes = notes.data || [];
     ui.canCorrect = !corr.error && corr.data === true;
     if (ui.focusHash) {
-      const first = ui.notes.find((n) => n.source_document_hash === ui.focusHash);
+      // A test note is filed under its own fingerprint (SHA-256 of "test:" +
+      // the job list's), so it is found by that.
+      const want = ui.focusTest ? await sha256(new TextEncoder().encode("test:" + ui.focusHash)) : ui.focusHash;
+      const first = ui.notes.find((n) => n.source_document_hash === want && !!n.is_test === !!ui.focusTest);
       if (first) { ui.selected = first.id; ui.filter = first.is_test ? "test" : "all"; }
-      ui.focusHash = null;
+      ui.focusHash = null; ui.focusTest = false;
     }
     if (ui.selected) await selectNote(ui.selected, true); else render();
   }
@@ -602,7 +605,7 @@
         : r.created ? `Prepared ${r.created} ${what}${r.created === 1 ? "" : "s"} for Order ${job.job}.${test ? " No stock was touched." : ""}`
         : `This job list's ${what}s already exist (Order ${job.job}).`;
       st.className = "small dn-ok-text";
-      ui.focusHash = hash;
+      ui.focusHash = hash; ui.focusTest = !!test;
       await load();
     } catch (e) {
       st.textContent = explain(e); st.className = "small dn-bad-text";

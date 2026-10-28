@@ -33,8 +33,9 @@ function rpc(name, a, admin) {
     if (!admin) return err("not_allowed");
     let created = 0, existing = 0;
     for (const e of a.p_notes) {
-      if (db.notes.some((n) => n.is_test && n.source_document_hash === a.p_hash && n.kind === e.kind)) { existing++; continue; }
-      const n = { id: "t" + (db.notes.length + 1), is_test: true, kind: e.kind, source_document_hash: a.p_hash, source_document_name: a.p_doc_name,
+      const h = require("crypto").createHash("sha256").update("test:" + a.p_hash).digest("hex"); // as dn_insert_notes
+      if (db.notes.some((n) => n.source_document_hash === h && n.kind === e.kind)) { existing++; continue; }
+      const n = { id: "t" + (db.notes.length + 1), is_test: true, kind: e.kind, source_document_hash: h, source_document_name: a.p_doc_name,
         job_number: a.p_job, client: a.p_client, customer_ref: a.p_client, dn_number: null, corrected_count: 0, flags: e.flags || [],
         created_by_name: "Admin Test", created_at: now(), lines: e.lines, delivery_address: e.delivery_address || null,
         contact_no: e.contact_no, secondary_contact_no: e.secondary_contact_no, ral_code: e.ral_code || "" };
@@ -123,6 +124,7 @@ async function session(browser, role) {
   await p.waitForFunction(() => /test note|already exist/.test(document.querySelector("#dnPrepStatus").textContent), null, { timeout: 30000 });
   step("prepared: " + (await p.innerText("#dnPrepStatus")));
   step("filters: " + (await p.innerText("#dnFilters")).replace(/\s+/g, " "));
+  step("opened on the new test note: " + (await p.isVisible("#dnDetail .dn-detail")));
   step("list: " + (await p.$$eval("#dnList tbody tr", (trs) => trs.map((t) => t.innerText.replace(/\s+/g, " ").trim()).join(" || "))));
   await p.click('#dnList tr[data-dn-id]:has-text("Powder coating")');
   await p.waitForSelector('#dnDetail h2:has-text("Powder coating")');

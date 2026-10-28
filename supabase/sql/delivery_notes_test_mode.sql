@@ -7,13 +7,12 @@
 -- TEST-0001 (the real DN-SF numbers are never used up), visible and usable
 -- only by Admins, and can be deleted by Admins (a real note never can).
 -- A job list tested first can still get its real notes when it is checked
--- out: the one-of-each-kind rule is now per (job list, kind, test or real).
+-- out: a test note is filed under its own fingerprint, SHA-256 of
+-- "test:" + the job list's, so it never takes the real note's place under the
+-- one-of-each-kind rule (nothing in delivery_notes.sql is dropped or changed,
+-- so the Supabase connector applies this without a confirmation question).
 
 alter table public.delivery_notes add column if not exists is_test boolean not null default false;
-
-alter table public.delivery_notes drop constraint if exists delivery_notes_source_document_hash_kind_key;
-alter table public.delivery_notes drop constraint if exists delivery_notes_hash_kind_test_key;
-alter table public.delivery_notes add constraint delivery_notes_hash_kind_test_key unique (source_document_hash, kind, is_test);
 
 create sequence if not exists public.delivery_note_test_number_seq;
 revoke all on sequence public.delivery_note_test_number_seq from public, anon, authenticated;
@@ -28,9 +27,10 @@ alter policy "Staff read delivery note history" on public.delivery_note_history
 -- Shared by the real and the test prepare: the same reading, the same rules.
 create or replace function public.dn_insert_notes(p_hash text, p_job text, p_client text, p_doc_name text, p_notes jsonb, p_test boolean)
 returns jsonb language plpgsql security definer set search_path = '' as $$
-declare e jsonb; n public.delivery_notes; created int := 0; existing int := 0; new_id uuid; who text := public.dn_actor_name();
+declare e jsonb; n public.delivery_notes; created int := 0; existing int := 0; new_id uuid; who text := public.dn_actor_name(); h text;
 begin
   if p_hash is null or p_hash !~ '^[0-9a-f]{64}$' then raise exception 'hash_invalid'; end if;
+  h := case when p_test then encode(sha256(convert_to('test:' || p_hash, 'UTF8')), 'hex') else p_hash end;
   if p_notes is null or jsonb_typeof(p_notes) <> 'array' or jsonb_array_length(p_notes) not between 1 and 2 then raise exception 'notes_invalid'; end if;
   for e in select * from jsonb_array_elements(p_notes) loop
     if (e->>'kind') not in ('powder_coating', 'finished_goods') then raise exception 'kind_invalid'; end if;
@@ -40,11 +40,11 @@ begin
     if jsonb_typeof(coalesce(e->'flags', '[]'::jsonb)) <> 'array' then raise exception 'flags_invalid'; end if;
     insert into public.delivery_notes (kind, source_document_hash, source_document_name, job_number, client, customer_ref,
         delivery_address, contact_no, secondary_contact_no, ral_code, lines, flags, is_test, created_by, created_by_name, updated_by_name)
-      values (n.kind, p_hash, left(p_doc_name, 300), left(coalesce(nullif(trim(p_job), ''), '-'), 120), left(trim(p_client), 200),
+      values (n.kind, h, left(p_doc_name, 300), left(coalesce(nullif(trim(p_job), ''), '-'), 120), left(trim(p_client), 200),
         coalesce(n.customer_ref, left(trim(p_client), 200)),
         n.delivery_address, n.contact_no, n.secondary_contact_no, n.ral_code, coalesce(n.lines, '[]'::jsonb),
         coalesce(e->'flags', '[]'::jsonb), p_test, (select auth.uid()), who, who)
-      on conflict (source_document_hash, kind, is_test) do nothing
+      on conflict (source_document_hash, kind) do nothing
       returning id into new_id;
     if new_id is null then existing := existing + 1;
     else
