@@ -207,8 +207,8 @@ for (const where of [process.env.HIGHS_PATH, "highs"].filter(Boolean)) {
   assert.deepEqual(plain(r.cuts.map((c) => [c.id, c.W, c.used, c.spare, c.allowance])), [["R001", 1800, 1800, 0, 20]]);
   assert.equal(r.optimal, true);
   const row = C.exportRows(r, {}).cuts.rows[0];
-  assert.deepEqual(plain(row.slice(0, 12)), ["R001", "Level 6", "13", "", 1800, 2680, 2, "950 + 830 + 20 allowance", 1800, 0, 4.824, 4.770]);
-  assert.ok(Math.abs(row[12] - 4.7704 / 4.824) < 1e-12); assert.equal(row[13], "P1, P2");
+  assert.deepEqual(plain(row.slice(0, 13)), ["R001", "Level 6", "13", "", 1, 1800, 2680, 2, "950 + 830 + 20 allowance", 1800, 0, 4.824, 4.770]);
+  assert.ok(Math.abs(row[13] - 4.7704 / 4.824) < 1e-12); assert.equal(row[14], "P1, P2");
   // 30 mm: 1810 never goes on the 1800 roll -> two cuts of 1000.
   r = await C.plan(ex, { scope: "level", allowance: 30 }, solve);
   assert.deepEqual(plain(r.cuts.map((c) => [c.W, c.used])), [[1000, 980], [1000, 860]]);
