@@ -466,6 +466,14 @@ product lines — never treat one family's item as a match for another's:
   (`rollUse`: the rolls on hand, else full 50 m rolls).
   "Allowance (mm)" column after "Pattern (mm)" (2026-10-29, user's request;
   now 16 columns): Pattern shows only the panel widths ("950 + 830").
+- LEVEL BATCHES (2026-10-29, user's answers): `levelBatches(result, 10)` =
+  cuts grouped by level (a cut's level; several = "Mixed levels", last),
+  then ONE roll width per batch in production order, at most 10 CUTS per
+  batch (15 -> 10 + 5); numbering restarts per level ("Level 5 · B1").
+  Shown as a "Level batch" column after Level (now 17 columns) and a
+  "Level batches" table; Excel: same column, a "Level batches" sheet, and
+  "Level batch" in Piece references. The roll-width "Production batches"
+  table/column stays (user: keep both). Cut order/IDs unchanged.
 
 ## Checking a Check-in change (every time)
 
