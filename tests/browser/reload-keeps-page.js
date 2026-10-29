@@ -1,7 +1,8 @@
 // Reload keeps the page (user's request 2026-10-29): app.js showView
 // remembers the open page per tab (sessionStorage "oryx_view") and boot.js
 // presses that page's menu button again once all page scripts are loaded.
-// Stand-in backend (same as film-cutting-flow.js); nothing real is read.
+// Also: Film Cutting's unfinished work (file, settings, results) survives a
+// reload, per person (IndexedDB). Stand-in backend (same as film-cutting-flow.js).
 //   node tests/browser/reload-keeps-page.js --libs <folder>
 // --libs as in film-cutting-flow.js.
 const fs = require("fs");
@@ -179,6 +180,27 @@ async function readDownload(p, click) {
   await p.click('nav button[data-v="film-cutting"]');
   await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(1500);
   check(/Choose the job list/.test(await p.innerText("#fcBody")), "film cutting page drawn after reload");
+  // Film Cutting keeps the work in progress across a reload (IndexedDB).
+  await p.setInputFiles("#fcFile", xlsx);
+  await p.waitForSelector('[data-act="to-settings"]:not([disabled])', { timeout: 30000 });
+  await p.click('[data-act="to-settings"]');
+  await p.fill("#fcAllow", "25");
+  await p.uncheck("#fcLimit");
+  await p.waitForTimeout(600);
+  await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(2500);
+  check((await p.inputValue("#fcAllow").catch(() => "")) === "25" && !(await p.isChecked("#fcLimit")), "settings step, allowance 25 and rolls box kept after reload");
+  check(/was kept after the reload/.test(await p.innerText("#fcBody")), "says the work was kept");
+  await p.click('[data-act="calculate"]');
+  await p.waitForSelector(".fc-approve", { timeout: 120000 });
+  const before = await p.innerText(".fc-kpis");
+  await p.waitForTimeout(600);
+  await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(2500);
+  check(await p.isVisible(".fc-approve") && (await p.innerText(".fc-kpis")) === before, "results kept after reload: " + before.replace(/\s+/g, " "));
+  await p.click('[data-act="reset"]');
+  await p.waitForTimeout(600);
+  await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(2500);
+  check(/Choose the job list/.test(await p.innerText("#fcBody")), "after Start a new test + reload: empty upload step");
+
   // Nothing remembered (a new tab): starts on the Dashboard.
   await p.evaluate(() => sessionStorage.removeItem("oryx_view"));
   await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(1500);
