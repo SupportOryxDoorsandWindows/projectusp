@@ -213,6 +213,11 @@ product lines — never treat one family's item as a match for another's:
   hidden/disabled one, so no Admin page for staff). Nothing stored = the
   Dashboard. Work in progress on a page (an uploaded file, a preview) is
   not kept. Test: `tests/browser/reload-keeps-page.js`.
+- CACHE: index.html loads `boot.js?v=N`, `kanban.js?v=N`, `price-history.js?v=N`,
+  `config.js?v=N` with a FIXED version (everything boot.js adds gets
+  `?v=<Date.now()>`). After changing one of those four, bump its N in
+  index.html, or browsers keep the old copy (the reload fix first reached
+  nobody: boot.js stayed v=14, bumped to 15 on 2026-10-29).
 - Rows that open the item panel carry `data-mi-row`, or item-timeline.js's
   outside-click rule closes the panel as soon as it opens.
 - Reading in pages of 1,000 (`.range`) must order by a unique column last
