@@ -1614,8 +1614,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 .dn-after-ok,.dn-after-bad{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; border-radius:10px; padding:10px 14px; font-size:13.5px}
 .dn-after-ok{background:#E3F1EA; color:#1F6B45}
 .dn-after-bad{background:#FBE7E6; color:#A23A33}
-/* Film Cutting (film-cutting.js, Admins only) */
-.fc-admin-badge{vertical-align:middle; font-size:11px; margin-left:6px}
+/* Film Cutting (film-cutting.js, all active staff) */
 .fc-body{display:flex; flex-direction:column; gap:16px}
 .fc-empty{padding:24px; text-align:center; color:var(--text-muted)}
 .fc-steps{display:flex; flex-wrap:wrap; gap:6px; list-style:none; margin:0; padding:0; font-size:13px; font-weight:600}
@@ -1673,7 +1672,6 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 .fc-approve .card-title{margin:0}
 .fc-row{display:flex; flex-wrap:wrap; gap:10px}
 .fc-row button{min-height:44px}
-.fc-test{background:#FFF8E5; border:1px solid #F5C451; color:#6B4A0C; border-radius:10px; padding:8px 14px; font-size:13.5px}
 .fc-fixed{min-height:40px; display:flex; align-items:center; font-weight:600; color:var(--brand)}
 .fc-bad{color:#A23A33}
 .fc-results td.mono{white-space:nowrap}
@@ -2197,10 +2195,10 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
   </div>
 </section>
 
-<!-- ================== FILM CUTTING (film-cutting.js, Admins only) ================== -->
+<!-- ================== FILM CUTTING (film-cutting.js, all active staff) ================== -->
 <section id="v-film-cutting" class="view">
   <div class="page-head">
-    <div><h1>Film Cutting <span class="badge dark fc-admin-badge">Admins only</span></h1><p id="fcHeadSub">Plan how smart film is cut from the rolls, with the least film</p></div>
+    <div><h1>Film Cutting</h1><p id="fcHeadSub">Plan how smart film is cut from the rolls, with the least film</p></div>
   </div>
   <div class="page-body fc-body" id="fcBody"></div>
 </section>
