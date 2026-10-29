@@ -353,7 +353,16 @@ product lines — never treat one family's item as a match for another's:
   `tests/sql/delivery-notes-test-mode.test.sql` (after the real-notes SQL test),
   `tests/browser/delivery-notes-test-mode.js`.
 
-## Film Cutting (2026-10-28, Admins only, tab "Film Cutting")
+## Film Cutting (2026-10-28, tab "Film Cutting"; ALL active staff since 2026-10-29)
+
+- OPEN TO ALL STAFF (2026-10-29, user's choice "Open to all staff"):
+  `supabase/sql/film_cutting_open_to_staff.sql` sets the one rule
+  `film_cut_access()` = `is_active_staff()` (was `is_admin()`; the file
+  says how to go back); the page shows the menu item to every active
+  account (`canUse`), "Admins only" badge and "Testing mode" banner removed.
+  Tested: `tests/sql/film-cutting-open-to-staff.test.sql` (after the
+  Admin-only SQL test), browser flow (staff sees + calculates). Older
+  notes below that say "Admins only" describe the first version.
 
 - `film-cutting.js` (loaded by boot.js; view `#v-film-cutting`, sidebar
   `#navFilmCutting` under its own sidebar heading "Optimization" above

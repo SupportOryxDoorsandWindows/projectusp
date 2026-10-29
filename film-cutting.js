@@ -1,4 +1,4 @@
-/* Film Cutting (Admins only): plans how smart-film panels are cut from the
+/* Film Cutting (all active staff since 2026-10-29; was Admins only): plans how smart-film panels are cut from the
  * rolls with the least film. Read the job list (Excel) -> check -> settings
  * -> calculate -> review -> approve (saved, with who/when) -> Excel export.
  * Never touches stock or Master Inventory; the uploaded file is never changed.
@@ -753,7 +753,7 @@
 })();
 
 // ======================================================================
-// The page (Admins only). Tests load the core above without a document.
+// The page (all active staff). Tests load the core above without a document.
 // ======================================================================
 (function () {
   "use strict";
@@ -763,7 +763,9 @@
   const sb = AUTH.sb;
   const $ = (s, root) => (root || document).querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const isAdmin = () => !!(AUTH.isAdmin && AUTH.isAdmin());
+  // Who may use it: every signed-in, switched-on staff account (the server
+  // asks the same through film_cut_access()).
+  const canUse = () => !!(AUTH.profile && AUTH.profile.active);
   const when = (t) => (t ? new Date(t).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
   const m2 = (x) => (Math.round(x * 100) / 100).toFixed(2) + " m²";
   const m = (x) => (Math.round(x * 10) / 10).toFixed(1) + " m";
@@ -775,12 +777,12 @@
 
   const nav = $("#navFilmCutting");
   const body = $("#fcBody");
-  if (nav) nav.hidden = !isAdmin();
+  if (nav) nav.hidden = !canUse();
   if (!body) return;
-  if (!isAdmin()) {
+  if (!canUse()) {
     // Typed into the page some other way: nothing to use, nothing is read
     // (the server refuses non-Admins too).
-    body.innerHTML = `<div class="card fc-empty">Film Cutting is for Admins only.</div>`;
+    body.innerHTML = `<div class="card fc-empty">Film Cutting needs an active staff account.</div>`;
     return;
   }
 
@@ -1026,7 +1028,7 @@
       loadSaved();
     } catch (e) {
       const t = String(e.message || e);
-      ui.msg = ["bad", "Not approved: " + (/not_allowed/.test(t) ? "only Admins can approve plans." : /job_missing/.test(t) ? "enter the job name." : t) + " Nothing was saved."];
+      ui.msg = ["bad", "Not approved: " + (/not_allowed/.test(t) ? "your account is not allowed to approve plans." : /job_missing/.test(t) ? "enter the job name." : t) + " Nothing was saved."];
     }
     ui.confirming = false; ui.busy = false; ui.progress = "";
     render();
@@ -1302,7 +1304,7 @@
     try {
       const head = $("#fcHeadSub");
       if (head) head.textContent = ui.read && ui.step !== "upload" ? (ui.job || "") + " · " + (ui.result && ui.step === "results" ? ui.result.scopeName + (ui.result.settings.level ? " · " + ui.result.settings.level : " · all levels") + " · " + ui.result.pieceCount + " panels · allowance " + ui.result.settings.allowance + " mm" : ui.read.pieces.length + " panels") : "Plan how smart film is cut from the rolls, with the least film";
-      let h = `<div class="fc-test" role="note"><b>Testing mode</b> · prototype for Admins · nothing here changes stock, Check-in or Check-out</div>` + stepper();
+      let h = stepper();
       if (ui.msg) h += `<div class="fc-note ${ui.msg[0] === "ok" ? "ok" : "bad"}" role="status">${esc(ui.msg[1])}</div>`;
       if (ui.logWarn) h += `<div class="fc-note warn small">${esc(ui.logWarn)}</div>`;
       if (ui.busy) h += `<div class="fc-note busy" role="status"><span class="fc-spin" aria-hidden="true"></span>${esc(ui.progress || "Working…")}</div>`;

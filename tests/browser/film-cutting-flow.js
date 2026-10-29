@@ -1,10 +1,10 @@
-// Film Cutting (Admins only) in a browser against a stand-in backend
+// Film Cutting (all active staff since 2026-10-29) in a browser against a stand-in backend
 // (nothing real is read or saved; the sign-in is a local stand-in):
 //   Admin: upload a job list -> checks -> settings (rolls on hand) ->
 //   calculate -> approve (tick + "Yes, approve") -> Excel export, read back:
 //   every panel once in "Piece references".
-//   Staff: no Film Cutting in the menu; opening the view by hand shows
-//   "Admins only" and nothing is asked of the server.
+//   Staff: Film Cutting in the menu; sees the Approved plans, uploads and
+//   calculates (no "Admins only" / "Testing mode" labels anywhere).
 //
 //   node tests/browser/film-cutting-flow.js --libs <folder> [--xlsx <job list>] [--shot <png>]
 // --libs as in checkin-sweep.js (supabase-js@2.45.4, xlsx-js-style@1.2.0) plus
@@ -47,12 +47,12 @@ if (!xlsx) {
 }
 const fileHashBefore = crypto.createHash("sha256").update(fs.readFileSync(xlsx)).digest("hex");
 
-// Stand-in for supabase/sql/film_cutting.sql (Admins only).
-const db = { plans: [], log: [], staffCalls: 0 };
+// Stand-in for supabase/sql/film_cutting.sql + film_cutting_open_to_staff.sql
+// (every active staff account; both test accounts are active).
+const db = { plans: [], log: [] };
 function rpc(name, a, admin) {
   const err = (m) => ({ status: 400, body: { message: m, code: "P0001" } });
   const ok = (b) => ({ status: 200, body: b });
-  if (!admin) { db.staffCalls++; return err("not_allowed"); }
   if (name === "log_film_cut") { db.log.push({ action: a.p_action, job: a.p_job, plan_id: a.p_plan_id, details: a.p_details }); return ok(null); }
   if (name === "approve_film_cut_plan") {
     const v = db.plans.filter((p) => p.job === a.p_plan.job).length + 1;
@@ -99,7 +99,6 @@ async function session(browser, role) {
       return send(200, (req.headers()["accept"] || "").includes("vnd.pgrst.object") ? prof : [prof]);
     }
     if (table === "film_cut_plans") {
-      if (!admin) { db.staffCalls++; return send(200, []); } // read policy: Admins only
       const id = (u.searchParams.get("id") || "").replace(/^eq\./, "");
       if (id) { const row = db.plans.find((x) => x.id === id) || null; return send(200, (req.headers()["accept"] || "").includes("vnd.pgrst.object") ? row : [row]); }
       return send(200, db.plans);
@@ -208,13 +207,23 @@ async function readDownload(p, click) {
   check(crypto.createHash("sha256").update(fs.readFileSync(xlsx)).digest("hex") === fileHashBefore, "uploaded file unchanged");
   check(!errors.length, "admin: no page errors " + JSON.stringify(errors));
 
+  check(!(await p.$(".fc-test")) && !/Admins only|Testing mode/.test(await p.innerText("#v-film-cutting")), "admin: no Admins only / Testing mode labels");
+
   // ---- Staff ----
   const s = await session(browser, "staff");
-  check(!(await s.p.isVisible("#navFilmCutting")), "staff: no Film Cutting in the menu");
-  await s.p.evaluate(() => window.ORYX_SHOW_VIEW("film-cutting"));
-  check(/Admins only/.test(await s.p.innerText("#fcBody")), "staff opening the view by hand: Admins only");
-  check(!(await s.p.$("#fcFile")), "staff: no upload");
-  check(db.staffCalls === 0, "staff page asked the server nothing about Film Cutting");
+  check(await s.p.isVisible("#navFilmCutting"), "staff: Film Cutting in the menu");
+  check(await s.p.isVisible("nav.side-nav .side-group-opt"), "staff: Optimization heading");
+  await s.p.click("#navFilmCutting");
+  await s.p.waitForSelector('[data-act="export-saved"]', { timeout: 10000 });
+  check(true, "staff: sees the Approved plans");
+  await s.p.setInputFiles("#fcFile", xlsx);
+  await s.p.waitForSelector('[data-act="to-settings"]:not([disabled])', { timeout: 30000 });
+  await s.p.click('[data-act="to-settings"]');
+  await s.p.uncheck("#fcLimit");
+  await s.p.click('[data-act="calculate"]');
+  await s.p.waitForSelector(".fc-approve", { timeout: 120000 });
+  check(/Least film possible/.test(await s.p.innerText(".fc-note")), "staff: calculates");
+  check(!/Admins only|Testing mode/.test(await s.p.innerText("#v-film-cutting")), "staff: no Admins only / Testing mode labels");
   check(!s.errors.length, "staff: no page errors " + JSON.stringify(s.errors));
   await browser.close();
   if (fail.length) { console.log("FAILED: " + fail.length); process.exit(1); }
