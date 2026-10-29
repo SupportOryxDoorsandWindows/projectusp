@@ -207,6 +207,12 @@ product lines — never treat one family's item as a match for another's:
 - First page after sign-in (2026-10-29, user's request): the Dashboard
   (`class="on"` on `#navDashboard` / `#v-dashboard` in index.html, was Ask
   the bot); dashboard.js reads it at load if it is still the open view.
+- Reload keeps the page (2026-10-29, user's request): app.js `showView`
+  stores the page per tab in sessionStorage `oryx_view`; boot.js waits for
+  every page script it added, then clicks that page's menu button (never a
+  hidden/disabled one, so no Admin page for staff). Nothing stored = the
+  Dashboard. Work in progress on a page (an uploaded file, a preview) is
+  not kept. Test: `tests/browser/reload-keeps-page.js`.
 - Rows that open the item panel carry `data-mi-row`, or item-timeline.js's
   outside-click rule closes the panel as soon as it opens.
 - Reading in pages of 1,000 (`.range`) must order by a unique column last

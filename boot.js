@@ -282,6 +282,7 @@
     // cost is negligible and correctness is guaranteed.
     s.src = "app.js?v=" + Date.now();
     s.onload = () => {
+      const scriptsBefore = new Set(document.scripts); // the page scripts added below are the new ones
       $("#loading").hidden = true;
       $("#appShell").hidden = false;
       // The stock screens (Check-out, Check-in, Master Inventory), split over
@@ -332,6 +333,21 @@
       const u = document.createElement("script");
       u.src = "updates.js?v=" + Date.now();
       document.body.appendChild(u);
+      // Reopen the page this tab was on before a reload (user's request
+      // 2026-10-29; app.js showView remembers it per tab in sessionStorage).
+      // Waits for every page script above, then presses that page's menu
+      // button so the page loads its data as usual. A hidden (not allowed)
+      // page is never reopened.
+      const loaded = [...document.scripts].filter((el) => !scriptsBefore.has(el) && el.src).map((el) =>
+        new Promise((res) => { el.addEventListener("load", res); el.addEventListener("error", res); }));
+      Promise.all(loaded).then(() => {
+        let v = null;
+        try { v = sessionStorage.getItem("oryx_view"); } catch (e) { v = null; }
+        if (!v) return;
+        const btn = document.querySelector(`nav button[data-v="${CSS.escape(v)}"]`);
+        const open = document.querySelector(".view.on");
+        if (btn && !btn.hidden && !btn.disabled && !(open && open.id === "v-" + v)) btn.click();
+      });
     };
     s.onerror = () => fail("Could not load app.js.");
     document.body.appendChild(s);
