@@ -1346,6 +1346,72 @@
       body.classList.toggle("fc-busy", ui.busy);
       body.querySelectorAll("button").forEach((b) => { if (ui.busy) b.disabled = true; });
     } finally { drawing = false; }
+    saveWorkSoon();
+  }
+
+  // ---------------------------------------------------------------- work kept across a reload
+  // The unfinished work (the uploaded file itself, the step, settings, rolls
+  // on hand, the last result) is kept in this browser's IndexedDB, for the
+  // signed-in person only, so a reload comes back to the same place (user's
+  // request 2026-10-29). "Start a new test" clears it. Nothing goes to the
+  // server; approved plans are saved there as before.
+  const WORK_DB = "oryx-film-cut", WORK_KEY = "current", WORK_DAYS = 14;
+  function workStore(mode, fn) {
+    return new Promise((res, rej) => {
+      let req;
+      try { req = indexedDB.open(WORK_DB, 1); } catch (e) { return rej(e); }
+      req.onupgradeneeded = () => req.result.createObjectStore("work");
+      req.onerror = () => rej(req.error);
+      req.onsuccess = () => {
+        const db = req.result, tx = db.transaction("work", mode), st = tx.objectStore("work");
+        const r = fn(st);
+        tx.oncomplete = () => { db.close(); res(r && r.result); };
+        tx.onerror = () => { db.close(); rej(tx.error); };
+      };
+    });
+  }
+  const uid = () => (AUTH.user && AUTH.user.id) || "";
+  let saveTimer = null, restoring = false;
+  function saveWorkSoon() {
+    if (restoring) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveWork, 400);
+  }
+  function saveWork() {
+    if (!ui.file || !ui.file.blob || !ui.read) return;
+    let result = null;
+    try { result = ui.result ? JSON.parse(JSON.stringify(ui.result)) : null; } catch (e) { result = null; }
+    const rec = {
+      uid: uid(), at: Date.now(), file: ui.file.blob, name: ui.file.name, hash: ui.file.hash, size: ui.file.size,
+      sheet: ui.sheet, job: ui.job, step: ui.step, settings: ui.settings, limit: ui.limit, stock: ui.stock, note: ui.note,
+      result, approved: ui.approved,
+    };
+    workStore("readwrite", (st) => st.put(rec, WORK_KEY)).catch(() => { /* private mode / storage full: just not kept */ });
+  }
+  function clearWork() { workStore("readwrite", (st) => st.delete(WORK_KEY)).catch(() => {}); }
+  async function restoreWork() {
+    let rec = null;
+    try { rec = await workStore("readonly", (st) => st.get(WORK_KEY)); } catch (e) { return; }
+    if (!rec || !rec.file || rec.uid !== uid() || Date.now() - rec.at > WORK_DAYS * 864e5) return;
+    restoring = true;
+    try {
+      await loadXlsx();
+      const buf = await rec.file.arrayBuffer();
+      ui.book = window.XLSX.read(buf, { type: "array", cellFormula: false, cellHTML: false, cellText: false, cellStyles: false });
+      ui.sheets = ui.book.SheetNames.slice();
+      ui.file = { name: rec.name, hash: rec.hash, size: rec.size, blob: rec.file };
+      ui.sheet = ui.sheets.includes(rec.sheet) ? rec.sheet : ui.sheets[0];
+      ui.read = C.readSheet(gridOf(ui.book.Sheets[ui.sheet]), ui.sheet);
+      Object.assign(ui.settings, rec.settings || {});
+      ui.limit = rec.limit !== false; ui.stock = rec.stock || {}; ui.job = rec.job || ""; ui.note = rec.note || "";
+      // A kept result is shown again only if it still checks out against the file.
+      if (rec.result && !C.verifyPlan(ui.read.pieces, rec.result).length) { ui.result = rec.result; ui.approved = rec.approved || null; }
+      ui.step = rec.step === "results" && !ui.result ? "settings" : rec.step || "upload";
+      ui.msg = ["ok", "Your work on " + (ui.job || rec.name) + " was kept after the reload. To begin again: \"Upload another file\", or \"Start a new test\" on the results."];
+    } catch (e) {
+      clearWork();
+    } finally { restoring = false; }
+    render();
   }
 
   // ---------------------------------------------------------------- events
@@ -1356,6 +1422,7 @@
     if (act === "to-settings") { ui.step = "settings"; ui.msg = null; render(); window.scrollTo(0, 0); }
     else if (act === "back-upload") { ui.step = "upload"; ui.msg = null; render(); }
     else if (act === "reset") {
+      clearWork();
       Object.assign(ui, { step: "upload", msg: null, file: null, book: null, sheets: [], sheet: "", read: null, job: "", showAll: false,
         result: null, compare: null, approved: null, confirming: false, checked: false, note: "", cutsAll: false });
       render(); window.scrollTo(0, 0);
@@ -1383,6 +1450,7 @@
 
   });
   body.addEventListener("input", (e) => {
+    saveWorkSoon();
     const t = e.target;
     if (t.id === "fcJob") { ui.job = t.value; return; }
     if (t.id === "fcNote") { ui.note = t.value; return; }
@@ -1405,5 +1473,6 @@
 
   if (nav) nav.addEventListener("click", () => { loadSaved(); });
   render();
+  restoreWork();
   window.ORYX_FILM_CUT = { render };
 })();

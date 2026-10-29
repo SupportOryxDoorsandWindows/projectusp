@@ -449,6 +449,14 @@ product lines — never treat one family's item as a match for another's:
   workbook's "Piece references" with a Rule column is read once).
   Real Etihad file at 20 mm: By level 573.73 m2 / 157 cuts, By location
   598.15 / 187. "Testing mode" banner + "Start a new test".
+- WORK KEPT ACROSS A RELOAD (2026-10-29, user's request): the unfinished
+  work (the uploaded File itself, step, settings, rolls on hand, note, last
+  result + approval) is saved in IndexedDB `oryx-film-cut` / store `work` /
+  key `current` after every render and input (`saveWorkSoon`), with the
+  signed-in user's id; `restoreWork` at start reloads it only for the same
+  person and within 14 days, re-reads the file and shows a kept result only
+  if `verifyPlan` still passes. "Start a new test" clears it. Browser only
+  (nothing sent to the server). Test: `tests/browser/reload-keeps-page.js`.
 - Rolls (2026-10-29, user's request): results show a 5th tile "Rolls"
   (`rollCount`: with rolls on hand "used of entered", per width; without,
   full 50 m rolls needed). "Each roll" lists only rolls with cuts, then
