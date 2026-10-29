@@ -911,7 +911,7 @@
       const book = window.XLSX.read(buf, { type: "array", cellFormula: false, cellHTML: false, cellText: false, cellStyles: false });
       ui.book = book;
       ui.sheets = book.SheetNames.slice();
-      ui.file = { name: f.name, hash, size: f.size };
+      ui.file = { name: f.name, hash, size: f.size, blob: f };
       // First sheet with a Width + Height header.
       ui.sheet = ui.sheets.find((n) => C.findHeader(gridOf(book.Sheets[n]))) || ui.sheets[0];
       const jm = /^([A-Z]{2,}\d{4}-\d+)/i.exec(f.name);
@@ -1011,20 +1011,43 @@
       issues: ui.read ? ui.read.issues : [],
     };
   }
+  // Keep the original Excel in the private bucket "film-cut-files" as
+  // <sha256>.<ext> (supabase/sql/film_cutting_files.sql). Already there
+  // (same file approved before) counts as kept. Never blocks the approval.
+  const FILE_BUCKET = "film-cut-files";
+  const MIME = { xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", xlsm: "application/vnd.ms-excel.sheet.macroEnabled.12", xls: "application/vnd.ms-excel" };
+  async function keepFile() {
+    try {
+      const ext = ((/\.(xlsx|xlsm|xls)$/i.exec(ui.file.name) || [])[1] || "").toLowerCase();
+      if (!ext || !ui.file.blob) return { error: "no file" };
+      const path = ui.file.hash + "." + ext;
+      const { error } = await sb.storage.from(FILE_BUCKET).upload(path, ui.file.blob, { upsert: false, contentType: MIME[ext] });
+      if (!error || /exist|duplicate/i.test(error.message || "") || String(error.statusCode) === "409") return { path };
+      return { error: error.message || String(error) };
+    } catch (e) { return { error: e.message || String(e) }; }
+  }
   async function approve() {
     const r = ui.result;
     if (!r || ui.approved) return;
     if (r.stock && r.stock.infeasible) return;
-    ui.busy = true; ui.progress = "Saving the approved plan…"; render();
+    ui.busy = true; ui.progress = "Keeping the original file…"; render();
     try {
+      const kept = await keepFile();
+      ui.progress = "Saving the approved plan…"; render();
       const p = {
         job: ui.job, scope: r.settings.scope, level: r.settings.level || "", source_file_name: ui.file.name, source_file_hash: ui.file.hash,
+        source_file_path: kept.path || "",
         sheet: ui.sheet, calc_version: r.version, optimal: r.optimal, settings: r.settings, totals: r.totals, plan: planJson(r), note: ui.note,
       };
-      const { data, error } = await sb.rpc("approve_film_cut_plan", { p_plan: p });
+      let { data, error } = await sb.rpc("approve_film_cut_plan", { p_plan: p });
+      if (error && /file_not_stored/.test(error.message || "")) {
+        kept.error = "the file was not found in storage"; p.source_file_path = "";
+        ({ data, error } = await sb.rpc("approve_film_cut_plan", { p_plan: p }));
+      }
       if (error) throw error;
       ui.approved = { id: data.id, version: data.version, by: data.approved_by_name, at: new Date().toISOString() };
-      ui.msg = ["ok", "Approved and saved as version " + data.version + " of " + ui.job + "."];
+      ui.msg = data.file_kept ? ["ok", "Approved and saved as version " + data.version + " of " + ui.job + ", with the original Excel file."]
+        : ["ok", "Approved and saved as version " + data.version + " of " + ui.job + ". The original Excel file could not be kept" + (kept.error ? " (" + kept.error + ")" : "") + "; the plan itself is saved."];
       loadSaved();
     } catch (e) {
       const t = String(e.message || e);
@@ -1083,6 +1106,14 @@
       version: a && a.version,
     }, a && a.id);
   }
+  // The kept original Excel, through a 5-minute signed link.
+  async function downloadOriginal(path, name) {
+    const { data, error } = await sb.storage.from(FILE_BUCKET).createSignedUrl(path, 300, { download: name || true });
+    if (error || !data || !data.signedUrl) { ui.savedMsg = "Couldn't open the original file: " + ((error && error.message) || "no link") + "."; return render(); }
+    const a = document.createElement("a");
+    a.href = data.signedUrl; a.rel = "noopener"; a.download = name || "";
+    document.body.appendChild(a); a.click(); a.remove();
+  }
   async function exportSaved(id) {
     const { data, error } = await sb.from("film_cut_plans").select("*").eq("id", id).maybeSingle();
     if (error || !data) { ui.savedMsg = "Couldn't open that plan: " + ((error && error.message) || "not found") + "."; return render(); }
@@ -1095,7 +1126,7 @@
 
   async function loadSaved() {
     const { data, error } = await sb.from("film_cut_plans")
-      .select("id, job, version, scope, level, totals, optimal, approved_by_name, approved_at, source_file_name")
+      .select("id, job, version, scope, level, totals, optimal, approved_by_name, approved_at, source_file_name, source_file_path")
       .order("approved_at", { ascending: false }).order("id").limit(30);
     if (error) { ui.saved = []; ui.savedMsg = /film_cut_plans/.test(error.message || "") ? "Approved plans can't be listed yet (the Film Cutting tables are not set up)." : "Couldn't load the approved plans: " + error.message; }
     else { ui.saved = data || []; ui.savedMsg = ""; }
@@ -1155,10 +1186,12 @@
     if (!ui.saved.length && !ui.savedMsg) return "";
     return `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Approved plans</h2><span class="small muted">Saved with who approved them and when</span></div>
       ${ui.savedMsg ? `<p class="small muted fc-pad">${esc(ui.savedMsg)}</p>` : ""}
-      ${ui.saved.length ? `<div class="fc-scroll"><table class="fc-table"><thead><tr><th>Job</th><th>Version</th><th>Plan</th><th class="r">Film</th><th class="r">Cuts</th><th>Approved</th><th></th></tr></thead><tbody>
+      ${ui.saved.length ? `<div class="fc-scroll"><table class="fc-table"><thead><tr><th>Job</th><th>Version</th><th>Plan</th><th class="r">Film</th><th class="r">Cuts</th><th>Approved</th><th>Original file</th><th></th></tr></thead><tbody>
       ${ui.saved.map((p) => `<tr><td>${esc(p.job)}</td><td>v${p.version}</td><td>${esc(C.SCOPE_NAMES[p.scope] || p.scope)}${p.level ? " · " + esc(p.level) : ""}</td>
         <td class="r">${p.totals && p.totals.film != null ? m2(p.totals.film) : ""}</td><td class="r">${p.totals ? esc(p.totals.cuts) : ""}</td>
-        <td>${esc(p.approved_by_name || "")} · ${esc(when(p.approved_at))}</td><td><button type="button" class="btn-outline btn-sm" data-act="export-saved" data-id="${esc(p.id)}">Excel</button></td></tr>`).join("")}
+        <td>${esc(p.approved_by_name || "")} · ${esc(when(p.approved_at))}</td>
+        <td>${p.source_file_path ? `<button type="button" class="btn-outline btn-sm" data-act="download-original" data-path="${esc(p.source_file_path)}" data-name="${esc(p.source_file_name || p.source_file_path)}" title="${esc(p.source_file_name || "")}">Download</button>` : `<span class="small muted">not kept</span>`}</td>
+        <td><button type="button" class="btn-outline btn-sm" data-act="export-saved" data-id="${esc(p.id)}">Excel</button></td></tr>`).join("")}
       </tbody></table></div>` : ""}</div>`;
   }
 
@@ -1338,6 +1371,7 @@
     else if (act === "approve-yes") approve();
     else if (act === "export") exportCurrent();
     else if (act === "export-saved") exportSaved(b.dataset.id);
+    else if (act === "download-original") downloadOriginal(b.dataset.path, b.dataset.name);
   });
   body.addEventListener("change", (e) => {
     const t = e.target;

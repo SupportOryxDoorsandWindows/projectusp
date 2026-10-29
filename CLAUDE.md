@@ -363,6 +363,20 @@ product lines — never treat one family's item as a match for another's:
   Tested: `tests/sql/film-cutting-open-to-staff.test.sql` (after the
   Admin-only SQL test), browser flow (staff sees + calculates). Older
   notes below that say "Admins only" describe the first version.
+- ORIGINAL EXCEL KEPT (2026-10-29, user's request): `supabase/sql/film_cutting_files.sql`
+  (run after the two above): PRIVATE bucket `film-cut-files` (Excel only,
+  10 MB), file = `<sha256>.<xlsx|xlsm|xls>` (= `source_file_hash`); storage
+  policies: read + insert for `film_cut_access()`, insert only under that
+  name pattern, NO update/delete (never replaced, never deleted from the
+  site). Column `film_cut_plans.source_file_path`, set by the replaced
+  `approve_film_cut_plan()` only if the object exists and matches the hash
+  (else `file_not_stored`). Browser (`keepFile`): uploads the File before
+  Approve (already there = kept); a failed upload never blocks the approval
+  (message says the file was not kept). "Approved plans" has an "Original
+  file" Download (5-minute signed link, `downloadOriginal`). Tests:
+  `tests/sql/storage-base.sql` (stand-in storage schema) +
+  `tests/sql/film-cutting-files.test.sql`; browser flow (Playwright can't
+  see upload bytes, so it checks the form headers instead).
 
 - `film-cutting.js` (loaded by boot.js; view `#v-film-cutting`, sidebar
   `#navFilmCutting` under its own sidebar heading "Optimization" above

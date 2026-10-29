@@ -49,16 +49,18 @@ const fileHashBefore = crypto.createHash("sha256").update(fs.readFileSync(xlsx))
 
 // Stand-in for supabase/sql/film_cutting.sql + film_cutting_open_to_staff.sql
 // (every active staff account; both test accounts are active).
-const db = { plans: [], log: [] };
+const db = { plans: [], log: [], files: {} }; // files: stand-in for the "film-cut-files" bucket
 function rpc(name, a, admin) {
   const err = (m) => ({ status: 400, body: { message: m, code: "P0001" } });
   const ok = (b) => ({ status: 200, body: b });
   if (name === "log_film_cut") { db.log.push({ action: a.p_action, job: a.p_job, plan_id: a.p_plan_id, details: a.p_details }); return ok(null); }
   if (name === "approve_film_cut_plan") {
+    const fp = a.p_plan.source_file_path;
+    if (fp && (!db.files[fp] || fp.split(".")[0] !== a.p_plan.source_file_hash)) return err("file_not_stored");
     const v = db.plans.filter((p) => p.job === a.p_plan.job).length + 1;
     const row = Object.assign({ id: "plan-" + (db.plans.length + 1), version: v, approved_by_name: "Admin Test", approved_at: new Date().toISOString() }, a.p_plan);
     db.plans.unshift(row); db.log.push({ action: "approved", job: row.job, plan_id: row.id });
-    return ok({ id: row.id, version: v, approved_by_name: "Admin Test" });
+    return ok({ id: row.id, version: v, approved_by_name: "Admin Test", file_kept: !!fp });
   }
   return err("unknown rpc " + name);
 }
@@ -91,6 +93,28 @@ async function session(browser, role) {
     if (u.pathname === "/auth/v1/user") return send(200, user);
     if (u.pathname.startsWith("/auth/v1/")) return route.fulfill({ status: 204, body: "" });
     if (u.pathname.startsWith("/functions/v1/")) return send(200, { ok: true });
+    // Storage stand-in: upload (never overwrite), signed link, download.
+    let m;
+    if ((m = u.pathname.match(/^\/storage\/v1\/object\/film-cut-files\/(.+)$/)) && req.method() === "POST") {
+      const name = decodeURIComponent(m[1]);
+      if (!/^[0-9a-f]{64}\.(xlsx|xlsm|xls)$/.test(name)) return send(403, { statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" });
+      if (db.files[name]) return send(400, { statusCode: "409", error: "Duplicate", message: "The resource already exists" });
+      // Playwright does not hand over the file bytes of a browser upload
+      // (only the form-data headers), so the stand-in keeps the headers and
+      // serves the uploaded test file itself on download.
+      db.files[name] = fileFromUpload(req);
+      db.uploadHead = req.postDataBuffer().toString("latin1");
+      return send(200, { Key: "film-cut-files/" + name });
+    }
+    if ((m = u.pathname.match(/^\/storage\/v1\/object\/sign\/film-cut-files\/(.+)$/)) && req.method() === "POST") {
+      const name = decodeURIComponent(m[1]);
+      if (!db.files[name]) return send(404, { statusCode: "404", error: "not_found", message: "Object not found" });
+      return send(200, { signedURL: "/object/sign/film-cut-files/" + encodeURIComponent(name) + "?token=t" });
+    }
+    if ((m = u.pathname.match(/^\/storage\/v1\/object\/sign\/film-cut-files\/(.+)$/)) && req.method() === "GET") {
+      const name = decodeURIComponent(m[1]), dl = u.searchParams.get("download");
+      return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "Content-Disposition": "attachment; filename=\"" + (dl || name) + "\"" }, body: db.files[name] ? fs.readFileSync(xlsx) : Buffer.alloc(0) });
+    }
     const rpcName = (u.pathname.match(/^\/rest\/v1\/rpc\/(\w+)/) || [])[1];
     if (rpcName) { const r = rpc(rpcName, JSON.parse(req.postData() || "{}"), admin); return send(r.status, r.body); }
     const table = (u.pathname.match(/^\/rest\/v1\/(\w+)/) || [])[1];
@@ -117,11 +141,31 @@ async function session(browser, role) {
 const fail = [];
 const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if (!ok) fail.push(t); };
 
+// supabase-js sends a File as multipart/form-data (Supabase Storage keeps
+// only the file part): take the part that is not "cacheControl".
+function fileFromUpload(req) {
+  const body = req.postDataBuffer();
+  const m = /boundary=(.+)$/.exec(req.headers()["content-type"] || "");
+  if (!m) return body;
+  const sep = Buffer.from("--" + m[1]);
+  let at = body.indexOf(sep), out = body;
+  while (at >= 0) {
+    const next = body.indexOf(sep, at + sep.length);
+    if (next < 0) break;
+    const part = body.subarray(at + sep.length, next);
+    const headEnd = part.indexOf("\r\n\r\n");
+    const head = part.subarray(0, headEnd).toString();
+    if (!/name="cacheControl"/.test(head)) { out = part.subarray(headEnd + 4, part.length - 2); break; }
+    at = next;
+  }
+  return out;
+}
+
 async function readDownload(p, click) {
   const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), p.click(click)]);
-  const file = path.join(os.tmpdir(), dl.suggestedFilename());
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fc-dl-")), dl.suggestedFilename()); // never over the uploaded file
   await dl.saveAs(file);
-  return { name: dl.suggestedFilename(), wb: X.readFile(file) };
+  return { name: dl.suggestedFilename(), file, wb: X.readFile(file) };
 }
 
 (async () => {
@@ -204,6 +248,13 @@ async function readDownload(p, click) {
   await p.waitForSelector('[data-act="export-saved"]', { timeout: 10000 });
   const saved = await readDownload(p, '[data-act="export-saved"]');
   check(/v1\.xlsx$/.test(saved.name), "export again from Approved plans: " + saved.name);
+  check(Object.keys(db.files).length === 1 && Object.keys(db.files)[0] === fileHashBefore + ".xlsx", "original Excel kept once as <sha256>.xlsx");
+  check(db.plans[0].source_file_path === fileHashBefore + ".xlsx", "plan points at the kept file");
+  const orig = await readDownload(p, '[data-act="download-original"]');
+  const origFile = orig.file;
+  check(orig.name === path.basename(xlsx), "original downloads under its own name: " + orig.name);
+  check(/Content-Type: application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/.test(db.uploadHead || "") && !/upsert/i.test(db.uploadHead || ""), "upload sent the file as Excel");
+  check(fs.statSync(origFile).size > 0, "original file downloads");
   check(crypto.createHash("sha256").update(fs.readFileSync(xlsx)).digest("hex") === fileHashBefore, "uploaded file unchanged");
   check(!errors.length, "admin: no page errors " + JSON.stringify(errors));
 
