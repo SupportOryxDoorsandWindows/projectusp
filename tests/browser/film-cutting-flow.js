@@ -189,7 +189,7 @@ async function readDownload(p, click) {
   check((await p.inputValue("#fcAllow")) === "30", "allowance starts at 30 mm");
   check(/950 \+ 830 \+ 30 = 1810 mm → no standard roll fits/.test(await p.innerText("#fcAllowEx")), "allowance example at 30 mm");
   await p.fill("#fcAllow", "20");
-  check(/950 \+ 830 \+ 20 = 1800 mm → 1800 mm roll, 0 mm spare/.test(await p.innerText("#fcAllowEx")), "allowance example at 20 mm");
+  check(/950 \+ 830 \+ 20 = 1800 mm → 1800 mm roll, 0 mm offcut/.test(await p.innerText("#fcAllowEx")), "allowance example at 20 mm");
   await p.fill("#fcAllow", "-5");
   await p.click('[data-act="calculate"]');
   check(/Allowance: a number of millimetres, 0 or more/.test(await p.innerText(".fc-note.bad")), "negative allowance rejected");
@@ -234,7 +234,7 @@ async function readDownload(p, click) {
   const ids = pr.map((r) => r[0]);
   check(ids.length === 29 && new Set(ids).size === 29 && pr.every((r) => r[8]), "every panel once, each with its cut (" + ids.length + ")");
   const res = X.utils.sheet_to_json(exp.wb.Sheets["Cutting results"], { header: 1 });
-  check(JSON.stringify(res[2]) === JSON.stringify(["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Spare width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"]), "the result columns, in order (Roll no. after Location)");
+  check(JSON.stringify(res[2]) === JSON.stringify(["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"]), "the result columns, in order (Roll no. after Location)");
   check(res.slice(3).every((r) => r[9] === String(r[8]).split(" + ").slice(0, -1).reduce((a, w) => a + Number(w), 0) + 20 && /\+ 20 allowance$/.test(r[8]) && r[10] === r[5] - r[9] && r[9] <= r[5] && Number.isInteger(r[4])), "used width = panels + 20 allowance, spare = stock - used");
   const cutIds = res.slice(3).filter((r) => r[0]).flatMap((r) => String(r[14]).split(", "));
   check(cutIds.length === 29 && new Set(cutIds).size === 29, "cut list holds each panel once");
