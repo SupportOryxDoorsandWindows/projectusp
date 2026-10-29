@@ -992,6 +992,8 @@ startNewChat();
 
 // ---- tabs (sidebar) ----
 function showView(v) {
+  // Remembered per tab, so a reload reopens this page (boot.js restores it).
+  try { sessionStorage.setItem("oryx_view", v); } catch (e) { /* private mode: start on the Dashboard */ }
   document.querySelectorAll("nav button[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === v));
   document.querySelectorAll(".view").forEach(el => el.classList.toggle("on", el.id === "v-" + v));
   window.scrollTo(0, 0);
