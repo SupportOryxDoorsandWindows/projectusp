@@ -431,7 +431,7 @@ product lines — never treat one family's item as a match for another's:
   Each cut keeps `allowance` / `used` / `spare` (per-cut allowance possible
   later). Results = the 14 columns in order (Cut ID, Level, Ref #,
   Location, Stock width (mm), Cut length (mm), Pieces, Pattern (mm), Used
-  width incl. gaps, Spare width (mm), Stock area (m²), Panel area (m²),
+  width incl. gaps, Offcut width (mm) (was "Spare width", renamed 2026-10-29), Stock area (m²), Panel area (m²),
   Yield, Piece IDs), Cut IDs R001...; `verifyPlan` also flags a yield over
   100%. Also reads a piece list (Piece, Level, Ref, Location, Type,
   Width, Height, File row; IDs/rows kept; duplicates = error; the
