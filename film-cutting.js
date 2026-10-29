@@ -664,7 +664,7 @@
 
   // "Pattern (mm)": 950 + 830 + 20 allowance.
   const allowanceOf = (c) => (c.allowance == null ? 0 : c.allowance);
-  const pattern = (c) => c.pieces.map((p) => p.w).join(" + ") + (allowanceOf(c) ? " + " + allowanceOf(c) + " allowance" : "");
+  const pattern = (c) => c.pieces.map((p) => p.w).join(" + "); // the allowance has its own column (2026-10-29)
   const usedOf = (c) => (c.used != null ? c.used : c.across != null ? c.across : across(c.pieces.map((p) => p.w), allowanceOf(c)));
   const uniq = (xs) => [...new Set(xs.filter((x) => x !== "" && x != null))];
   const r3 = (x) => Math.round(x * 1000) / 1000;
@@ -714,10 +714,10 @@
     const use = rollUse(result, 50);
     const uniqJ = (xs, many) => { const u = uniq(xs); return u.length > 1 && many ? many : u.join(", "); };
     const cuts = {
-      head: ["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"],
+      head: ["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Allowance (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"],
       rows: result.cuts.map((c) => [c.id, uniqJ(c.pieces.map((p) => p.level), "Mixed"), uniq(c.pieces.map((p) => p.ref)).join(", "), uniqJ(c.pieces.map((p) => p.loc), "Multiple locations"),
         use.rollOf[c.id] != null ? use.rollOf[c.id] : "",
-        c.W, c.L, c.pieces.length, pattern(c), usedOf(c), c.W - usedOf(c), r3(c.W * c.L / 1e6), r3(c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6),
+        c.W, c.L, c.pieces.length, pattern(c), allowanceOf(c), usedOf(c), c.W - usedOf(c), r3(c.W * c.L / 1e6), r3(c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6),
         c.pieces.reduce((a, p) => a + p.w * p.h, 0) / (c.W * c.L), c.pieces.map((p) => p.id).join(", ")]),
     };
     const byPiece = new Map();
@@ -1084,7 +1084,7 @@
       ws.A1.s = S_TITLE;
       e.summary.forEach((row, i) => { if (row.length === 1 && ws["A" + (i + 3)]) ws["A" + (i + 3)].s = S_BOLD; });
       X.utils.book_append_sheet(wb, ws, "Summary");
-      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 8, 24, 8, 10, 10, 7, 26, 12, 10, 10, 10, 8, 26], { 11: "0.000", 12: "0.000", 13: "0.0%" }), "Cutting results");
+      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 8, 24, 8, 10, 10, 7, 20, 10, 12, 10, 10, 10, 8, 26], { 12: "0.000", 13: "0.000", 14: "0.0%" }), "Cutting results");
       X.utils.book_append_sheet(wb, table(X, "Piece references", e.pieces, [8, 10, 6, 24, 8, 10, 10, 8, 40, 7, 12, 8]), "Piece references");
       X.utils.book_append_sheet(wb, table(X, "Production batches (one roll width at a time)", e.batches, [8, 14, 8, 12, 12]), "Production batches");
       if (e.rolls) X.utils.book_append_sheet(wb, table(X, "Cuts on each roll", e.rolls, [14, 8, 14, 8, 12, 12, 60]), "Rolls");
@@ -1305,8 +1305,8 @@
     const rowsById = new Map(e.cuts.rows.map((x) => [x[0], x]));
     h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Cutting results (${cuts.length === r.cuts.length ? "all " + r.cuts.length : cuts.length + " of " + r.cuts.length + " shown"})</h2>
       <span class="small muted">One row per cut · used width = panel widths + ${esc(S.allowance)} mm allowance</span></div>
-      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t, i) => `<th class="${i >= 4 && i <= 13 && i !== 8 ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
-      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => `<td class="${i === 0 || i === 14 ? "mono" : ""}${i >= 4 && i <= 13 && i !== 8 ? " r" : ""}">${esc(i === 4 ? (v === "" ? "—" : "Roll " + v) : i === 11 || i === 12 ? v.toFixed(3) : i === 13 ? (Math.round(v * 1000) / 10).toFixed(1) + "%" : v)}</td>`).join("")}</tr>`; }).join("")}
+      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t, i) => `<th class="${i >= 4 && i <= 14 && i !== 8 ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
+      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => `<td class="${i === 0 || i === 15 ? "mono" : ""}${i >= 4 && i <= 14 && i !== 8 ? " r" : ""}">${esc(i === 4 ? (v === "" ? "—" : "Roll " + v) : i === 12 || i === 13 ? v.toFixed(3) : i === 14 ? (Math.round(v * 1000) / 10).toFixed(1) + "%" : v)}</td>`).join("")}</tr>`; }).join("")}
       </tbody></table></div>
       ${r.cuts.length > cuts.length ? `<div class="fc-more"><button type="button" class="btn-outline btn-sm" data-act="all-cuts">Show all ${r.cuts.length} cuts</button></div>` : ""}</div>`;
     // approve + export

@@ -464,6 +464,8 @@ product lines — never treat one family's item as a match for another's:
   Results table + Excel got a "Roll no." column after Location (user's
   request; now 15 columns): the roll of that width the cut is placed on
   (`rollUse`: the rolls on hand, else full 50 m rolls).
+  "Allowance (mm)" column after "Pattern (mm)" (2026-10-29, user's request;
+  now 16 columns): Pattern shows only the panel widths ("950 + 830").
 
 ## Checking a Check-in change (every time)
 
