@@ -662,6 +662,39 @@
     return problems;
   }
 
+  // Level batches (user's request 2026-10-29): the cuts of each level, one
+  // roll width at a time (production order), in batches of at most `size`
+  // cuts -- 15 cuts of one width = B1 (10) + B2 (5). Numbering restarts for
+  // each level: "Level 5 · B1". A cut whose panels come from several levels
+  // (Whole job) is under "Mixed levels". Returns {batches, labelOf: {cutId}}.
+  const LEVEL_BATCH = 10;
+  const cutLevel = (c) => { const u = uniq(c.pieces.map((p) => p.level)); return u.length === 1 ? u[0] : "Mixed levels"; };
+  const byLevelName = (a, b) => (a === "Mixed levels") - (b === "Mixed levels") || a.localeCompare(b, undefined, { numeric: true });
+  function levelBatches(result, size) {
+    const n = size || LEVEL_BATCH;
+    const order = (result.settings && result.settings.order) || batchOrder({ rolls: ROLLS, order: DEFAULTS.order });
+    const levels = uniq(result.cuts.map(cutLevel)).sort(byLevelName);
+    const batches = [], labelOf = {};
+    for (const level of levels) {
+      let k = 0;
+      const widths = uniq(result.cuts.filter((c) => cutLevel(c) === level).map((c) => c.W))
+        .sort((a, b) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)) || a - b);
+      for (const W of widths) {
+        const cs = result.cuts.filter((c) => cutLevel(c) === level && c.W === W);
+        for (let i = 0; i < cs.length; i += n) {
+          const part = cs.slice(i, i + n);
+          k++;
+          const label = level + " · B" + k;
+          for (const c of part) labelOf[c.id] = label;
+          batches.push({ level, n: k, label, W, cuts: part.map((c) => c.id),
+            panels: part.reduce((a, c) => a + c.pieces.length, 0),
+            metres: part.reduce((a, c) => a + c.L, 0) / 1000, film: part.reduce((a, c) => a + c.W * c.L, 0) / 1e6 });
+        }
+      }
+    }
+    return { batches, labelOf };
+  }
+
   // "Pattern (mm)": 950 + 830 + 20 allowance.
   const allowanceOf = (c) => (c.allowance == null ? 0 : c.allowance);
   const pattern = (c) => c.pieces.map((p) => p.w).join(" + "); // the allowance has its own column (2026-10-29)
@@ -713,9 +746,10 @@
     // Roll no.: the roll on hand the cut is placed on, else the 50 m roll.
     const use = rollUse(result, 50);
     const uniqJ = (xs, many) => { const u = uniq(xs); return u.length > 1 && many ? many : u.join(", "); };
+    const lb = levelBatches(result);
     const cuts = {
-      head: ["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Allowance (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"],
-      rows: result.cuts.map((c) => [c.id, uniqJ(c.pieces.map((p) => p.level), "Mixed"), uniq(c.pieces.map((p) => p.ref)).join(", "), uniqJ(c.pieces.map((p) => p.loc), "Multiple locations"),
+      head: ["Cut ID", "Level", "Level batch", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Allowance (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"],
+      rows: result.cuts.map((c) => [c.id, uniqJ(c.pieces.map((p) => p.level), "Mixed"), lb.labelOf[c.id] || "", uniq(c.pieces.map((p) => p.ref)).join(", "), uniqJ(c.pieces.map((p) => p.loc), "Multiple locations"),
         use.rollOf[c.id] != null ? use.rollOf[c.id] : "",
         c.W, c.L, c.pieces.length, pattern(c), allowanceOf(c), usedOf(c), c.W - usedOf(c), r3(c.W * c.L / 1e6), r3(c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6),
         c.pieces.reduce((a, p) => a + p.w * p.h, 0) / (c.W * c.L), c.pieces.map((p) => p.id).join(", ")]),
@@ -724,10 +758,10 @@
     for (const c of result.cuts) for (const p of c.pieces) byPiece.set(p.id, { p, c });
     const all = [...byPiece.values()].map((x) => x.p).concat(result.unfit || []).sort((a, b) => (a.id < b.id ? -1 : 1));
     const pieces = {
-      head: ["Piece", "Level", "Ref", "Location", "Type", "Width (mm)", "Height (mm)", "File row", "Cut ID", "Batch", "Stock width (mm)", "Roll no."],
+      head: ["Piece", "Level", "Ref", "Location", "Type", "Width (mm)", "Height (mm)", "File row", "Cut ID", "Level batch", "Batch", "Stock width (mm)", "Roll no."],
       rows: all.map((p) => {
         const x = byPiece.get(p.id);
-        return [p.id, p.level, p.ref, p.loc, p.type || "", p.w, p.h, p.srcRow != null ? p.srcRow : p.row, x ? x.c.id : "NOT CUT: no standard roll fits (width + allowance)", x ? x.c.batch : "", x ? x.c.W : "", x && x.c.roll != null ? x.c.roll : ""];
+        return [p.id, p.level, p.ref, p.loc, p.type || "", p.w, p.h, p.srcRow != null ? p.srcRow : p.row, x ? x.c.id : "NOT CUT: no standard roll fits (width + allowance)", x ? lb.labelOf[x.c.id] || "" : "", x ? x.c.batch : "", x ? x.c.W : "", x && x.c.roll != null ? x.c.roll : ""];
       }),
     };
     const batches = {
@@ -742,13 +776,17 @@
         for (const r of result.stock.rolls[W]) rolls.rows.push([W, r.n, r.start, r.cuts.length, r3(r.start - r.left), r3(r.left), r.cuts.join(", ")]);
       }
     }
-    return { summary, cuts, pieces, batches, rolls };
+    const levelBatchRows = {
+      head: ["Level", "Batch", "Roll width (mm)", "Cuts", "Panels", "Length (m)", "Film (m²)", "Cut IDs"],
+      rows: lb.batches.map((b) => [b.level, "B" + b.n, b.W, b.cuts.length, b.panels, r3(b.metres), r3(b.film), b.cuts.join(", ")]),
+    };
+    return { summary, cuts, pieces, batches, levelBatches: levelBatchRows, rolls };
   }
 
   window.ORYX_CUT_CORE = {
     CALC_VERSION, DEFAULTS, SCOPE_NAMES,
     ROLLS, checkAllowance, readSheet, findHeader, patterns, groupsOf, buildModel, lpText, fromHighs, plan, verifyPlan,
-    placeOnRolls, rollUse, rollCount, batchOrder, across, pattern, scopeKey, exportRows,
+    placeOnRolls, rollUse, rollCount, levelBatches, LEVEL_BATCH, batchOrder, across, pattern, scopeKey, exportRows,
   };
 })();
 
@@ -1084,9 +1122,10 @@
       ws.A1.s = S_TITLE;
       e.summary.forEach((row, i) => { if (row.length === 1 && ws["A" + (i + 3)]) ws["A" + (i + 3)].s = S_BOLD; });
       X.utils.book_append_sheet(wb, ws, "Summary");
-      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 8, 24, 8, 10, 10, 7, 20, 10, 12, 10, 10, 10, 8, 26], { 12: "0.000", 13: "0.000", 14: "0.0%" }), "Cutting results");
+      X.utils.book_append_sheet(wb, table(X, "Cutting results — " + result.scopeName + (result.settings.allowance != null ? " · allowance " + result.settings.allowance + " mm per cut" : ""), e.cuts, [8, 10, 14, 8, 24, 8, 10, 10, 7, 20, 10, 12, 10, 10, 10, 8, 26], { [e.cuts.head.indexOf("Stock area (m²)")]: "0.000", [e.cuts.head.indexOf("Panel area (m²)")]: "0.000", [e.cuts.head.indexOf("Utilization")]: "0.0%" }), "Cutting results");
       X.utils.book_append_sheet(wb, table(X, "Piece references", e.pieces, [8, 10, 6, 24, 8, 10, 10, 8, 40, 7, 12, 8]), "Piece references");
       X.utils.book_append_sheet(wb, table(X, "Production batches (one roll width at a time)", e.batches, [8, 14, 8, 12, 12]), "Production batches");
+      X.utils.book_append_sheet(wb, table(X, "Level batches (by level, one roll width, at most " + C.LEVEL_BATCH + " cuts each)", e.levelBatches, [14, 7, 14, 6, 7, 10, 10, 60]), "Level batches");
       if (e.rolls) X.utils.book_append_sheet(wb, table(X, "Cuts on each roll", e.rolls, [14, 8, 14, 8, 12, 12, 60]), "Rolls");
       const scope = (result.scopeName || "").replace(/\s+/g, " ");
       const name = ((info.job || "Film cutting") + " cutting plan " + scope + (result.settings.level ? " " + result.settings.level : "") + (info.version ? " v" + info.version : " DRAFT")).replace(/[\\/:*?"<>|]+/g, "-") + ".xlsx";
@@ -1269,6 +1308,15 @@
     return lines.join("<br>");
   }
 
+  // Cutting results cells: which columns are numbers, and how they read.
+  const RIGHT = new Set(["Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Allowance (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization"]);
+  function cellText(t, v) {
+    if (t === "Roll no.") return v === "" ? "—" : "Roll " + v;
+    if (t === "Stock area (m²)" || t === "Panel area (m²)") return v.toFixed(3);
+    if (t === "Utilization") return (Math.round(v * 1000) / 10).toFixed(1) + "%";
+    return v;
+  }
+
   function drawResults() {
     const r = ui.result, T = r.totals, S = r.settings;
     const infeasible = r.stock && r.stock.infeasible;
@@ -1299,14 +1347,21 @@
       ${Object.keys(r.byWidth).map(Number).sort((a, b) => r.byWidth[a].batch - r.byWidth[b].batch).map((W) => { const b = r.byWidth[W];
         return `<tr><td>${b.batch}</td><td><b>${W} mm</b></td><td class="r">${b.cuts}</td><td class="r">${m(b.metres)}</td><td class="r">${m2(b.film)}</td></tr>`; }).join("")}
       </tbody></table></div></div>`;
+    // level batches
+    const lbs = C.levelBatches(r).batches;
+    h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Level batches</h2>
+      <span class="small muted">Each level, one roll width at a time, at most ${C.LEVEL_BATCH} cuts per batch</span></div>
+      <div class="fc-scroll"><table class="fc-table"><thead><tr><th>Level</th><th>Batch</th><th>Roll width</th><th class="r">Cuts</th><th class="r">Panels</th><th class="r">Length</th><th class="r">Film</th><th>Cut IDs</th></tr></thead><tbody>
+      ${lbs.map((b) => `<tr><td>${esc(b.level)}</td><td><b>B${b.n}</b></td><td>${b.W} mm</td><td class="r">${b.cuts.length}</td><td class="r">${b.panels}</td><td class="r">${m(b.metres)}</td><td class="r">${m2(b.film)}</td><td class="mono">${esc(b.cuts.join(", "))}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
     // cut list: the 14 columns of the cutting workbook / prompt, in order
     const cuts = ui.cutsAll ? r.cuts : r.cuts.slice(0, 15);
     const e = C.exportRows(r, {});
     const rowsById = new Map(e.cuts.rows.map((x) => [x[0], x]));
     h += `<div class="card fc-tbl-card"><div class="fc-card-h"><h2 class="card-title">Cutting results (${cuts.length === r.cuts.length ? "all " + r.cuts.length : cuts.length + " of " + r.cuts.length + " shown"})</h2>
       <span class="small muted">One row per cut · used width = panel widths + ${esc(S.allowance)} mm allowance</span></div>
-      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t, i) => `<th class="${i >= 4 && i <= 14 && i !== 8 ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
-      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => `<td class="${i === 0 || i === 15 ? "mono" : ""}${i >= 4 && i <= 14 && i !== 8 ? " r" : ""}">${esc(i === 4 ? (v === "" ? "—" : "Roll " + v) : i === 12 || i === 13 ? v.toFixed(3) : i === 14 ? (Math.round(v * 1000) / 10).toFixed(1) + "%" : v)}</td>`).join("")}</tr>`; }).join("")}
+      <div class="fc-scroll"><table class="fc-table fc-results"><thead><tr>${e.cuts.head.map((t) => `<th class="${RIGHT.has(t) ? "r" : ""}">${esc(t)}</th>`).join("")}</tr></thead><tbody>
+      ${cuts.map((c) => { const x = rowsById.get(c.id); return `<tr>${x.map((v, i) => { const t = e.cuts.head[i]; return `<td class="${t === "Cut ID" || t === "Piece IDs" ? "mono" : ""}${RIGHT.has(t) ? " r" : ""}">${esc(cellText(t, v))}</td>`; }).join("")}</tr>`; }).join("")}
       </tbody></table></div>
       ${r.cuts.length > cuts.length ? `<div class="fc-more"><button type="button" class="btn-outline btn-sm" data-act="all-cuts">Show all ${r.cuts.length} cuts</button></div>` : ""}</div>`;
     // approve + export

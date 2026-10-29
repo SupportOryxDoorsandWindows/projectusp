@@ -229,14 +229,14 @@ async function readDownload(p, click) {
   check(db.plans.length === 1 && db.plans[0].plan.cuts.length > 0, "approved plan saved with its cuts");
   const exp = await readDownload(p, '[data-act="export"]');
   check(/v1\.xlsx$/.test(exp.name), "approved export: " + exp.name);
-  check(JSON.stringify(exp.wb.SheetNames) === JSON.stringify(["Summary", "Cutting results", "Piece references", "Production batches", "Rolls"]), "sheets: " + exp.wb.SheetNames.join(", "));
+  check(JSON.stringify(exp.wb.SheetNames) === JSON.stringify(["Summary", "Cutting results", "Piece references", "Production batches", "Level batches", "Rolls"]), "sheets: " + exp.wb.SheetNames.join(", "));
   const pr = X.utils.sheet_to_json(exp.wb.Sheets["Piece references"], { header: 1 }).slice(3).filter((r) => r[0]);
   const ids = pr.map((r) => r[0]);
   check(ids.length === 29 && new Set(ids).size === 29 && pr.every((r) => r[8]), "every panel once, each with its cut (" + ids.length + ")");
   const res = X.utils.sheet_to_json(exp.wb.Sheets["Cutting results"], { header: 1 });
-  check(JSON.stringify(res[2]) === JSON.stringify(["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Allowance (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"]), "the result columns, in order (Roll no. after Location)");
-  check(res.slice(3).every((r) => r[9] === 20 && r[10] === String(r[8]).split(" + ").reduce((a, w) => a + Number(w), 0) + 20 && !/allowance/.test(r[8]) && r[11] === r[5] - r[10] && r[10] <= r[5] && Number.isInteger(r[4])), "used width = panels + 20 allowance, spare = stock - used");
-  const cutIds = res.slice(3).filter((r) => r[0]).flatMap((r) => String(r[15]).split(", "));
+  check(JSON.stringify(res[2]) === JSON.stringify(["Cut ID", "Level", "Level batch", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Allowance (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"]), "the result columns, in order (Roll no. after Location)");
+  check(res.slice(3).every((r) => r[10] === 20 && r[11] === String(r[9]).split(" + ").reduce((a, w) => a + Number(w), 0) + 20 && !/allowance/.test(r[9]) && r[12] === r[6] - r[11] && r[11] <= r[6] && Number.isInteger(r[5]) && /^Level \d+ · B\d+$/.test(r[2])), "used width = panels + 20 allowance, spare = stock - used");
+  const cutIds = res.slice(3).filter((r) => r[0]).flatMap((r) => String(r[16]).split(", "));
   check(cutIds.length === 29 && new Set(cutIds).size === 29, "cut list holds each panel once");
   const sum = X.utils.sheet_to_json(exp.wb.Sheets.Summary, { header: 1 });
   check(sum.some((r) => /^APPROVED · version 1/.test(String(r[1] || ""))), "summary says approved");

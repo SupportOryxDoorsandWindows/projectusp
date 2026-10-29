@@ -159,6 +159,27 @@ const pl2 = C.placeOnRolls(cuts3(), { 1000: [5, 5.4] });
 assert.equal(pl2.ok, true, "5.4 m takes two");
 assert.deepEqual(plain(pl2.rolls[1000].map((r) => r.cuts.length)), [1, 2]);
 
+// ---- level batches: by level, one roll width, at most 10 cuts each ----
+{
+  const cut = (id, level, W) => ({ id, W, L: 2680, pieces: [{ id: "P" + id, level, w: 500, h: 2680 }] });
+  const cuts = [];
+  for (let i = 1; i <= 15; i++) cuts.push(cut("A" + i, "Level 5", 1000)); // 15 x 1000 -> 10 + 5
+  for (let i = 1; i <= 3; i++) cuts.push(cut("B" + i, "Level 5", 1800));  // 3 x 1800 -> own batch
+  for (let i = 1; i <= 2; i++) cuts.push(cut("C" + i, "Level 10", 1200));
+  for (let i = 1; i <= 4; i++) cuts.push(cut("D" + i, "Level 6", 1000));
+  cuts.push({ id: "M1", W: 1800, L: 2680, pieces: [{ id: "x", level: "Level 5", w: 500, h: 2680 }, { id: "y", level: "Level 6", w: 500, h: 2680 }] });
+  const lb = C.levelBatches({ cuts, settings: { order: [1000, 1200, 1800, 1500] } });
+  assert.deepEqual(plain(lb.batches.map((b) => [b.label, b.W, b.cuts.length])), [
+    ["Level 5 · B1", 1000, 10], ["Level 5 · B2", 1000, 5], ["Level 5 · B3", 1800, 3],
+    ["Level 6 · B1", 1000, 4], ["Level 10 · B1", 1200, 2], ["Mixed levels · B1", 1800, 1]]);
+  assert.equal(lb.labelOf.A10, "Level 5 · B1"); assert.equal(lb.labelOf.A11, "Level 5 · B2"); assert.equal(lb.labelOf.B1, "Level 5 · B3");
+  assert.equal(Object.keys(lb.labelOf).length, cuts.length, "every cut in exactly one batch");
+  assert.equal(C.LEVEL_BATCH, 10);
+  // 10 exactly -> one batch; 11 -> 10 + 1
+  assert.deepEqual(plain(C.levelBatches({ cuts: cuts.slice(0, 10), settings: {} }).batches.map((b) => b.cuts.length)), [10]);
+  assert.deepEqual(plain(C.levelBatches({ cuts: cuts.slice(0, 11), settings: {} }).batches.map((b) => b.cuts.length)), [10, 1]);
+}
+
 // ---- verifyPlan catches a wrong plan ----
 const pcs = [
   { id: "P1", level: "Level 5", ref: "1", w: 900, h: 2680 },
@@ -208,8 +229,8 @@ for (const where of [process.env.HIGHS_PATH, "highs"].filter(Boolean)) {
   assert.deepEqual(plain(r.cuts.map((c) => [c.id, c.W, c.used, c.spare, c.allowance])), [["R001", 1800, 1800, 0, 20]]);
   assert.equal(r.optimal, true);
   const row = C.exportRows(r, {}).cuts.rows[0];
-  assert.deepEqual(plain(row.slice(0, 14)), ["R001", "Level 6", "13", "", 1, 1800, 2680, 2, "950 + 830", 20, 1800, 0, 4.824, 4.770]);
-  assert.ok(Math.abs(row[14] - 4.7704 / 4.824) < 1e-12); assert.equal(row[15], "P1, P2");
+  assert.deepEqual(plain(row.slice(0, 15)), ["R001", "Level 6", "Level 6 · B1", "13", "", 1, 1800, 2680, 2, "950 + 830", 20, 1800, 0, 4.824, 4.770]);
+  assert.ok(Math.abs(row[15] - 4.7704 / 4.824) < 1e-12); assert.equal(row[16], "P1, P2");
   // 30 mm: 1810 never goes on the 1800 roll -> two cuts of 1000.
   r = await C.plan(ex, { scope: "level", allowance: 30 }, solve);
   assert.deepEqual(plain(r.cuts.map((c) => [c.W, c.used])), [[1000, 980], [1000, 860]]);
