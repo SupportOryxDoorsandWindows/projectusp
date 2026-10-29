@@ -699,7 +699,7 @@
       ["Used width incl. gaps (mm) = sum of the panel widths + the allowance (one per cut); it must not be more than the stock width"],
       ["Stock width = the smallest standard roll (1000 / 1200 / 1500 / 1800 mm) the cut fits; offcut width = stock width − used width"],
       ["Stock area (m²) = stock width × cut length ÷ 1,000,000; panel area (m²) = sum of panel width × height ÷ 1,000,000 (the allowance is not panel area)"],
-      ["Yield = panel area ÷ stock area; film used (%) of the whole plan = all panel area ÷ all stock area"],
+      ["Utilization = panel area ÷ stock area; film used (%) of the whole plan = all panel area ÷ all stock area"],
       ["Panels are never turned. Production sequence and installation release are not part of this version."],
     ];
     if (info.issues && info.issues.length) {
@@ -714,7 +714,7 @@
     const use = rollUse(result, 50);
     const uniqJ = (xs, many) => { const u = uniq(xs); return u.length > 1 && many ? many : u.join(", "); };
     const cuts = {
-      head: ["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Yield", "Piece IDs"],
+      head: ["Cut ID", "Level", "Ref #", "Location", "Roll no.", "Stock width (mm)", "Cut length (mm)", "Pieces", "Pattern (mm)", "Used width incl. gaps", "Offcut width (mm)", "Stock area (m²)", "Panel area (m²)", "Utilization", "Piece IDs"],
       rows: result.cuts.map((c) => [c.id, uniqJ(c.pieces.map((p) => p.level), "Mixed"), uniq(c.pieces.map((p) => p.ref)).join(", "), uniqJ(c.pieces.map((p) => p.loc), "Multiple locations"),
         use.rollOf[c.id] != null ? use.rollOf[c.id] : "",
         c.W, c.L, c.pieces.length, pattern(c), usedOf(c), c.W - usedOf(c), r3(c.W * c.L / 1e6), r3(c.pieces.reduce((a, p) => a + p.w * p.h, 0) / 1e6),
