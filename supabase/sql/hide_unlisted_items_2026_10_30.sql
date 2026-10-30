@@ -27,3 +27,8 @@ where item_code in ('15X30', '190003', '190004', '20X40', '210019', '210055',
 -- L Angle (10001-*) and Flat Trim (10003-*) stay shown for now.
 update public.inventory_items set status = 'inactive'
 where (item_code like '10002-%' or item_code = '15x40 Box Section') and current_qty = 0;
+
+-- 2026-10-30, later again: the user ("also remove the flat trim and L
+-- angle") -- 30x30mm L Angle + 7 Flat Trim items hidden (all stock 0).
+update public.inventory_items set status = 'inactive'
+where (item_code like '10001-%' or item_code like '10003-%') and current_qty = 0;

@@ -235,7 +235,8 @@ product lines — never treat one family's item as a match for another's:
 - 21 hidden on 2026-10-30 from "FLYSCREEN STOCK OCT 14.xlsx" (user: "Hide
   them", "Keep the 21 newer items" -- the L Angle / Box Section / Flat Trim
   items added 21-27 Oct stay). Later the same day all 13 Box Section items
-  were hidden too (user: "has no box section"); L Angle / Flat Trim stay.
+  were hidden too (user: "has no box section"), then the L Angle and 7 Flat
+  Trim items ("also remove the flat trim and L angle"): 42 hidden in all.
   List + undo: `supabase/sql/hide_unlisted_items_2026_10_30.sql`.
 
 ## Kanban replenishment (was "Minimum level")
