@@ -224,6 +224,19 @@ product lines — never treat one family's item as a match for another's:
   (`.order("id")`): one Check-in / Check-out shares one `created_at` (up to
   181 lines), and without the tie-break a page edge can skip or repeat rows.
 
+## Hidden items (not on the official stock list, 2026-10-30)
+
+- `inventory_items.status = 'inactive'` AND `current_qty = 0` = hidden from
+  Master Inventory (list, Show counts, Stock Value, Extract), the Dashboard and
+  the Check-in/Check-out code pickers (`codePickerOptions`). Rows and history
+  are kept (never deleted: 26 had movements; the FK forbids it). Check-in /
+  Check-out matching still knows them (the unique code+length key would refuse
+  a "New item" with the same code); one that gets stock shows up again.
+- 21 hidden on 2026-10-30 from "FLYSCREEN STOCK OCT 14.xlsx" (user: "Hide
+  them", "Keep the 21 newer items" -- the L Angle / Box Section / Flat Trim
+  items added 21-27 Oct stay). List + undo:
+  `supabase/sql/hide_unlisted_items_2026_10_30.sql`.
+
 ## Kanban replenishment (was "Minimum level")
 
 - ONE rule, in `kanban.js` (`window.ORYX_KANBAN.kanbanState`, loaded from

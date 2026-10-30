@@ -100,7 +100,9 @@
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
       const [itemsRes, txRes, aliases, photos, lastChange] = await Promise.all([
-        sb.from("inventory_items").select("*").order("item_code"),
+        // Items no longer on the official stock list are kept (history) but
+        // hidden: status 'inactive' and no stock (CLAUDE.md "Hidden items").
+        sb.from("inventory_items").select("*").or("status.neq.inactive,current_qty.neq.0").order("item_code"),
         // Fetched at line-item grain, then grouped back into one Check-out
         // per (job, client, timestamp) below -- Postgres's now() returns the
         // same value for every row inserted inside one checkout_transaction()

@@ -69,7 +69,10 @@
   function codePickerOptions(itemsByCode) {
     const options = [];
     for (const code of [...itemsByCode.keys()].sort()) {
-      const rows = itemsByCode.get(code);
+      // Hidden items (inactive, no stock) are not offered; matching still
+      // knows them, so a supplier code of one never becomes a duplicate.
+      const rows = itemsByCode.get(code).filter((c) => !(c.status === "inactive" && Number(c.current_qty) === 0));
+      if (!rows.length) continue;
       const lengths = new Set(rows.map((c) => c.bar_length_mm).filter((n) => typeof n === "number"));
       if (rows.length > 1 && lengths.size > 1) {
         [...rows]
