@@ -20,3 +20,10 @@ where item_code in ('15X30', '190003', '190004', '20X40', '210019', '210055',
 -- Show one (or all) again:
 --   update public.inventory_items set status = 'active' where item_code = '<code>';
 --   update public.inventory_items set status = 'active' where status = 'inactive';
+
+-- 2026-10-30, later: the user ("the files that i give to you has no box
+-- section, but it still showing") -- all Box Section items hidden too (13,
+-- all stock 0). Check-out still matches 10002-15x30 / 10002-20x40 by code.
+-- L Angle (10001-*) and Flat Trim (10003-*) stay shown for now.
+update public.inventory_items set status = 'inactive'
+where (item_code like '10002-%' or item_code = '15x40 Box Section') and current_qty = 0;
