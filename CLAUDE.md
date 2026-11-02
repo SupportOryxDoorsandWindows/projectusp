@@ -318,8 +318,26 @@ product lines — never treat one family's item as a match for another's:
     take out; reason required; type 'adjustment', quantity = signed change.
   - Kanban levels (`renson_set_levels`): same rule as Freedom (critical only
     with a trigger, below it); checked in the browser with KANBAN.parseLevels.
-  - Check-out: PDF (as before) OR lines typed by hand (no document; the
-    server then skips the once-per-document check).
+  - Check-out: ONE shared Check-out page for every stock category since
+    2026-11-02 (user: "one Check-In module and one Check-Out module"; the
+    Renson Check-out tab is gone). fp-checkout.js `analyse`: no
+    `window.ORYX_RENSON_CHECKOUT` (regular user / pilot off) and
+    `isRensonJobList(text)` (RENSON word or RENSON_/RENS_ bar codes) = the
+    whole file is refused, nothing taken off. With it (Admin, pilot on):
+    `split()` reads the Renson lines (buildRensonCheckout) and removes them
+    from Freedom's rows (`splitRensonRows`: rows with a Renson code -- no code
+    is in both inventories, checked 2026-11-02 -- and code-less bars whose
+    description is in RENSON_BARS); the rest (e.g. 910010 Patio Mesh, Box
+    Sections) stays Freedom exactly as Freedom handles it (user: "each line
+    to its own stock"). Renson lines are drawn in `#fpRenson` (tick boxes).
+    Confirm: Freedom part first (unchanged Edge Function call, skipped only
+    when there are no Freedom lines), THEN `renson_checkout`; a Renson
+    failure after a saved Freedom part says so with "Try again" (the Renson
+    part is once per job list, so never taken twice). No Renson lines = the
+    exact old path: `tests/browser/checkout-same-freedom.js` (made-up Freedom
+    job list, Admin + regular user) gives IDENTICAL output on the old and new
+    code. Delivery notes still follow a saved Freedom part as before.
+    `renson_checkout` still accepts a Check-out without a document.
   - Check-in / hand Check-out boxes are drawn ONCE; typing only updates the
     worked-out cells (`updateCheckin` / `updateManualOut`). A full redraw on
     "change" replaced the box someone was clicking into and lost what they

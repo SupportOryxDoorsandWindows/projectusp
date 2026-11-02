@@ -27,7 +27,7 @@ const cdn = {
 };
 
 // Stand-in for supabase/sql/renson_pilot.sql
-const db = { items: [], imports: [], flag: true, calls: [] };
+const db = { items: [], imports: [], flag: true, calls: [], freedomCheckouts: [] };
 function rpc(name, a, admin) {
   const ok = (b) => ({ status: 200, body: b });
   const err = (m) => ({ status: 400, body: { message: m, code: "P0001" } });
@@ -47,7 +47,7 @@ function rpc(name, a, admin) {
   if (name === "renson_checkout") {
     if (!access) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } };
     if (a.p.document_hash && (db.moves || []).some((m) => m.document_hash === a.p.document_hash)) return err("renson_job_list_already_checked_out");
-    db.lastCheckout = a.p; db.moves = db.moves || [];
+    db.lastCheckout = a.p; db.moves = db.moves || []; db.rensonCheckoutAt = Date.now() + Math.random();
     let total = 0, below = 0;
     for (const l of a.p.lines) {
       const it = db.items.find((i) => i.item_code === l.item_code);
@@ -138,6 +138,12 @@ async function session(browser, role) {
     if (u.pathname === "/auth/v1/user") return send(200, user);
     if (u.pathname.startsWith("/auth/v1/")) return route.fulfill({ status: 204, body: "" });
     requests.push({ method: req.method(), url: u.pathname + u.search, role });
+    if (u.pathname.startsWith("/functions/v1/checkout")) {
+      const type = req.headers()["content-type"] || "";
+      const body = /multipart/.test(type) ? JSON.parse((await new Response(req.postDataBuffer(), { headers: { "content-type": type } }).formData()).get("payload")) : JSON.parse(req.postData() || "{}");
+      db.freedomCheckouts.push(body); db.freedomCheckoutAt = Date.now() + Math.random();
+      return send(200, { ok: true, lines: body.lines.map((l) => ({ item_id: l.item_id, quantity: l.quantity })), document: { saved: true } });
+    }
     if (u.pathname.startsWith("/functions/v1/")) return send(200, { ok: true });
     const rpcName = (u.pathname.match(/^\/rest\/v1\/rpc\/(\w+)/) || [])[1];
     if (rpcName) { const r = rpc(rpcName, JSON.parse(req.postData() || "{}"), admin); return send(r.status, r.body); }
@@ -147,10 +153,12 @@ async function session(browser, role) {
       return send(200, (req.headers()["accept"] || "").includes("vnd.pgrst.object") ? prof : [prof]);
     }
     if (table === "renson_items") return send(200, admin && db.flag ? db.items : []);
+    if (table === "inventory_items") return send(200, [{ id: "f-910010", item_code: "910010", description: "Patio Mesh 3.2m (30M)", current_qty: 1227.14, unit_cost: 12, current_value: 14725.68, status: "active", bar_length_mm: null }]);
     if (table === "renson_imports") return send(200, admin && db.flag ? db.imports : []);
     if (table === "renson_transactions") {
-      const itemId = (u.searchParams.get("item_id") || "").replace(/^eq\./, "");
-      const rows = (db.moves || []).filter((m) => !itemId || String(m.item_id) === itemId);
+      const eq = (k) => (u.searchParams.get(k) || "").replace(/^eq\./, "");
+      const itemId = eq("item_id"), type = eq("type"), hash = eq("document_hash");
+      const rows = (db.moves || []).filter((m) => (!itemId || String(m.item_id) === itemId) && (!type || m.type === type) && (!hash || m.document_hash === hash));
       return send(200, admin && db.flag ? rows : []);
     }
     if (table === "systems") return send(200, [{ id: "series-1", name: "Series 1", family: "Sliding", tracks: ["2"], any_config: false, sort_order: 0 }]);
@@ -168,7 +176,10 @@ const fail = [];
 const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if (!ok) fail.push(t); };
 const isRenson = (r) => /renson|feature_flag/i.test(r.url);
 // Anything that is not a plain read, outside the Renson pilot = a Freedom write.
-const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" && !/^\/rest\/v1\/rpc\/renson_/.test(r.url) && !/\/auth\//.test(r.url));
+// The Freedom Check-out call (and the Delivery Notes it prepares afterwards,
+// as for every Freedom Check-out) are checked on their own.
+const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" && !/^\/rest\/v1\/rpc\/renson_/.test(r.url) && !/\/auth\//.test(r.url)
+  && !/^\/functions\/v1\/checkout/.test(r.url) && !/^\/rest\/v1\/rpc\/prepare_delivery_notes/.test(r.url));
 
 (async () => {
   const browser = await chromium.launch();
@@ -182,7 +193,13 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     await p.evaluate(() => { sessionStorage.setItem("oryx_view", "master-inventory"); sessionStorage.setItem("oryx_mi_inventory", "renson"); });
     await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(1500);
     check(await p.isVisible("#miSearch") && !(await p.$("#rnBody")), "regular user with a stored 'renson' choice: Freedom list only");
-    check(!freedomWrites(requests).length, "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
+    if (jobPdf) {
+      await p.click('nav button[data-v="fp"]'); await p.waitForTimeout(300);
+      await p.setInputFiles("#fpPdf", jobPdf); await p.click("#fpExtract");
+      await p.waitForFunction(() => /Renson job list/.test(document.querySelector("#fpStatus").textContent), null, { timeout: 60000 });
+      check(!(await p.$("#fpOut table")) && await p.isHidden("#fpConfirmBar") && !db.freedomCheckouts.length, "regular user: Renson job list refused on the shared Check-out, nothing taken off");
+    }
+    check(!freedomWrites(requests).length && !requests.some((r) => /functions\/v1\/checkout/.test(r.url)), "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "regular user: no page errors " + errors.join(" | "));
     await p.close();
   }
@@ -268,12 +285,6 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     check(ci && ci.currency === "EUR" && ci.exchange_rate === 4 && ci.invoice_number === "RN-INV-1" && ci.lines.length === 2
       && ci.lines[0].shipping_allocated === 20 && ci.lines[1].new_item && ci.lines[1].new_item.description === "Test new part", "check-in: sent with currency, rate, shipping share and the new item");
     check(/Checked in 2 lines \(1 new item\)/.test(await p.innerText("#rnBody")), "check-in: done message");
-    // Check-out typed by hand
-    await p.click('[data-rn-tab="checkout"]'); await p.click('[data-rn-act="out-manual"]');
-    await p.fill("#rnOutJob", "J-HAND");
-    await p.fill('[data-rn-out="item_code"][data-i="0"]', "2390"); await p.fill('[data-rn-out="qty"][data-i="0"]', "2"); await p.press('[data-rn-out="qty"][data-i="0"]', "Tab");
-    await p.click('[data-rn-act="out-confirm-manual"]'); await p.waitForSelector('[data-rn-tab="moves"].on', { timeout: 30000 });
-    check(db.lastCheckout && db.lastCheckout.job_number === "J-HAND" && !db.lastCheckout.document_hash && db.lastCheckout.lines[0].item_code === "2390" && db.lastCheckout.lines[0].qty === 2, "manual check-out: sent without a document");
     if (shot) await p.screenshot({ path: shot, fullPage: false });
     await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(2000);
     check((await p.evaluate(() => document.querySelector(".view.on").id)) === "v-master-inventory" && (await p.inputValue("#rnInventory")) === "renson" && await p.isVisible("#rnSearch"), "reload keeps Master Inventory on Renson");
@@ -283,38 +294,42 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     check(await p.isVisible("#miSearch") && await p.isVisible("#miExtractBtn") && !(await p.isVisible("#rnBody")), "back to Freedom: Freedom list again");
     check(/Freedom stock\./.test(await p.innerText("#v-master-inventory .page-head p")), "Freedom subtitle restored");
     if (jobPdf) {
-      // Renson Check-out from the real job list (24222R)
-      await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(800);
-      await p.click('[data-rn-tab="checkout"]');
-      await p.setInputFiles("#rnOutFile", jobPdf);
-      await p.waitForSelector('[data-rn-act="out-confirm"]', { timeout: 60000 });
-      const prev = await p.innerText("#rnBody");
-      check((await p.inputValue("#rnOutJob")) === "24222R", "check-out: job number 24222R read from the job list");
-      check(/Lines to take off\s*35/.test(prev) && /Left out\s*8/.test(prev), "check-out: 35 lines to take off, 8 left out");
-      check(/AED 10,664\.86/.test(prev), "check-out: value AED 10,664.86");
-      check(/910010[\s\S]*Not a Renson item/.test(prev) && /Box Section 40x60[\s\S]*Box Section: not a Renson item/.test(prev), "check-out: 910010 and Box Sections left out with the reason");
-      check(/= 12 bars \(Pair\)/.test(prev) && /42\.9 m ÷ 6 m = 8 bars/.test(prev), "check-out: Pair = 2 bars, 2450 metres to bars shown");
-      check(/Below zero, allowed/.test(prev), "check-out: below-zero lines marked");
-      if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-checkout.png"), fullPage: false });
-      await p.uncheck('[data-rn-take="714"]'); await p.waitForTimeout(200);
-      check(/Lines to take off\s*34/.test(await p.innerText("#rnBody")), "check-out: unticking a line leaves it out");
-      await p.click('[data-rn-act="out-confirm"]');
-      await p.waitForSelector('[data-rn-tab="moves"].on', { timeout: 30000 });
-      const sent = db.lastCheckout;
-      check(sent && sent.job_number === "24222R" && sent.lines.length === 34 && !sent.lines.some((l) => l.item_code === "714" || l.item_code === "910010"), "check-out: 34 Renson lines sent, no 714 / 910010");
-      check(/^[0-9a-f]{64}$/.test(sent.document_hash) && sent.lines.find((l) => l.item_code === "11583").qty === 12 && sent.lines.find((l) => l.item_code === "2450").qty === 8, "check-out: PDF fingerprint, 11583 = 12 bars, 2450 = 8 bars");
-      const mv = await p.innerText("#rnBody");
-      check(/Checked out job 24222R: 34 lines/.test(mv) && /24222R/.test(mv) && /11583/.test(mv), "movements: the Check-out is listed");
-      await p.click('[data-rn-tab="inventory"]');
+      // ONE Check-out page for every stock category: the real Renson job
+      // list 24222R. Renson lines -> Renson stock; 910010 Patio Mesh (a
+      // Freedom item) -> Freedom stock; Box Sections stay Freedom rows to
+      // Acknowledge, as Freedom handles them.
+      await p.click('nav button[data-v="fp"]'); await p.waitForTimeout(400);
+      await p.setInputFiles("#fpPdf", jobPdf);
+      await p.click("#fpExtract");
+      await p.waitForSelector("#fpRenson table", { timeout: 60000 });
+      const fr = await p.innerText("#fpOut"), rn = await p.innerText("#fpRenson");
+      check(/910010/.test(fr) && !/\b11583\b|\b1118\b|\b2405\b/.test(fr), "one check-out: Freedom part has 910010, no Renson codes");
+      check(/Renson value taken off \(35 of 35 lines\)\s*AED 10,664\.86/.test(rn) && /= 12 bars \(Pair\)/.test(rn) && /42\.9 m ÷ 6 m = 8 bars/.test(rn), "one check-out: Renson box has the 35 lines, AED 10,664.86, Pair and metre rules");
+      check(!/Fixed profile head box Square - 100/.test(fr) && /Box Section 40x60/.test(fr), "one check-out: Renson bars moved out of the Freedom rows; Box Sections stay Freedom");
+      check(!/already checked out/.test(rn), "one check-out: first upload shows no 'already checked out' warning");
+      if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-checkout.png"), fullPage: true });
+      await p.uncheck('#fpRenson [data-rn-take="714"]'); await p.waitForTimeout(300);
+      check(/34 of 35 lines/.test(await p.innerText("#fpRenson")), "one check-out: unticking a Renson line leaves it out");
+      for (let k = 0; k < 40; k++) { const b2 = p.locator('#fpOut button[data-act="skip"]:not(.on):text-is("Acknowledge")').first(); if (!(await b2.count())) break; await b2.click(); await p.waitForTimeout(40); }
+      if (!(await p.inputValue("#fpClient"))) await p.fill("#fpClient", "Paolo Rusolen");
+      check(/\+ 34 Renson items/.test(await p.innerText("#fpConfirmSummary")), "confirm bar counts the Renson items");
+      await p.click("#fpConfirm");
+      await p.waitForSelector("#fpDone .fp-done", { timeout: 30000 });
+      const fc = db.freedomCheckouts[db.freedomCheckouts.length - 1], sent = db.lastCheckout;
+      check(fc && fc.lines.length === 1 && fc.lines[0].item_id === "f-910010" && fc.job_number === "24222R", "Freedom part: only 910010 sent to the Freedom Check-out");
+      check(sent && sent.job_number === "24222R" && sent.lines.length === 34 && !sent.lines.some((l) => l.item_code === "714" || l.item_code === "910010")
+        && sent.lines.find((l) => l.item_code === "11583").qty === 12 && sent.lines.find((l) => l.item_code === "2450").qty === 8 && /^[0-9a-f]{64}$/.test(sent.document_hash), "Renson part: 34 lines to Renson stock, 11583 = 12, 2450 = 8, with the PDF fingerprint");
+      check(db.freedomCheckoutAt < db.rensonCheckoutAt, "Freedom part saved first, then Renson");
+      const done = await p.innerText("#fpDone");
+      check(/Check-out confirmed — 1 item deducted/.test(done) && /Renson: 34 Renson items taken off the Renson stock/.test(done), "done message: both parts");
       check(db.items.find((i) => i.item_code === "11583").current_qty === -4, "renson stock: 11583 8 -> -4");
-      // same job list again: warned, and the server refuses
-      await p.click('[data-rn-tab="checkout"]');
-      await p.setInputFiles("#rnOutFile", jobPdf);
-      await p.waitForSelector('[data-rn-act="out-confirm"]', { timeout: 60000 });
-      check(/already checked out/.test(await p.innerText("#rnBody")), "same job list again: warned");
-      await p.click('[data-rn-act="out-confirm"]'); await p.waitForTimeout(800);
-      check(/already checked out\. Nothing was saved/.test(await p.innerText("#rnBody")), "same job list again: refused, nothing saved");
-      await p.selectOption("#rnInventory", "freedom"); await p.waitForTimeout(300);
+      // Same job list again: Renson box warns
+      await p.click("#fpNew");
+      await p.setInputFiles("#fpPdf", jobPdf); await p.click("#fpExtract");
+      await p.waitForSelector("#fpRenson table", { timeout: 60000 });
+      check(/already checked out/.test(await p.innerText("#fpRenson")), "same job list again: Renson box warns");
+      await p.click("#fpNew").catch(() => {});
+      check(!(await p.$('[data-rn-tab="checkout"]')), "old Renson Check-out tab removed");
     }
     check(!freedomWrites(requests).length, "admin: no write to any Freedom table or function " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "admin: no page errors " + errors.join(" | "));
