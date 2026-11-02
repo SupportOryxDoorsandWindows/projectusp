@@ -17,6 +17,21 @@ const { chromium } = require(require("child_process").execSync("npm root -g").to
 const args = process.argv.slice(2);
 const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : null; };
 const xlsx = opt("--xlsx"), nm = opt("--node-modules"), shot = opt("--shot"), jobPdf = opt("--job-pdf");
+// --renson-docs <dir>: the Renson NV samples SUP_1 (quotation 20120358) and
+// SUP_03 (order confirmation 167012), named *SUP_1_* / *SUP_03_* (not
+// committed: supplier documents).
+const docDir = opt("--renson-docs");
+const pick = (re) => { if (!docDir) return null; const f = fs.readdirSync(docDir).find((n) => re.test(n)); return f ? path.join(docDir, f) : null; };
+const rensonDocs = [
+  { name: "SUP_1", file: pick(/SUP_1_/i), number: "20120358", lines: 57, ask: ["15130", "14506", "2128"],
+    expect: { "22034": "1000", "2405": "500", "6557": "500", "17710": "4000", "15130": "" },
+    check: (ci) => { const s = ci.lines.reduce((x, l) => x + (l.shipping_allocated || 0), 0); const nw = ci.lines.filter((l) => l.new_item); return Math.abs(s - 100) < 0.001 && nw.length === 1 && nw[0].item_code === "20315"; },
+    checkText: "Pickup Fee (EUR 100) spread as shipping; 20315 added as a new item" },
+  { name: "SUP_03", file: pick(/SUP_03_/i), number: "167012", lines: 48, ask: [],
+    expect: { "27409": "50", "17504": "5000", "2399": "600", "6557": "550", "2405": "500", "22034": "3000", "25089": "60" },
+    check: (ci) => { const l = ci.lines.find((x) => x.item_code === "22034"); return l && l.qty === 3000 && Math.abs(l.original_unit_cost - 148.5 / 3000) < 1e-6; },
+    checkText: "22034: 3 cartons = 3000 pcs at EUR 148.50 / 3000 each (net after discount)" },
+].filter((d) => d.file);
 if (!xlsx || !nm) { console.error("usage: --xlsx <file> --node-modules <folder> [--shot <png>]"); process.exit(2); }
 const repo = path.resolve(__dirname, "../..");
 const cdn = {
@@ -199,7 +214,13 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
       await p.waitForFunction(() => /Renson job list/.test(document.querySelector("#fpStatus").textContent), null, { timeout: 60000 });
       check(!(await p.$("#fpOut table")) && await p.isHidden("#fpConfirmBar") && !db.freedomCheckouts.length, "regular user: Renson job list refused on the shared Check-out, nothing taken off");
     }
-    check(!freedomWrites(requests).length && !requests.some((r) => /functions\/v1\/checkout/.test(r.url)), "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
+    if (rensonDocs.length) {
+      await p.click('nav button[data-v="checkin"]'); await p.waitForTimeout(300);
+      await p.setInputFiles("#ciPdf", rensonDocs[0].file); await p.click("#ciExtract");
+      await p.waitForFunction(() => /Renson document/.test(document.querySelector("#ciStatus").textContent), null, { timeout: 60000 });
+      check(!(await p.$("#ciOut table")) && !(await p.$("#ciRenson .card")) && await p.isHidden("#ciConfirmBar"), "regular user: Renson document refused on the shared Check-in, nothing changed");
+    }
+    check(!freedomWrites(requests).length && !requests.some((r) => /functions\/v1\/check(out|in)/.test(r.url)), "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "regular user: no page errors " + errors.join(" | "));
     await p.close();
   }
@@ -263,28 +284,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     check(db.lastLevels && db.lastLevels.p_trigger === 15 && db.lastLevels.p_critical === 5, "levels: 15 / 5 saved");
     await p.click('[data-rn-dlg="close"]'); await p.waitForTimeout(300);
     check(/Low stock/.test(await p.innerText('tr[data-rn-item="2"]')) || /Low stock/.test(await p.innerText("#rnBody")), "list: 22874 (12 <= 15) shows Low stock");
-    // Check-in: EUR with the rate fetched, shipping, a new item
-    await p.click('[data-rn-tab="checkin"]');
-    await p.waitForTimeout(800);
-    check((await p.inputValue("#rnInRate")) === "4", "check-in: EUR rate fetched (4)");
-    await p.fill("#rnInInvoice", "RN-INV-1"); await p.fill("#rnInShip", "40");
-    await p.fill('[data-rn-in="item_code"][data-i="0"]', "22874"); await p.press('[data-rn-in="item_code"][data-i="0"]', "Tab");
-    await p.fill('[data-rn-in="qty"][data-i="0"]', "10"); await p.press('[data-rn-in="qty"][data-i="0"]', "Tab");
-    await p.fill('[data-rn-in="price"][data-i="0"]', "40"); await p.press('[data-rn-in="price"][data-i="0"]', "Tab");
-    await p.click('[data-rn-act="in-add"]');
-    await p.fill('[data-rn-in="item_code"][data-i="1"]', "NEW-9"); await p.press('[data-rn-in="item_code"][data-i="1"]', "Tab");
-    check(/New item/.test(await p.innerText("#rnBody")) && await p.isDisabled('[data-rn-act="in-confirm"]'), "check-in: unknown code = New item, Confirm waits for its details");
-    await p.fill('[data-rn-in="desc"][data-i="1"]', "Test new part"); await p.fill('[data-rn-in="unit"][data-i="1"]', "pc");
-    await p.fill('[data-rn-in="qty"][data-i="1"]', "3"); await p.fill('[data-rn-in="price"][data-i="1"]', "10"); await p.press('[data-rn-in="price"][data-i="1"]', "Tab");
-    const cin = await p.innerText("#rnBody");
-    // shipping 40 / 2 lines = 20 each: 22874 (40 + 20/10) x 4 = 168; average (12 x 153 + 10 x 168) / 22 = 159.82
-    check(/AED 168\.00/.test(cin) && /AED 159\.82/.test(cin), "check-in preview: price paid AED 168, average AED 159.82 (Freedom's rule)");
-    if (shot) { await p.evaluate(() => document.querySelectorAll(".rn-wrap").forEach((w) => { w.scrollLeft = 0; })); await p.screenshot({ path: shot.replace(/\.png$/, "-checkin.png"), fullPage: false }); }
-    await p.click('[data-rn-act="in-confirm"]'); await p.waitForSelector('[data-rn-tab="moves"].on', { timeout: 30000 });
-    const ci = db.lastCheckin;
-    check(ci && ci.currency === "EUR" && ci.exchange_rate === 4 && ci.invoice_number === "RN-INV-1" && ci.lines.length === 2
-      && ci.lines[0].shipping_allocated === 20 && ci.lines[1].new_item && ci.lines[1].new_item.description === "Test new part", "check-in: sent with currency, rate, shipping share and the new item");
-    check(/Checked in 2 lines \(1 new item\)/.test(await p.innerText("#rnBody")), "check-in: done message");
+    check(!(await p.$('[data-rn-tab="checkin"]')) && !(await p.$('[data-rn-tab="checkout"]')), "old Renson Check-in / Check-out tabs removed");
     if (shot) await p.screenshot({ path: shot, fullPage: false });
     await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(2000);
     check((await p.evaluate(() => document.querySelector(".view.on").id)) === "v-master-inventory" && (await p.inputValue("#rnInventory")) === "renson" && await p.isVisible("#rnSearch"), "reload keeps Master Inventory on Renson");
@@ -330,6 +330,41 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
       check(/already checked out/.test(await p.innerText("#fpRenson")), "same job list again: Renson box warns");
       await p.click("#fpNew").catch(() => {});
       check(!(await p.$('[data-rn-tab="checkout"]')), "old Renson Check-out tab removed");
+    }
+    if (rensonDocs.length) {
+      // ONE Check-in page: Renson NV documents go to the Renson stock.
+      // SUP_1 (16 pages, 58 lines, Pickup Fee, a new item 20315, rolls without
+      // a stated length) and SUP_03 (48 lines, cartons and rolls).
+      for (const doc of rensonDocs) {
+        await p.click('nav button[data-v="checkin"]'); await p.waitForTimeout(300);
+        await p.setInputFiles("#ciPdf", doc.file); await p.click("#ciExtract");
+        await p.waitForSelector("#ciRenson .card", { timeout: 60000 });
+        await p.waitForTimeout(600);
+        const box = await p.innerText("#ciRenson"), st = await p.innerText("#ciStatus");
+        check(!(await p.$("#ciOut table")) && await p.isHidden("#ciConfirmBar"), doc.name + ": Freedom preview not used");
+        check(/✓ The lines add up to the document's total before VAT/.test(box), doc.name + ": lines add up to the document total");
+        check(new RegExp("Renson document read — " + doc.lines + " lines").test(st), doc.name + ": " + doc.lines + " lines read (" + st.slice(0, 90) + ")");
+        check((await p.inputValue("#rciRate")) === "4", doc.name + ": EUR rate fetched for the document date");
+        for (const [code, want] of Object.entries(doc.expect)) {
+          const i = await p.evaluate((c) => { const td = [...document.querySelectorAll("#ciRenson td.mono")].find((x) => x.textContent === c); return td ? td.parentElement.querySelector("[data-rci=qty]").value : null; }, code);
+          check(i === want, `${doc.name}: ${code} quantity for stock = ${want} (${i})`);
+        }
+        // fill what the document doesn't say
+        for (const code of doc.ask) {
+          await p.evaluate((c) => { const td = [...document.querySelectorAll("#ciRenson td.mono")].find((x) => x.textContent === c); const inp = td.parentElement.querySelector("[data-rci=qty]"); inp.value = "100"; inp.dispatchEvent(new Event("input", { bubbles: true })); }, code);
+        }
+        if (shot) await p.screenshot({ path: shot.replace(/\.png$/, `-checkin-${doc.name}.png`), fullPage: false });
+        await p.waitForTimeout(200);
+        check(await p.isEnabled("#rciConfirm"), doc.name + ": Confirm ready once the asked quantities are typed");
+        await p.click("#rciConfirm");
+        await p.waitForSelector("#ciRenson .fp-done", { timeout: 30000 });
+        const ci = db.lastCheckin;
+        check(ci && ci.currency === "EUR" && ci.exchange_rate === 4 && ci.supplier === "Renson NV" && ci.invoice_number === doc.number && /^[0-9a-f]{64}$/.test(ci.document_hash) && ci.lines.length === doc.lines,
+          doc.name + ": sent to renson_checkin (EUR, rate, document number, fingerprint, all lines)");
+        check(doc.check(ci), doc.name + ": " + doc.checkText);
+        check(/Renson Check-in confirmed/.test(await p.innerText("#ciRenson")), doc.name + ": done message");
+      }
+      await p.click('nav .rn-sub [data-rn-mode="renson"]'); await p.waitForTimeout(800);
     }
     check(!freedomWrites(requests).length, "admin: no write to any Freedom table or function " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "admin: no page errors " + errors.join(" | "));

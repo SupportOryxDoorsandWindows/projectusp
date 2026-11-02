@@ -954,6 +954,27 @@
       if (isStale()) return;
 
       let pdfText = pages.join("\n\n");
+      // One Check-in for every stock category (2026-11-02). A Renson NV
+      // document goes to the Renson inventory (renson.js's
+      // window.ORYX_RENSON_CHECKIN: Admins, pilot on); everyone else is
+      // refused it. Freedom's own reading below never sees it, and a Freedom
+      // document never matches isRensonDocument.
+      const RENSON = window.ORYX_RENSON_CORE;
+      if (window.ORYX_RENSON_CHECKIN) window.ORYX_RENSON_CHECKIN.reset();
+      if (RENSON && RENSON.isRensonDocument(pdfText) || !RENSON && /rensonnv|renson\.(be|eu)|rensonlogistics/.test(pdfText.replace(/\s+/g, "").toLowerCase())) {
+        ciState.rows = null;
+        $("#ciOut").innerHTML = "";
+        $("#ciConfirmBar").hidden = true;
+        $("#ciDone").innerHTML = "";
+        if (!window.ORYX_RENSON_CHECKIN) {
+          ciStatus("This is a Renson document. Renson is in Admin testing, so it can't be checked in from this account yet — ask an Admin. Nothing was changed.", "err");
+          return;
+        }
+        const r = await window.ORYX_RENSON_CHECKIN.open({ text: pdfText, file: ciState.pdfFile, hash });
+        if (isStale()) return;
+        ciStatus(`Renson document read — ${r.lines} line${r.lines === 1 ? "" : "s"}${r.ask ? `, ${r.ask} need a quantity typed` : ""}${r.newItems ? `, ${r.newItems} new item${r.newItems === 1 ? "" : "s"}` : ""}. It goes to the Renson stock (below).`);
+        return;
+      }
       ciState.itemsByCode = itemsByCode;
       ciState.pdfHash = hash;
       ciState.lastPrices = null; // re-read: the last document may have just been saved
@@ -1098,6 +1119,7 @@
     $("#ciManualBody").innerHTML = "";
     $("#ciManualStatus").textContent = "";
     ciManualRowCount = 0;
+    if (window.ORYX_RENSON_CHECKIN) window.ORYX_RENSON_CHECKIN.reset();
     ciStatus("");
   }
 

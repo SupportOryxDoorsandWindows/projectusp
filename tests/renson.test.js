@@ -221,4 +221,71 @@ t("status: out of stock, Kanban (Freedom's rule), no cost", () => {
   assert.deepStrictEqual(s({ current_qty: 30, unit_cost: 1, buffer_level: 10 }), { out: false, kanban: "normal", noCost: false });
 });
 
+// ---------------------------------------------------------------- Renson documents (one Check-in)
+// Made-up excerpt in the layout of Renson NV's order confirmations /
+// quotations (pdf.js text: values BEFORE their labels; Overview + Detail).
+// The real samples (SUP_1 / SUP_03 / SUP_3 / SUP_04 / SUP_05) are supplier
+// documents and are not committed: RENSON_DOCS_TXT=<dir with d1..d5.txt>.
+const RDOC = `Order confirmation
+ Renson NV •  IZ 2 Vijverdam • Maalbeekstraat 10 • B-8790 Waregem
+ 13.06.2025 Confirmation date
+ 167012 Order number
+ EUR Currency
+ June 2025 - Renson Stock Order reference
+ Overview
+ Material  Quantity  Total net  VAT
+ 001000  25089  BACK COVER SQUARE 4M ALU FE100  60,00  PC  3.000,00
+ 002000  22034  DIN912TX-M4X25-A2  3,00  CAR  148,50
+ 003000  2405  SPLINE Ø 6 MM - 250 M  2,00  ROL  156,00
+ 004000  19489  ROLL SERGÉ GV-0707 - B 3200 MM (30 M)
+ 1,00  M  1.112,64
+ 005000  15130  DOUBLE SIDED TAPE 9MM ROLL  4,00  ROL  104,46
+ 903000  1000017  PICKUP FEE  1,00  PC  100,00
+ 4.621,60 Total before VAT
+ Detail
+ 002000  22034  3,00  CAR  330,00  148,50
+ DIN912TX-M4X25-A2
+ G0004395 Old material nr
+ Product price  0,11  EUR  /  1  PC  330,00
+ 003000  2405  2,00  ROL  312,00  156,00
+ SPLINE Ø 6 MM - 250 M
+ Product price  156,00  EUR  /  1  ROL  312,00
+ 005000  15130  4,00  ROL  208,92  104,46
+ DOUBLE SIDED TAPE 9MM ROLL
+ Product price  52,23  EUR  /  1  ROL  208,92
+ 903000  1000017  1,00  PC  100,00  100,00
+ Pickup Fee
+ Price service  100,00  EUR  /  1  PC  100,00  100,00`;
+
+t("Renson documents: detected, read, totals, cartons / rolls / fabric / fees", () => {
+  assert.strictEqual(R.isRensonDocument(RDOC), true);
+  assert.strictEqual(R.isRensonDocument(" R e n s on  N V  •  I Z  2"), true);          // spaced-out footer (macOS print)
+  assert.strictEqual(R.isRensonDocument("Freedom Screens of Australia Pty Ltd ABN 12"), false);
+  const d = JSON.parse(JSON.stringify(R.readRensonDocument(RDOC)));
+  assert.deepStrictEqual([d.head.docType, d.head.number, d.head.isoDate, d.head.currency, d.head.orderRef, d.head.totalBeforeVat, d.head.charges],
+    ["Order confirmation", "167012", "2025-06-13", "EUR", "June 2025 - Renson Stock", 4621.6, 100]);
+  assert.strictEqual(d.totalMatches, true);
+  assert.deepStrictEqual(d.items.map((i) => [i.code, i.qty, i.unit, i.net, i.charge]), [
+    ["25089", 60, "PC", 3000, false], ["22034", 3, "CAR", 148.5, false], ["2405", 2, "ROL", 156, false],
+    ["19489", 1, "M", 1112.64, false],                                       // line split in two by the PDF, joined
+    ["15130", 4, "ROL", 104.46, false], ["1000017", 1, "PC", 100, true]]);   // Pickup Fee = a charge
+  const q = (code) => { const r = R.rensonStockQty(d.items.find((i) => i.code === code)); return r.ask ? "ask " + r.ask : r.qty + " " + r.unit; };
+  assert.strictEqual(q("25089"), "60 pc");
+  assert.strictEqual(q("22034"), "3000 pc");     // 330 gross / 0.11 per PC
+  assert.strictEqual(q("2405"), "500 m");        // 2 rolls x 250 m (from the name)
+  assert.strictEqual(q("19489"), "ask metres");  // fabric "M" line: asked (user's answer)
+  assert.strictEqual(q("15130"), "ask metres");  // roll with no length stated: asked, never guessed
+});
+
+if (process.env.RENSON_DOCS_TXT) {
+  t("the real Renson documents", () => {
+    const want = { 1: [1, 1736.91], 2: [1, 1112.64], 3: [2, 2193.35], 4: [48, 56306.19], 5: [58, 45792.52] };
+    for (const k of Object.keys(want)) {
+      const d = R.readRensonDocument(fs.readFileSync(`${process.env.RENSON_DOCS_TXT}/d${k}.txt`, "utf8"));
+      assert.deepStrictEqual([d.items.length, d.head.totalBeforeVat, d.totalMatches], [want[k][0], want[k][1], true], "doc " + k);
+    }
+    console.log("  real Renson documents: all 5 read, every total matches");
+  });
+}
+
 console.log(`renson: ${n} tests passed`);
