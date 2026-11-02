@@ -307,13 +307,31 @@ product lines — never treat one family's item as a match for another's:
     No cost), Kanban row colours + badges via kanban.js (`rensonStatus`),
     Extract (.xlsx of the rows shown), row -> item panel (`#rnItemDlg`:
     stock / average cost / last bought, Adjust, Kanban levels, history).
-  - Check-in (`renson_checkin`): the supplier document is TYPED in (no
-    Renson invoice layout to read yet): supplier, invoice, PO, date,
-    currency + rate (FP.fetchCheckinExchangeRate, editable), shipping split
-    equally per line like Freedom; price paid AED = (price + shipping/qty) x
-    rate, worked out on the server; Freedom's weighted average rule; an
-    unknown code = NEW Renson item (description + unit required); once per
-    document when a hash is sent. `checkinPreview` mirrors the server sums.
+  - Check-in: ONE shared Check-in page since 2026-11-02 (the Renson
+    Check-in tab is gone). fp-checkin-screen.js `ciAnalyse`, right after the
+    text is read: a Renson NV document (`isRensonDocument`: "Renson NV" /
+    renson.be|eu / "Renson Logistics", spaces ignored -- the macOS-printed
+    sample spaces out its footer) goes to `window.ORYX_RENSON_CHECKIN.open()`
+    (renson.js, Admins + pilot) and Freedom's reading is skipped; without it
+    (regular user / pilot off) the document is refused (fallback regex in
+    fp-checkin-screen.js), nothing changed. Reader `readRensonDocument`
+    (samples SUP_1 quotation 20120358, SUP_3 20159420, SUP_03 order conf.
+    167012, SUP_04 179636, SUP_05 179607 -- all 5 read, every total = the
+    document's "Total before VAT"): header values BEFORE labels, Overview
+    (pos, code, [desc], qty, unit, net; a line split in two is joined),
+    Detail (gross, "Product|Net price P EUR / 1 PC|ROL|M"); "Price service"
+    / Pickup Fee lines = charges -> shipping. Stock qty `rensonStockQty`
+    (user's answers): PC as is; CAR/ROL priced per PC = gross / price
+    pieces (3 CAR 22034 = 3000 pcs); priced per ROL/CAR with "- N M" in the
+    name = rolls x N m (2399 2 CAR = 4 rolls x 150 = 600 m); priced per M =
+    metres; fabric "M" lines and rolls without a length are ASKED (typed),
+    never guessed. Unit price = line NET (after discounts) / stock qty, in
+    the document currency; rate fetched for the document date (editable);
+    `renson_checkin` with document name + SHA-256 (once per document), a
+    code not yet a Renson item = NEW item (description prefilled from the
+    document, e.g. 20315 in SUP_1). Inputs drawn once, sums updated in place.
+    Note: on SUP_3 code 1118 is "SITUO 5" but the stock file calls 1118
+    "Situo 1" (and 1117 the other way) -- matched by code; told the user.
   - Adjust (`renson_adjust`): stock count / add (optional cost, averaged) /
     take out; reason required; type 'adjustment', quantity = signed change.
   - Kanban levels (`renson_set_levels`): same rule as Freedom (critical only
@@ -342,16 +360,18 @@ product lines — never treat one family's item as a match for another's:
     worked-out cells (`updateCheckin` / `updateManualOut`). A full redraw on
     "change" replaced the box someone was clicking into and lost what they
     typed (found by the browser test).
-- NOT done: reading Renson supplier invoices (PDF) automatically -- needs a
-  sample; Dashboard / Activity do not include Renson (Freedom pages are not
-  changed). Freedom Check-in/Check-out never look at Renson tables.
+- Freedom Check-in unchanged: `tests/browser/checkin-same-freedom.js`
+  (made-up Freedom quote, Admin + regular user) gives IDENTICAL output on the
+  old and new code. Dashboard / Activity do not include Renson. Freedom's
+  own Check-in/Check-out never read Renson tables.
 - Tests: `tests/renson.test.js` (RENSON_XLSX + XLSX_PATH to include the
   real file), `tests/sql/renson-pilot.test.sql` (local Postgres),
   `tests/sql/renson-checkout.test.sql` (after the pilot test),
   `tests/sql/renson-workflow.test.sql` (after the Check-out test),
   `tests/browser/renson-pilot.js` (stand-in backend: regular user gets no
   script / no request, Admin import, `--job-pdf` Check-out, flag off, no
-  Freedom writes). Real job list text for the unit test: RENSON_JOB_TXT
+  Freedom writes; `--renson-docs <dir>` = shared Check-in with SUP_1 +
+  SUP_03). Real files for the unit test: RENSON_JOB_TXT, RENSON_DOCS_TXT
   (pdf.js text, same joining as extractPdfText).
 
 ## Kanban replenishment (was "Minimum level")

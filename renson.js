@@ -283,7 +283,105 @@
     });
   }
 
-  window.ORYX_RENSON_CORE = { splitRensonRows, splitPartCode, parseRensonSheet, excelDate, readJobList, buildRensonCheckout, RENSON_BARS, METRES_TO_BARS,
+  // ------------------------------------------------------------ Renson documents
+  // One Check-in for every stock category (2026-11-02). Renson NV's own
+  // documents (order confirmation, quotation; samples SUP_1/3/03/04/05) share
+  // one layout: header values BEFORE their labels ("179607 Order number"),
+  // an "Overview" (pos, code, [description], qty, unit, total net) and a
+  // "Detail" (pos, code, qty, unit, total gross, [total net], description,
+  // "Product price|Net price  P  EUR  /  1  UNIT"). Numbers are 1.736,91.
+  // The macOS-printed sample spaces out the footer letters, so detection
+  // ignores spaces.
+  function isRensonDocument(text) {
+    const t = String(text || "").replace(/\s+/g, "").toLowerCase();
+    return t.includes("rensonnv") || /renson\.(be|eu)/.test(t) || t.includes("rensonlogistics");
+  }
+  const euNum = (s) => { const n = Number(String(s).replace(/\./g, "").replace(",", ".")); return isFinite(n) ? n : null; };
+  const FOOTER = /^(Renson NV|\+3256|VAT BE|R e n s|VA T|\d+\/\d+$|Order confirmation|Quotation|Invoice|Credit note|\d{6,} \d{2}\.\d{2}\.\d{4}$)/i;
+
+  function readRensonDocument(text) {
+    const raw = String(text || "").split(/\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+    // A line the PDF split in two ("001000 19489 ROLL SERGÉ ... (30 M)" then
+    // "1,00 M 1.112,64") is joined back.
+    const lines = [];
+    for (let k = 0; k < raw.length; k++) {
+      const l = raw[k], nx = raw[k + 1] || "";
+      if (/^\d{6} \S+ /.test(l) && !/[\d.]+,\d+ [A-Z]{1,4}( [\d.]+,\d+){1,2}$/.test(l) && /^[\d.]+,\d+ [A-Z]{1,4}( [\d.]+,\d+){1,2}$/.test(nx)) { lines.push(l + " " + nx); k++; }
+      else lines.push(l);
+    }
+    const val = (label) => { const re = new RegExp("^(.+?) " + label + "$", "i"); const l = lines.find((x) => re.test(x)); return l ? re.exec(l)[1].trim() : ""; };
+    const head = {
+      docType: (lines.find((l) => /^(Order confirmation|Quotation|Invoice|Delivery note|Credit note)$/i.test(l)) || "").trim(),
+      number: val("(?:Order|Quotation|Invoice|Delivery|Document) number"),
+      date: val("(?:Confirmation|Quotation|Invoice|Order|Delivery|Document) date"),
+      currency: (val("Currency") || "").toUpperCase(),
+      projectRef: val("Project reference"), orderRef: val("Order reference"),
+    };
+    const dm = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(head.date);
+    head.isoDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
+    const tb = lines.find((l) => / Total before VAT$/i.test(l));
+    head.totalBeforeVat = tb ? euNum(tb.replace(/ Total before VAT$/i, "")) : null;
+
+    // Overview: "001000 19504 21154/0202 WHITE 2100MM 1,00 M 1.736,91" or
+    // "001000 27409 25,00 PC 572,50" + the description on the next line.
+    const over = new Map();
+    let inOver = false, last = null;
+    for (const l of lines) {
+      if (/^Overview$/i.test(l)) { inOver = true; continue; }
+      if (/^Detail$/i.test(l) || / Total before VAT$/i.test(l)) { inOver = false; last = null; continue; }
+      if (!inOver) continue;
+      const m = /^(\d{6}) (\S+) (?:(.*?) )?([\d.]+,\d+) ([A-Z]{1,4}) ([\d.]+,\d+)$/.exec(l);
+      if (m) { last = { pos: m[1], code: m[2].toUpperCase(), description: (m[3] || "").trim(), qty: euNum(m[4]), unit: m[5], net: euNum(m[6]) }; over.set(m[1], last); continue; }
+      if (last && !last.description && !FOOTER.test(l) && !/^Material|^%$/.test(l)) last.description = l;
+    }
+    // Detail: gross total and what the price is per.
+    let inDet = false, cur = null;
+    const det = new Map();
+    for (const l of lines) {
+      if (/^Detail$/i.test(l)) { inDet = true; continue; }
+      if (!inDet) continue;
+      const m = /^(\d{6}) (\S+) ([\d.]+,\d+) ([A-Z]{1,4}) ([\d.]+,\d+)(?: ([\d.]+,\d+))?$/.exec(l);
+      if (m) { cur = { pos: m[1], gross: euNum(m[5]), net: m[6] ? euNum(m[6]) : euNum(m[5]), description: "" }; det.set(m[1], cur); continue; }
+      if (!cur) continue;
+      const p = /^(Product|Net|Service) price ([\d.]+,\d+) [A-Z]{3} \/ ([\d.,]+) ([A-Z]{1,4})\b/i.exec(l) || /^Price (service) ([\d.]+,\d+) [A-Z]{3} \/ ([\d.,]+) ([A-Z]{1,4})\b/i.exec(l);
+      if (p && cur.price == null) { cur.price = euNum(p[2]); cur.per = euNum(p[3]) || 1; cur.priceUnit = p[4]; cur.service = /service/i.test(p[1]); continue; }
+      if (!cur.description && !FOOTER.test(l) && !/Old material nr|Commodity code|discount|^[\d.,\s-]+$/i.test(l)) cur.description = l;
+    }
+    const items = [...over.values()].map((o) => {
+      const d = det.get(o.pos) || {};
+      const description = o.description || d.description || "";
+      return Object.assign({}, o, { description, gross: d.gross != null ? d.gross : null,
+        price: d.price != null ? d.price : null, per: d.per || 1, priceUnit: d.priceUnit || null,
+        // A charge, not stock (sample: 903000 1000017 "Pickup Fee", "Price
+        // service"): goes to the shipping / extra costs, spread like Freedom's.
+        charge: !!d.service || /\b(pick ?up|freight|transport|shipping|packing|handling)\b.*\b(fee|cost|charge)s?\b|^(pick ?up|freight|transport) fee/i.test(description) });
+    });
+    const sum = Math.round(items.reduce((s, i) => s + (i.net || 0), 0) * 100) / 100;
+    head.charges = Math.round(items.filter((i) => i.charge).reduce((s, i) => s + (i.net || 0), 0) * 100) / 100;
+    return { head, items, sum, totalMatches: head.totalBeforeVat == null ? null : Math.abs(sum - head.totalBeforeVat) < 0.011 };
+  }
+
+  // Stock quantity for one document line (user's answers 2026-11-02:
+  // cartons / rolls are converted with the document's OWN figures; fabric
+  // "M" lines are asked). Returns {qty, unit, how} or {ask, why}.
+  function rensonStockQty(it) {
+    const len = /-\s*(\d+(?:[.,]\d+)?)\s*M\b/i.exec(it.description || "");
+    const metresPerRoll = len ? euNum(len[1]) : null;
+    if (it.unit === "M") return { ask: "metres", why: "Fabric: the document says " + it.qty + " M for the whole line. Type the metres to add to stock." };
+    if (it.unit === "PC") return { qty: it.qty, unit: "pc", how: `${it.qty} PC` };
+    // ROL / CAR (or anything else): count the price units in the gross total.
+    if (it.price && it.gross != null) {
+      const n = Math.round((it.gross / it.price) * it.per * 1000) / 1000;
+      const whole = Math.abs(n - Math.round(n)) < 0.01;
+      if (whole && it.priceUnit === "PC") return { qty: Math.round(n), unit: "pc", how: `${it.qty} ${it.unit} = ${Math.round(n)} pcs (€${it.gross} gross ÷ €${it.price} per PC)` };
+      if (whole && (it.priceUnit === "ROL" || it.priceUnit === "CAR") && metresPerRoll) return { qty: Math.round(n) * metresPerRoll, unit: "m", how: `${it.qty} ${it.unit} = ${Math.round(n)} rolls × ${metresPerRoll} m = ${Math.round(n) * metresPerRoll} m` };
+      if (whole && it.priceUnit === "M") return { qty: n, unit: "m", how: `${it.qty} ${it.unit} = ${n} m` };
+    }
+    if (metresPerRoll && it.unit === "ROL") return { qty: it.qty * metresPerRoll, unit: "m", how: `${it.qty} ROL × ${metresPerRoll} m = ${it.qty * metresPerRoll} m` };
+    return { ask: it.unit === "ROL" ? "metres" : "pieces", why: `${it.qty} ${it.unit}: the document doesn't say how much is in each ${it.unit === "ROL" ? "roll" : "carton"}. Type the ${it.unit === "ROL" ? "metres" : "pieces"} to add to stock.` };
+  }
+
+  window.ORYX_RENSON_CORE = { isRensonDocument, readRensonDocument, rensonStockQty, splitRensonRows, splitPartCode, parseRensonSheet, excelDate, readJobList, buildRensonCheckout, RENSON_BARS, METRES_TO_BARS,
     splitShipping, checkinPreview, rensonStatus };
 })();
 
@@ -321,10 +419,8 @@
   const CURRENCIES = ["AED", "EUR", "USD", "AUD", "GBP"];
   const TYPE_LABEL = { check_out: "Check-out", check_in: "Check-in", adjustment: "Adjustment", opening_import: "Opening stock" };
 
-  const newIn = () => ({ supplier: "Renson", invoice: "", po: "", date: today(), currency: "EUR", rate: "", rateNote: "", shipping: "",
-    lines: [{ item_code: "", qty: "", price: "", desc: "", unit: "" }], busy: false });
   const ui = { mode: "freedom", tab: "inventory", items: [], lastImport: null, moves: [], loading: false, loadError: "", q: "", show: "all",
-    file: null, hash: "", parsed: null, msg: null, busy: false, cin: newIn() };
+    file: null, hash: "", parsed: null, msg: null, busy: false };
   const byCode = () => new Map(ui.items.map((i) => [String(i.item_code).toUpperCase(), i]));
 
   // Ask the database first: Admin AND pilot flag on. Anything else = nothing appears.
@@ -436,6 +532,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     $("#rnInventory").addEventListener("change", (e) => setMode(e.target.value));
     // Shared Check-out page: Renson lines of a Renson job list.
     window.ORYX_RENSON_CHECKOUT = RENSON_CHECKOUT;
+    window.ORYX_RENSON_CHECKIN = RENSON_CHECKIN;
     document.addEventListener("change", (e) => {
       const el = e.target;
       if (!el.dataset || !el.dataset.rnTake || !el.closest("#fpRenson")) return;
@@ -542,6 +639,171 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     reset() { co.lines = []; co.skip = new Set(); co.hash = ""; co.file = null; co.already = false; co.retry = null; coDraw(); },
   };
 
+  // ------------------------------------------------------------ shared Check-in
+  // One Check-in page for every stock category (2026-11-02). A Renson NV
+  // document (order confirmation / quotation) uploaded on the Check-in page
+  // is handed here by fp-checkin-screen.js (window.ORYX_RENSON_CHECKIN, only
+  // set for Admins with the pilot on); Freedom's own reading is skipped for
+  // it. Lines are matched to Renson items by code; cartons / rolls become
+  // pieces / metres from the document's own figures (rensonStockQty); fabric
+  // "M" lines and anything the document doesn't say are typed in (user's
+  // answers); a code that is not a Renson item yet is offered as a NEW item.
+  // Charges such as the Pickup Fee go to shipping, spread like Freedom's.
+  // Saved by renson_checkin (Freedom's average-cost rule, once per document).
+  const ci = { doc: null, file: null, hash: "", lines: [], rate: "", rateNote: "", extraShip: "", busy: false, done: null, already: false };
+  function ciBox() {
+    let b = $("#ciRenson");
+    const out = $("#ciOut");
+    if (!b && out) { b = document.createElement("div"); b.id = "ciRenson"; out.after(b); b.addEventListener("input", ciOnInput); b.addEventListener("change", ciOnChange); b.addEventListener("click", ciOnClick); }
+    return b;
+  }
+  const ciTaken = () => ci.lines.filter((l) => l.take);
+  function ciPreview() {
+    const take = ciTaken();
+    const ship = (ci.doc ? ci.doc.head.charges || 0 : 0) + (Number(ci.extraShip) || 0);
+    const rows = R.checkinPreview(take.map((l) => ({ item_code: l.code, qty: Number(l.qty), price: Number(l.qty) > 0 ? Math.round((l.net / Number(l.qty)) * 1e6) / 1e6 : null })),
+      { rate: Number(ci.rate), shipping: ship }, byCode());
+    return { take, rows, ship };
+  }
+  function ciProblems(pv) {
+    const out = [];
+    if (!(Number(ci.rate) > 0)) out.push(`Type the exchange rate (AED for 1 ${ci.doc.head.currency || "EUR"}).`);
+    if (ci.extraShip !== "" && !(Number(ci.extraShip) >= 0)) out.push("Extra shipping must be a number.");
+    if (!pv.take.length) out.push("Tick at least one line.");
+    pv.take.forEach((l) => {
+      if (!(Number(l.qty) > 0)) out.push(`${l.code}: ${l.ask ? l.why : "type the quantity for stock."}`);
+      if (!l.item && !l.desc.trim()) out.push(`${l.code} is not a Renson item yet: type its description to add it as a new item.`);
+    });
+    if (ci.already) out.push("This document was already checked in. Confirm will be refused.");
+    return out;
+  }
+  function ciDraw() {
+    const b = ciBox();
+    if (!b) return;
+    if (!ci.doc) { b.innerHTML = ""; return; }
+    if (ci.done) { b.innerHTML = ci.done; return; }
+    const h = ci.doc.head, cur = h.currency || "EUR";
+    b.innerHTML = `<div class="card" style="margin-top:16px">
+      <div class="fp-section-h">Renson document <span class="rn-pill">Renson stock · Admin pilot</span></div>
+      <p class="small muted">${esc(h.docType || "Document")} <b>${esc(h.number)}</b> of ${esc(h.date)} from Renson NV${h.orderRef ? ` · order reference ${esc(h.orderRef)}` : ""}. Everything here goes to the <b>Renson</b> stock, never Freedom.</p>
+      <p class="small">${ci.doc.totalMatches ? `✓ The lines add up to the document's total before VAT (${esc(cur)} ${money(h.totalBeforeVat)}).` : `<span style="color:var(--danger)">✗ The lines (${esc(cur)} ${money(ci.doc.sum)}) do not add up to the document's total before VAT (${esc(cur)} ${money(h.totalBeforeVat)}). Check the document.</span>`}</p>
+      <div class="rn-grid">
+        <label>Rate (AED for 1 ${esc(cur)})<input class="rn-in" id="rciRate" inputmode="decimal" value="${esc(ci.rate)}"><span class="muted" style="font-weight:400"><span id="rciRateNote">${esc(ci.rateNote)}</span> <button type="button" class="rn-link" data-rci-act="rate">Get rate</button></span></label>
+        <label>Charges on the document (${esc(cur)})<input class="rn-in" value="${money(h.charges || 0)}" disabled><span class="muted" style="font-weight:400">e.g. Pickup Fee; spread over the lines like Freedom's shipping</span></label>
+        <label>Extra shipping / freight (${esc(cur)})<input class="rn-in" id="rciShip" inputmode="decimal" value="${esc(ci.extraShip)}" placeholder="0"></label>
+      </div>
+      <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Take</th><th>Code</th><th>Renson item</th><th>On the document</th><th class="r">Qty for stock</th>
+        <th class="r">Price paid (AED)</th><th class="r">Stock after</th><th class="r">Average cost after</th><th class="r">Value</th></tr></thead><tbody>
+        ${ci.lines.map((l, i) => `<tr class="${l.take ? "" : "rn-zero"}">
+          <td><input type="checkbox" data-rci="take" data-i="${i}" ${l.take ? "checked" : ""} aria-label="Take ${esc(l.code)}"></td>
+          <td class="mono">${esc(l.code)}</td>
+          <td>${l.item ? esc(l.item.description) + (l.item.unit ? `<span class="rn-alt">Stock unit: ${esc(l.item.unit)}</span>` : "") : `<span class="rn-badge low">New item</span>
+            <input class="rn-in" data-rci="desc" data-i="${i}" value="${esc(l.desc)}" style="margin-top:4px;min-width:200px" aria-label="Description of new item ${esc(l.code)}">
+            <input class="rn-in" data-rci="unit" data-i="${i}" value="${esc(l.unit)}" placeholder="pc / m / bar" style="margin-top:4px;width:120px" aria-label="Unit of new item ${esc(l.code)}">`}</td>
+          <td class="muted">${esc(l.docDesc)}<span class="rn-alt">${esc(l.docQty)} · ${esc(cur)} ${money(l.net)}${l.how ? " · " + esc(l.how) : ""}</span>${l.ask ? `<span class="rn-alt" style="color:#92400E">${esc(l.why)}</span>` : ""}</td>
+          <td class="r"><input class="rn-in rn-num" inputmode="decimal" data-rci="qty" data-i="${i}" value="${esc(l.qty)}" placeholder="${l.ask ? l.ask : ""}" aria-label="Quantity for stock ${esc(l.code)}"> <span class="muted">${esc(l.stockUnit || "")}</span></td>
+          <td class="r" data-rci-cell="paid" data-i="${i}"></td><td class="r" data-rci-cell="after" data-i="${i}"></td>
+          <td class="r" data-rci-cell="avg" data-i="${i}"></td><td class="r" data-rci-cell="value" data-i="${i}"></td></tr>`).join("")}
+        </tbody><tfoot><tr><td colspan="8">Value checked in (AED)</td><td class="r" id="rciTotal"></td></tr></tfoot></table></div>
+      <ul class="rn-issues" id="rciProbs" style="margin-top:14px"></ul>
+      <p class="muted small">Average cost: the same rule as Freedom. Price paid = (document line total ÷ quantity for stock + share of charges) × rate.</p>
+      <div class="rn-actions"><button type="button" class="btn-yellow" id="rciConfirm" data-rci-act="confirm"></button></div></div>`;
+    ciUpdate();
+  }
+  function ciUpdate() {
+    const b = $("#ciRenson"), btn = $("#rciConfirm");
+    if (!b || !btn) return;
+    const pv = ciPreview(), probs = ciProblems(pv);
+    ci.lines.forEach((l, i) => {
+      const k = pv.take.indexOf(l), r = k >= 0 ? pv.rows[k] : null;
+      const cells = {
+        paid: r && r.qty > 0 ? (r.paid == null ? "" : aed(r.paid)) : "",
+        after: r && r.qty > 0 ? qtyFmt(r.before) + " → " + qtyFmt(r.after) : "",
+        avg: r && r.qty > 0 ? (r.avgAfter == null ? `<span class="muted">No cost</span>` : aed(r.avgAfter)) : "",
+        value: r && r.qty > 0 ? aed(r.value) : "",
+      };
+      for (const c of Object.keys(cells)) { const el = b.querySelector(`[data-rci-cell="${c}"][data-i="${i}"]`); if (el && el.innerHTML !== cells[c]) el.innerHTML = cells[c]; }
+    });
+    $("#rciTotal").textContent = aed(pv.rows.reduce((x, r) => x + (r.qty > 0 ? r.value : 0), 0));
+    const pl = $("#rciProbs");
+    pl.innerHTML = probs.map((p) => `<li class="warning">${esc(p)}</li>`).join("");
+    pl.style.display = probs.length ? "" : "none";
+    btn.disabled = !!(probs.length || ci.busy);
+    btn.textContent = ci.busy ? "Saving…" : `Confirm Renson Check-in (${pv.take.length} lines)`;
+  }
+  async function ciGetRate() {
+    const FP = window.ORYX_FP, cur = (ci.doc && ci.doc.head.currency) || "EUR";
+    const note = (t) => { ci.rateNote = t; const el = $("#rciRateNote"); if (el) el.textContent = t; };
+    if (cur === "AED") { ci.rate = "1"; return; }
+    if (!FP || !FP.fetchCheckinExchangeRate) return note("Rate service not ready; type the rate.");
+    note("Getting the rate…");
+    const r = await FP.fetchCheckinExchangeRate(cur, ci.doc.head.isoDate || null).catch(() => null);
+    if (r && r.rate > 0) {
+      ci.rate = String(Math.round(r.rate * 1e6) / 1e6); note(`Rate of ${r.rateDate || "today"} (currency-api).`);
+      const el = $("#rciRate"); if (el && !el.matches(":focus")) el.value = ci.rate;
+    } else note("No rate found; type it.");
+    ciUpdate();
+  }
+  function ciOnInput(e) {
+    const el = e.target;
+    if (el.id === "rciRate") ci.rate = el.value.trim();
+    else if (el.id === "rciShip") ci.extraShip = el.value.trim();
+    else if (el.dataset.rci && el.dataset.rci !== "take") ci.lines[Number(el.dataset.i)][el.dataset.rci] = el.value;
+    ciUpdate();
+  }
+  function ciOnChange(e) {
+    const el = e.target;
+    if (el.dataset.rci === "take") { ci.lines[Number(el.dataset.i)].take = el.checked; el.closest("tr").classList.toggle("rn-zero", !el.checked); ciUpdate(); }
+  }
+  async function ciOnClick(e) {
+    const t = e.target.closest("[data-rci-act]");
+    if (!t) return;
+    if (t.dataset.rciAct === "rate") return ciGetRate();
+    if (t.dataset.rciAct !== "confirm" || ci.busy) return;
+    const pv = ciPreview();
+    if (ciProblems(pv).length) return;
+    const h = ci.doc.head;
+    const newOnes = pv.rows.filter((r) => r.isNew).length;
+    if (!window.confirm(`Check in ${pv.take.length} lines to the RENSON stock${newOnes ? ` (${newOnes} new item${newOnes > 1 ? "s" : ""})` : ""}?\n\nFreedom stock is not changed.`)) return;
+    ci.busy = true; ciUpdate();
+    const lines = pv.take.map((l, k) => ({ item_code: l.code, qty: Number(l.qty), original_unit_cost: pv.rows[k].price, shipping_allocated: pv.rows[k].shipAlloc,
+      new_item: l.item ? undefined : { description: l.desc.trim(), unit: l.unit.trim() } }));
+    const { data, error } = await sb.rpc("renson_checkin", { p: { supplier: "Renson NV", invoice_number: h.number, po_number: h.orderRef || h.projectRef || "",
+      document_date: h.isoDate || null, currency: h.currency || "EUR", exchange_rate: Number(ci.rate), document_name: ci.file ? ci.file.name : null, document_hash: ci.hash || null, lines } });
+    ci.busy = false;
+    if (error) {
+      const m = /already_checked_in/.test(error.message) ? "This document was already checked in." : /renson_not_allowed/.test(error.message) ? "Renson is for Admins only (or switched off)." : error.message;
+      const pl = $("#rciProbs"); pl.innerHTML = `<li class="error">Not saved: ${esc(m)} Nothing was changed.</li>`; pl.style.display = "";
+      return ciUpdate();
+    }
+    ci.done = `<div class="fp-done"><h3>Renson Check-in confirmed — ${data.lines} line${data.lines === 1 ? "" : "s"}</h3>
+      <p class="small">${esc(h.docType || "Document")} <b>${esc(h.number)}</b> checked in to the <b>Renson</b> stock${data.new_items ? `, ${data.new_items} new item${data.new_items > 1 ? "s" : ""} added` : ""}, value ${aed(data.total_value)}. Freedom stock was not changed. See Master Inventory → Renson → Movements.</p></div>`;
+    ciDraw();
+  }
+  const RENSON_CHECKIN = {
+    async open({ text, file, hash }) {
+      ci.doc = R.readRensonDocument(text); ci.file = file; ci.hash = hash || ""; ci.done = null; ci.busy = false; ci.extraShip = ""; ci.rate = ""; ci.rateNote = "";
+      const { data, error } = await sb.from("renson_items").select("*").order("item_code").order("id");
+      if (error) throw new Error("Could not read the Renson inventory: " + error.message);
+      ui.items = data || [];
+      const items = byCode();
+      ci.lines = ci.doc.items.filter((it) => !it.charge).map((it) => {
+        const q = R.rensonStockQty(it), item = items.get(it.code) || null;
+        return { code: it.code, item, docDesc: it.description, docQty: `${it.qty} ${it.unit}`, net: it.net, how: q.how || "", ask: q.ask || "", why: q.why || "",
+          qty: q.ask ? "" : String(q.qty), stockUnit: q.unit || (q.ask === "metres" ? "m" : q.ask === "pieces" ? "pc" : ""), take: true,
+          desc: item ? "" : it.description, unit: item ? "" : (q.unit || (q.ask === "metres" ? "m" : "pc")) };
+      });
+      if (hash) {
+        const prev = await sb.from("renson_transactions").select("id").eq("type", "check_in").eq("document_hash", hash).limit(1);
+        ci.already = !!(prev.data && prev.data.length);
+      } else ci.already = false;
+      ciDraw();
+      await ciGetRate();
+      return { lines: ci.lines.length, ask: ci.lines.filter((l) => l.ask).length, newItems: ci.lines.filter((l) => !l.item).length, totalMatches: ci.doc.totalMatches };
+    },
+    reset() { ci.doc = null; ci.lines = []; ci.done = null; ci.file = null; ci.hash = ""; ciDraw(); },
+  };
+
   function setMode(which) {
     const ren = which === "renson";
     ui.mode = ren ? "renson" : "freedom";
@@ -576,7 +838,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 
   // ------------------------------------------------------------ render
   const tile = (label, value, note) => `<div class="kpi"><span>${esc(label)}</span><b>${esc(value)}</b>${note ? `<span class="kpi-note">${esc(note)}</span>` : ""}</div>`;
-  const TABS = [["inventory", "Inventory"], ["checkin", "Check-in"], ["moves", "Movements"], ["import", "Import stock file"]];
+  const TABS = [["inventory", "Inventory"], ["moves", "Movements"], ["import", "Import stock file"]];
 
   function render() {
     const body = $("#rnBody");
@@ -585,9 +847,8 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     const msg = ui.msg ? `<div class="rn-msg ${ui.msg[0]}">${esc(ui.msg[1])}</div>` : "";
     if (ui.loading) { body.innerHTML = tabs + `<div class="card">Loading Renson inventory…</div>`; return; }
     if (ui.loadError) { body.innerHTML = tabs + `<div class="rn-msg bad">Could not read the Renson inventory: ${esc(ui.loadError)}</div>`; return; }
-    const draw = { inventory: inventoryHtml, checkin: checkinHtml, moves: movesHtml }[ui.tab] || importHtml;
+    const draw = { inventory: inventoryHtml, moves: movesHtml }[ui.tab] || importHtml;
     body.innerHTML = tabs + msg + draw() + codeList();
-    if (ui.tab === "checkin") updateCheckin();
   }
   const codeList = () => `<datalist id="rnCodes">${ui.items.map((i) => `<option value="${esc(i.item_code)}">${esc(i.description)}</option>`).join("")}</datalist>`;
 
@@ -775,137 +1036,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     panel.msg = msg; drawItem();
   }
 
-  // ------------------------------------------------------------ Check-in
-  // The supplier's document typed in (no Renson invoice layout to read yet):
-  // supplier, invoice, date, currency + rate, shipping, one line per item.
-  // A code that is not a Renson item becomes a NEW item (description + unit).
-  function cinPreview() {
-    const c = ui.cin;
-    const lines = c.lines.filter((l) => l.item_code.trim() || l.qty !== "");
-    const rate = c.currency === "AED" ? 1 : Number(c.rate);
-    return { lines, rows: R.checkinPreview(lines.map((l) => ({ item_code: l.item_code, qty: l.qty, price: l.price })), { rate, shipping: c.shipping }, byCode()), rate };
-  }
-  function cinProblems(pv) {
-    const c = ui.cin, out = [];
-    if (!c.supplier.trim()) out.push("Type the supplier.");
-    if (c.currency !== "AED" && !(Number(c.rate) > 0)) out.push(`Type the exchange rate (AED for 1 ${c.currency}).`);
-    if (c.shipping !== "" && !(Number(c.shipping) >= 0)) out.push("Shipping must be a number.");
-    if (!pv.rows.length) out.push("Add at least one line.");
-    const seen = new Set();
-    pv.rows.forEach((r, i) => {
-      const n = i + 1;
-      if (!r.item_code) out.push(`Line ${n}: type the item code.`);
-      else if (seen.has(r.item_code)) out.push(`Line ${n}: ${r.item_code} is on two lines. Put it on one line.`);
-      seen.add(r.item_code);
-      if (!(r.qty > 0)) out.push(`Line ${n}: type a quantity above 0.`);
-      if (r.price != null && !(r.price >= 0)) out.push(`Line ${n}: the unit price must be a number.`);
-      if (r.isNew && r.item_code && !pv.lines[i].desc.trim()) out.push(`Line ${n}: ${r.item_code} is not a Renson item yet. Type its description to add it as a new item.`);
-    });
-    return out;
-  }
-  // Inputs are drawn once; typing only updates the worked-out cells in place
-  // (updateCheckin), so a box is never replaced while someone is typing in
-  // the next one.
-  function cinCells(r) {
-    const has = r && r.item_code;
-    return {
-      item: r && r.item ? esc(r.item.description) : has ? `<span class="rn-badge low">New item</span>` : `<span class="muted">Type or pick a code</span>`,
-      ship: r && r.shipAlloc ? money(r.shipAlloc) : "",
-      paid: has ? (r.paid == null ? `<span class="muted">${r.oldCost == null ? "No price" : "Own cost"}</span>` : aed(r.paid)) : "",
-      after: has && r.qty > 0 ? qtyFmt(r.before) + " → " + qtyFmt(r.after) : "",
-      avg: has && r.qty > 0 ? (r.avgAfter == null ? `<span class="muted">No cost</span>` : aed(r.avgAfter)) : "",
-      value: has ? aed(r.value) : "",
-    };
-  }
-  function rowPreview(pv, i) { const k = pv.lines.indexOf(ui.cin.lines[i]); return k < 0 ? null : pv.rows[k]; }
-  function checkinHtml() {
-    const c = ui.cin, pv = cinPreview();
-    const cur = c.currency;
-    return `<div class="card">
-      <div class="rn-grid">
-        <label>Supplier<input class="rn-in" id="rnInSupplier" value="${esc(c.supplier)}" maxlength="120"></label>
-        <label>Invoice no.<input class="rn-in" id="rnInInvoice" value="${esc(c.invoice)}" maxlength="60"></label>
-        <label>PO / LPO no.<input class="rn-in" id="rnInPo" value="${esc(c.po)}" maxlength="60"></label>
-        <label>Invoice date<input class="rn-in" type="date" id="rnInDate" value="${esc(c.date)}"></label>
-        <label>Currency<select class="rn-in" id="rnInCur">${CURRENCIES.map((x) => `<option ${x === cur ? "selected" : ""}>${x}</option>`).join("")}</select></label>
-        ${cur === "AED" ? "" : `<label>Rate (AED for 1 ${cur})<input class="rn-in" id="rnInRate" inputmode="decimal" value="${esc(c.rate)}"><span class="muted" style="font-weight:400"><span id="rnInRateNote">${esc(c.rateNote)}</span> <button type="button" class="rn-link" data-rn-act="in-rate">Get rate</button></span></label>`}
-        <label>Shipping / freight (${cur}, whole invoice)<input class="rn-in" id="rnInShip" inputmode="decimal" value="${esc(c.shipping)}" placeholder="0"></label>
-      </div>
-      <div class="rn-wrap"><table class="rn-table"><thead><tr><th style="min-width:150px">Item code</th><th>Item</th><th class="r" style="width:90px">Qty</th>
-        <th class="r" style="width:120px">Unit price (${cur})</th><th class="r">Shipping share</th><th class="r">Price paid (AED)</th><th class="r">Stock after</th><th class="r">Average cost after</th><th class="r">Value</th><th></th></tr></thead><tbody>
-        ${c.lines.map((l, i) => { const r = rowPreview(pv, i), cl = cinCells(r); return `<tr>
-          <td><input class="rn-in mono" list="rnCodes" data-rn-in="item_code" data-i="${i}" value="${esc(l.item_code)}" aria-label="Item code line ${i + 1}"></td>
-          <td><span data-rn-cell="item" data-i="${i}">${cl.item}</span>
-              <span data-rn-new="${i}" style="display:${r && r.isNew ? "block" : "none"}">
-              <input class="rn-in" data-rn-in="desc" data-i="${i}" value="${esc(l.desc)}" placeholder="Description of the new item" style="margin-top:4px;min-width:200px">
-              <input class="rn-in" data-rn-in="unit" data-i="${i}" value="${esc(l.unit)}" placeholder="Unit (pc, bar, m)" style="margin-top:4px;width:140px"></span></td>
-          <td><input class="rn-in rn-num" inputmode="decimal" data-rn-in="qty" data-i="${i}" value="${esc(l.qty)}" aria-label="Quantity line ${i + 1}"></td>
-          <td><input class="rn-in rn-num" inputmode="decimal" data-rn-in="price" data-i="${i}" value="${esc(l.price)}" placeholder="none" aria-label="Unit price line ${i + 1}"></td>
-          <td class="r" data-rn-cell="ship" data-i="${i}">${cl.ship}</td><td class="r" data-rn-cell="paid" data-i="${i}">${cl.paid}</td>
-          <td class="r" data-rn-cell="after" data-i="${i}">${cl.after}</td><td class="r" data-rn-cell="avg" data-i="${i}">${cl.avg}</td>
-          <td class="r" data-rn-cell="value" data-i="${i}">${cl.value}</td>
-          <td><button type="button" class="rn-danger" data-rn-act="in-del" data-i="${i}" aria-label="Remove line ${i + 1}">Remove</button></td></tr>`; }).join("")}
-        </tbody><tfoot><tr><td colspan="8">Value checked in (AED)</td><td class="r" id="rnInTotal"></td><td></td></tr></tfoot></table></div>
-      <div class="rn-actions"><button type="button" class="btn-outline" data-rn-act="in-add">+ Add line</button></div>
-      <ul class="rn-issues" id="rnInProbs" style="margin-top:14px"></ul>
-      <p class="muted">Average cost: the same rule as Freedom. (stock × cost on file + received × price paid) ÷ (stock + received); no stock or no cost on file = the price paid; no price = the item keeps its cost.</p>
-      <div class="rn-actions"><button type="button" class="btn-yellow" id="rnInConfirm" data-rn-act="in-confirm"></button>
-        <button type="button" class="btn-outline" data-rn-act="in-clear" ${c.busy ? "disabled" : ""}>Clear</button></div></div>`;
-  }
-  function updateCheckin() {
-    const box = $("#rnBody");
-    if (!box || ui.tab !== "checkin" || !$("#rnInConfirm")) return;
-    const c = ui.cin, pv = cinPreview(), probs = cinProblems(pv);
-    c.lines.forEach((l, i) => {
-      const r = rowPreview(pv, i), cl = cinCells(r);
-      for (const k of Object.keys(cl)) { const el = box.querySelector(`[data-rn-cell="${k}"][data-i="${i}"]`); if (el && el.innerHTML !== cl[k]) el.innerHTML = cl[k]; }
-      const nw = box.querySelector(`[data-rn-new="${i}"]`); if (nw) nw.style.display = r && r.isNew ? "block" : "none";
-    });
-    $("#rnInTotal").textContent = aed(pv.rows.reduce((s, r) => s + r.value, 0));
-    const pl = $("#rnInProbs");
-    pl.innerHTML = probs.map((p) => `<li class="warning">${esc(p)}</li>`).join("");
-    pl.style.display = probs.length ? "" : "none";
-    const btn = $("#rnInConfirm");
-    btn.disabled = !!(probs.length || c.busy);
-    btn.textContent = c.busy ? "Saving…" : `Confirm Check-in (${pv.rows.length} lines)`;
-  }
-  async function getRate() {
-    const c = ui.cin, FP = window.ORYX_FP;
-    if (c.currency === "AED") return;
-    if (!FP || !FP.fetchCheckinExchangeRate) { c.rateNote = "Rate service not ready; type the rate."; const el = $("#rnInRateNote"); if (el) el.textContent = c.rateNote; return; }
-    const note = (t) => { c.rateNote = t; const el = $("#rnInRateNote"); if (el) el.textContent = t; };
-    note("Getting the rate…");
-    const r = await FP.fetchCheckinExchangeRate(c.currency, c.date || null).catch(() => null);
-    if (r && r.rate > 0) {
-      c.rate = String(Math.round(r.rate * 1e6) / 1e6); note(`Rate of ${r.rateDate || "today"} (currency-api).`);
-      const el = $("#rnInRate"); if (el && !el.matches(":focus")) el.value = c.rate;
-    } else note("No rate found; type it.");
-    updateCheckin();
-  }
-  async function confirmCheckin() {
-    const c = ui.cin, pv = cinPreview();
-    if (cinProblems(pv).length || c.busy) return;
-    const newOnes = pv.rows.filter((r) => r.isNew).length;
-    if (!window.confirm(`Check in ${pv.rows.length} lines to the RENSON stock${newOnes ? ` (${newOnes} new item${newOnes > 1 ? "s" : ""})` : ""}?\n\nFreedom stock is not changed.`)) return;
-    c.busy = true; render();
-    const lines = pv.rows.map((r, i) => {
-      const l = pv.lines[i];
-      return { item_code: r.item_code, qty: r.qty, original_unit_cost: r.price, shipping_allocated: r.shipAlloc,
-        new_item: r.isNew ? { description: l.desc.trim(), unit: l.unit.trim() } : undefined };
-    });
-    const { data, error } = await sb.rpc("renson_checkin", { p: { supplier: c.supplier.trim(), invoice_number: c.invoice.trim(), po_number: c.po.trim(),
-      document_date: c.date || null, currency: c.currency, exchange_rate: pv.rate, lines } });
-    c.busy = false;
-    if (error) {
-      const m = /renson_not_allowed/.test(error.message) ? "Not allowed: the Renson pilot is for Admins only (or is switched off)." : "The Check-in was refused: " + error.message;
-      ui.msg = ["bad", m + " Nothing was saved."];
-      return render();
-    }
-    ui.msg = ["ok", `Checked in ${data.lines} lines${data.new_items ? ` (${data.new_items} new item${data.new_items > 1 ? "s" : ""})` : ""}, value ${aed(data.total_value)}.`];
-    ui.cin = newIn(); ui.tab = "moves";
-    await load();
-  }
-
   function movesHtml() {
     if (!ui.moves.length) return `<div class="card"><p>No Renson movements yet.</p><p class="muted">The opening stock import is not listed here.</p></div>`;
     return `<div class="rn-wrap"><table class="rn-table"><thead><tr><th>When</th><th>Type</th><th>Code</th><th>Item</th>
@@ -927,26 +1057,16 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
       return;
     }
     if (t.dataset.rnTab) {
-      ui.tab = t.dataset.rnTab; ui.msg = null; render();
-      if (ui.tab === "checkin" && ui.cin.currency !== "AED" && !ui.cin.rate) getRate();
-      return;
+      ui.tab = t.dataset.rnTab; ui.msg = null; return render();
     }
     const act = t.dataset.rnAct, i = Number(t.dataset.i);
     if (act === "cancel") { ui.file = null; ui.parsed = null; ui.hash = ""; ui.msg = null; return render(); }
     if (act === "confirm") return confirmImport();
     if (act === "reset") return resetPilot();
     if (act === "extract") return extract();
-    if (act === "in-add") { ui.cin.lines.push({ item_code: "", qty: "", price: "", desc: "", unit: "" }); return render(); }
-    if (act === "in-del") { ui.cin.lines.splice(i, 1); if (!ui.cin.lines.length) ui.cin.lines.push({ item_code: "", qty: "", price: "", desc: "", unit: "" }); return render(); }
-    if (act === "in-clear") { ui.cin = newIn(); ui.msg = null; return render(); }
-    if (act === "in-rate") return getRate();
-    if (act === "in-confirm") return confirmCheckin();
   }
-  const IN_FIELDS = { rnInSupplier: "supplier", rnInInvoice: "invoice", rnInPo: "po", rnInDate: "date", rnInRate: "rate", rnInShip: "shipping" };
   function onInput(e) {
     const el = e.target;
-    if (IN_FIELDS[el.id]) { ui.cin[IN_FIELDS[el.id]] = el.value; return updateCheckin(); }
-    if (el.dataset.rnIn) { ui.cin.lines[Number(el.dataset.i)][el.dataset.rnIn] = el.value; return updateCheckin(); }
     if (el.id === "rnSearch") {
       ui.q = el.value;
       const pos = el.selectionStart;
@@ -958,10 +1078,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     const el = e.target;
     if (el.id === "rnFile" && el.files && el.files[0]) return readFile(el.files[0]);
     if (el.id === "rnShow") { ui.show = el.value; return render(); }
-    if (el.id === "rnInCur") { ui.cin.currency = el.value; ui.cin.rate = ""; ui.cin.rateNote = ""; render(); return getRate(); }
-    if (el.id === "rnInDate") { ui.cin.date = el.value; updateCheckin(); return ui.cin.currency !== "AED" ? getRate() : undefined; }
     // Typed fields are kept and the sums updated on input (no redraw).
-    if (IN_FIELDS[el.id] || el.dataset.rnIn) return;
   }
 
   // ------------------------------------------------------------ import
