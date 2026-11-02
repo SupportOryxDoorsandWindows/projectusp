@@ -419,7 +419,7 @@
   const CURRENCIES = ["AED", "EUR", "USD", "AUD", "GBP"];
   const TYPE_LABEL = { check_out: "Check-out", check_in: "Check-in", adjustment: "Adjustment", opening_import: "Opening stock" };
 
-  const ui = { mode: "freedom", tab: "inventory", items: [], lastImport: null, moves: [], loading: false, loadError: "", q: "", show: "all",
+  const ui = { mode: "freedom", tab: "inventory", items: [], lastImport: null, loading: false, loadError: "", q: "", show: "all",
     file: null, hash: "", parsed: null, msg: null, busy: false };
   const byCode = () => new Map(ui.items.map((i) => [String(i.item_code).toUpperCase(), i]));
 
@@ -430,7 +430,28 @@
   });
 
   let view, sub, freedomSub = "";
+  // Renson movements are listed on the Activity page (user's request
+  // 2026-11-02, replaces the Movements tab). Only exists for Admins with the
+  // pilot on (mount() runs after renson_access()); the read policy enforces
+  // the same rule on the server.
+  async function activityRows() {
+    const rows = [];
+    for (let from = 0; from < 20000; from += 1000) {
+      const { data, error } = await sb.from("renson_transactions").select("*").neq("type", "opening_import")
+        .order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, from + 999);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    const { data: items, error } = await sb.from("renson_items").select("id, description, unit");
+    if (error) throw error;
+    const byId = new Map((items || []).map((i) => [String(i.id), i]));
+    return rows.map((r) => { const it = byId.get(String(r.item_id)) || {}; return Object.assign({}, r, { description: it.description || "", unit: r.unit || it.unit || "" }); });
+  }
+
   function mount() {
+    window.ORYX_RENSON_ACTIVITY = { rows: activityRows };
+    document.dispatchEvent(new CustomEvent("oryx-renson-ready"));
     const style = document.createElement("style");
     style.textContent = `
 .rn-pick{display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:600; color:var(--brand)}
@@ -446,9 +467,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 .rn-badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap}
 .rn-badge.out{background:#FEE2E2; color:#991B1B}.rn-badge.critical{background:#FEE2E2; color:#991B1B}.rn-badge.low{background:#FEF3C7; color:#92400E}
 .rn-badge.nocost{background:#F0F3F5; color:#334155}.rn-badge.ok{background:#DCFCE7; color:#166534}
-.rn-tabs{display:flex; gap:8px; margin:0 0 18px; flex-wrap:wrap}
-.rn-tabs button{border:1px solid #C5D0D4; background:var(--white); color:var(--brand); border-radius:10px; padding:8px 14px; font:inherit; cursor:pointer}
-.rn-tabs button.on{background:var(--brand); color:#fff; border-color:var(--brand)}
 .rn-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr)); gap:12px; margin-bottom:16px}
 .rn-kpis .kpi{background:var(--white); border:1px solid #DCE3E6}
 .rn-tools{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px}
@@ -821,33 +839,32 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 
   async function load() {
     ui.loading = true; ui.loadError = ""; render();
-    const [items, imports, moves] = await Promise.all([
+    const [items, imports] = await Promise.all([
       sb.from("renson_items").select("*").order("item_code").order("id"),
       sb.from("renson_imports").select("*").order("created_at", { ascending: false }).limit(1),
-      sb.from("renson_transactions").select("*").neq("type", "opening_import").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(500),
     ]);
     ui.loading = false;
-    const bad = items.error || imports.error || moves.error;
+    const bad = items.error || imports.error;
     if (bad) { ui.loadError = bad.message; return render(); }
     ui.items = items.data || [];
     ui.lastImport = (imports.data || [])[0] || null;
-    ui.moves = moves.data || [];
-    if (!ui.items.length && ui.tab === "inventory" && !ui.parsed) ui.tab = "import";
     render();
   }
 
   // ------------------------------------------------------------ render
   const tile = (label, value, note) => `<div class="kpi"><span>${esc(label)}</span><b>${esc(value)}</b>${note ? `<span class="kpi-note">${esc(note)}</span>` : ""}</div>`;
-  const TABS = [["inventory", "Inventory"], ["moves", "Movements"], ["import", "Import stock file"]];
 
   function render() {
     const body = $("#rnBody");
     if (!body) return;
-    const tabs = `<div class="rn-tabs" role="tablist">${TABS.map(([k, t]) => `<button type="button" data-rn-tab="${k}" class="${ui.tab === k ? "on" : ""}">${t}</button>`).join("")}</div>`;
+    // No tabs (user's request 2026-11-02): the list; the import step only
+    // while there are no Renson items (opening stock is imported once).
+    // Movements are on the Activity page.
+    const tabs = "";
     const msg = ui.msg ? `<div class="rn-msg ${ui.msg[0]}">${esc(ui.msg[1])}</div>` : "";
     if (ui.loading) { body.innerHTML = tabs + `<div class="card">Loading Renson inventory…</div>`; return; }
     if (ui.loadError) { body.innerHTML = tabs + `<div class="rn-msg bad">Could not read the Renson inventory: ${esc(ui.loadError)}</div>`; return; }
-    const draw = { inventory: inventoryHtml, moves: movesHtml }[ui.tab] || importHtml;
+    const draw = ui.items.length ? inventoryHtml : importHtml;
     body.innerHTML = tabs + msg + draw() + codeList();
   }
   const codeList = () => `<datalist id="rnCodes">${ui.items.map((i) => `<option value="${esc(i.item_code)}">${esc(i.description)}</option>`).join("")}</datalist>`;
@@ -872,10 +889,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 
   function inventoryHtml() {
     const all = ui.items;
-    if (!all.length) {
-      return `<div class="card"><p>No Renson items yet.</p><p class="muted">Import the Renson stock file to start the pilot.</p>
-        <div class="rn-actions"><button type="button" class="btn-yellow" data-rn-tab="import">Import stock file</button></div></div>`;
-    }
     const value = all.reduce((s, i) => s + Number(i.current_value || 0), 0);
     const st = all.map(statusOf);
     const rows = shownItems();
@@ -1029,18 +1042,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     await load();
     await openItem(id);
     panel.msg = msg; drawItem();
-  }
-
-  function movesHtml() {
-    if (!ui.moves.length) return `<div class="card"><p>No Renson movements yet.</p><p class="muted">The opening stock import is not listed here.</p></div>`;
-    return `<div class="rn-wrap"><table class="rn-table"><thead><tr><th>When</th><th>Type</th><th>Code</th><th>Item</th>
-      <th class="r">Change</th><th class="r">Stock before → after</th><th class="r">Value</th><th>By</th></tr></thead><tbody>
-      ${ui.moves.map((m) => { const it = ui.items.find((i) => i.id === m.item_id); return `<tr data-rn-item="${m.item_id}"><td>${esc(when(m.created_at))}</td>
-        <td>${esc(TYPE_LABEL[m.type] || m.type)}</td><td class="mono">${esc(m.item_code)}</td>
-        <td>${esc(it ? it.description : "")}<span class="rn-alt">${esc(moveRef(m))}</span></td>
-        <td class="r">${signed(m)}</td>
-        <td class="r">${qtyFmt(m.qty_before)} → ${qtyFmt(m.qty_after)}</td><td class="r">${aed(Math.abs(Number(m.value) || 0))}</td><td>${esc(m.performed_by_name || "")}</td></tr>`; }).join("")}
-      </tbody></table></div>`;
   }
 
   // ------------------------------------------------------------ events
