@@ -423,6 +423,31 @@
     file: null, hash: "", parsed: null, msg: null, busy: false };
   const byCode = () => new Map(ui.items.map((i) => [String(i.item_code).toUpperCase(), i]));
 
+  // Item photos (user's request 2026-11-02, "add the picture to renson"):
+  // the pictures placed in column D ("Picture") of the STOCK sheet of RENSON
+  // STOCK OCT 27.xlsx, one per code, in assets/renson/ with a code -> file
+  // map in index.json (kept apart from Freedom's assets/items/). Same
+  // thumbnail and viewer as Freedom; an empty box = no photo yet.
+  let photos = new Map();
+  const loadPhotos = () => fetch("assets/renson/index.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+    .then((m) => { photos = new Map(Object.entries(m || {}).map(([c, f]) => [c.toUpperCase(), "assets/renson/" + f])); });
+  function photoBtn(code, desc, cls = "") {
+    const src = photos.get(String(code || "").toUpperCase());
+    if (!src) return `<span class="fp-photo-none ${cls}" title="No photo yet"></span>`;
+    const cap = `${code} — ${desc || ""}`;
+    return `<button type="button" class="fp-photo-btn ${cls}" data-rn-photo="${esc(src)}" data-rn-photo-cap="${esc(cap)}" aria-label="View photo of ${esc(cap)}"><img src="${esc(src)}" alt="" loading="lazy"></button>`;
+  }
+  const withPhoto = (code, desc, inner, cls = "fp-photo-sm") => `<div class="rn-item">${photoBtn(code, desc, cls)}<div>${inner}</div></div>`;
+  // One listener for every Renson photo (list, item panel, Check-out and
+  // Check-in boxes); it runs first so a photo click never opens the row.
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("[data-rn-photo]");
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    const FP = window.ORYX_FP;
+    if (FP && FP.openItemPhoto) FP.openItemPhoto(b.dataset.rnPhoto, b.dataset.rnPhotoCap);
+  }, true);
+
   // Ask the database first: Admin AND pilot flag on. Anything else = nothing appears.
   sb.rpc("renson_access").then(({ data, error }) => {
     if (error || data !== true) return;
@@ -450,6 +475,7 @@
   }
 
   function mount() {
+    loadPhotos().then(() => render());
     window.ORYX_RENSON_ACTIVITY = { rows: activityRows };
     document.dispatchEvent(new CustomEvent("oryx-renson-ready"));
     const style = document.createElement("style");
@@ -476,6 +502,9 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 .rn-grid label{display:flex; flex-direction:column; gap:4px; font-size:13px; font-weight:600; color:var(--brand)}
 .rn-wrap{overflow:auto; border:1px solid #DCE3E6; border-radius:12px; background:var(--white)}
 .rn-table{width:100%; border-collapse:collapse; font-size:14px}
+.rn-item{display:flex; align-items:flex-start; gap:10px; min-width:200px}
+.rn-head-photo{display:flex; gap:14px; align-items:center; margin:0 0 12px}
+.rn-head-photo .fp-photo-btn,.rn-head-photo .fp-photo-none{width:72px; height:72px; flex:none}
 .rn-table th,.rn-table td{padding:9px 12px; border-bottom:1px solid #EEF2F4; text-align:left; vertical-align:top}
 .rn-table th{font-size:12.5px; color:var(--text-muted); font-weight:600; background:#F7F9FA; position:sticky; top:0}
 .rn-table td.r,.rn-table th.r{text-align:right; white-space:nowrap}
@@ -598,7 +627,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
         <th class="r">Qty</th><th class="r">Stock now</th><th class="r">Stock after</th><th class="r">Value</th></tr></thead><tbody>
         ${co.lines.map((l) => { const on = !co.skip.has(l.item_code); return `<tr class="${on ? "" : "rn-zero"}">
           <td><input type="checkbox" data-rn-take="${esc(l.item_code)}" ${on ? "checked" : ""} aria-label="Take off ${esc(l.item_code)}"></td>
-          <td class="mono">${esc(l.item_code)}</td><td>${esc(l.description)}</td><td class="muted">${esc(l.source)}</td>
+          <td class="mono">${esc(l.item_code)}</td><td>${withPhoto(l.item_code, l.description, esc(l.description))}</td><td class="muted">${esc(l.source)}</td>
           <td class="r">${qtyFmt(l.qty)} ${esc(l.unit)}</td><td class="r">${qtyFmt(l.before)}</td>
           <td class="r">${on ? qtyFmt(l.after) + (l.after < 0 ? ` <span class="rn-badge out">Below zero, allowed</span>` : "") : qtyFmt(l.before)}</td>
           <td class="r">${l.unit_cost == null ? `<span class="muted">No cost</span>` : aed(l.value)}</td></tr>`; }).join("")}
@@ -715,7 +744,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
         ${ci.lines.map((l, i) => `<tr class="${l.take ? "" : "rn-zero"}">
           <td><input type="checkbox" data-rci="take" data-i="${i}" ${l.take ? "checked" : ""} aria-label="Take ${esc(l.code)}"></td>
           <td class="mono">${esc(l.code)}</td>
-          <td>${l.item ? esc(l.item.description) + (l.item.unit ? `<span class="rn-alt">Stock unit: ${esc(l.item.unit)}</span>` : "") : `<span class="rn-badge low">New item</span>
+          <td>${l.item ? withPhoto(l.code, l.item.description, esc(l.item.description) + (l.item.unit ? `<span class="rn-alt">Stock unit: ${esc(l.item.unit)}</span>` : "")) : `<span class="rn-badge low">New item</span>
             <input class="rn-in" data-rci="desc" data-i="${i}" value="${esc(l.desc)}" style="margin-top:4px;min-width:200px" aria-label="Description of new item ${esc(l.code)}">
             <input class="rn-in" data-rci="unit" data-i="${i}" value="${esc(l.unit)}" placeholder="pc / m / bar" style="margin-top:4px;width:120px" aria-label="Unit of new item ${esc(l.code)}">`}</td>
           <td class="muted">${esc(l.docDesc)}<span class="rn-alt">${esc(l.docQty)} · ${esc(cur)} ${money(l.net)}${l.how ? " · " + esc(l.how) : ""}</span>${l.ask ? `<span class="rn-alt" style="color:#92400E">${esc(l.why)}</span>` : ""}</td>
@@ -909,7 +938,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
         <tbody>${rows.map((i) => { const s = statusOf(i); const cls = !s.out && (s.kanban === "low" || s.kanban === "critical") ? "kb-" + s.kanban : (Number(i.current_qty) > 0 ? "" : "rn-zero");
           return `<tr class="${cls}" data-rn-item="${i.id}" title="Open ${esc(i.item_code)}">
           <td class="mono">${esc(i.item_code)}</td>
-          <td>${esc(i.description)}${i.alt_codes ? `<span class="rn-alt">Also ${esc(i.alt_codes)}</span>` : ""}</td>
+          <td>${withPhoto(i.item_code, i.description, esc(i.description) + (i.alt_codes ? `<span class="rn-alt">Also ${esc(i.alt_codes)}</span>` : ""))}</td>
           <td>${esc(i.product_size || "")}</td><td>${esc(i.colour || "")}</td><td>${esc(i.unit || "")}</td>
           <td class="r">${qtyFmt(i.current_qty)}</td>
           <td class="r">${i.unit_cost == null ? `<span class="muted">No cost</span>` : aed(i.unit_cost)}</td>
@@ -960,7 +989,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     const lastIn = (panel.history || []).find((m) => m.type === "check_in" && m.unit_cost != null);
     const a = panel.adj;
     b.innerHTML = `<button type="button" class="btn-outline rn-close" data-rn-dlg="close">Close</button>
-      <h2>${esc(it.item_code)}</h2><p class="muted" style="margin:0 0 12px">${esc(it.description)}${it.alt_codes ? ` · also ${esc(it.alt_codes)}` : ""}</p>
+      <div class="rn-head-photo">${photoBtn(it.item_code, it.description)}<div><h2 style="margin:0">${esc(it.item_code)}</h2><p class="muted" style="margin:4px 0 0">${esc(it.description)}${it.alt_codes ? ` · also ${esc(it.alt_codes)}` : ""}</p></div></div>
       ${panel.msg ? `<div class="rn-msg ${panel.msg[0]}">${esc(panel.msg[1])}</div>` : ""}
       <div class="rn-kpis">${tile("Stock", qtyFmt(it.current_qty) + (it.unit ? " " + it.unit : ""))}
         ${tile(averaged ? "Average cost" : "Unit cost", it.unit_cost == null ? "No cost" : aed(it.unit_cost), lastIn ? `Last bought ${aed(lastIn.unit_cost)} · ${when(lastIn.created_at).slice(0, 11)}` : "")}
