@@ -333,6 +333,14 @@
       const u = document.createElement("script");
       u.src = "updates.js?v=" + Date.now();
       document.body.appendChild(u);
+      // Renson inventory -- ADMIN-ONLY PILOT (2026-11-02). Not even loaded
+      // for anyone else; the page also asks the database (renson_access():
+      // Admin AND pilot flag on), and the database refuses everyone else.
+      if (AUTH.isAdmin()) {
+        const rn = document.createElement("script");
+        rn.src = "renson.js?v=" + Date.now();
+        document.body.appendChild(rn);
+      }
       // Reopen the page this tab was on before a reload (user's request
       // 2026-10-29; app.js showView remembers it per tab in sessionStorage).
       // Waits for every page script above, then presses that page's menu

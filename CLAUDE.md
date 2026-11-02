@@ -239,6 +239,45 @@ product lines — never treat one family's item as a match for another's:
   Trim items ("also remove the flat trim and L angle"): 42 hidden in all.
   List + undo: `supabase/sql/hide_unlisted_items_2026_10_30.sql`.
 
+## Renson inventory -- ADMIN-ONLY PILOT (2026-11-02)
+
+- User's rules: Admins only until the user personally approves a release;
+  never change Freedom stock, codes, history, Check-in/Check-out or
+  permissions. Do NOT widen access on your own.
+- Data is kept APART from Freedom: tables `renson_items` (one row per code,
+  `current_value` = stock x unit cost, generated), `renson_imports`,
+  `renson_transactions` (only 'opening_import' so far). SQL:
+  `supabase/sql/renson_pilot.sql` (applied live 2026-11-02; Freedom
+  fingerprint -- items md5, value, transactions, profiles, functions,
+  policies -- identical before/after), undo `renson_pilot_rollback.sql`.
+- ONE rule `renson_access()` = `is_admin()` AND feature flag
+  `app_feature_flags.renson_pilot` on; it guards the read policies and the
+  functions `renson_import_stock(jsonb)` (opening import, once; validates
+  everything first) and `renson_reset_pilot('RESET RENSON')` (clears Renson
+  tables only). No write policies. Switch OFF: `update app_feature_flags set
+  enabled=false where key='renson_pilot'` (SQL Editor) -- everything Renson
+  disappears and is refused; Freedom is not touched.
+- Browser: `renson.js` (boot.js loads it ONLY for Admins; it shows nothing
+  unless `renson_access()` is true). Master Inventory gets an "Inventory:
+  Freedom / Renson (pilot)" dropdown (user: "add it to the master
+  inventory"); Renson is drawn in `#rnBody` and the Freedom list is only
+  hidden (`.rn-on`), never changed. Choice kept per tab
+  (sessionStorage `oryx_mi_inventory`). Inventory (value, search) and Import
+  (reads the STOCK sheet, review: totals vs the file's INVENTORY VALUE,
+  warnings, then Confirm).
+- Stock file "RENSON STOCK OCT 27.xlsx": 100 items (rows 3-102; the rest of
+  the 10,881 rows are empty), 41 with stock, AED 161,171.60 = its own
+  INVENTORY VALUE. Code = text before the first "-" (second code in
+  brackets or after it, e.g. "1465-G6020837-..."), stock = dated column
+  before "OPENING COST PER PROFILE". Blank count = 0 stock (user: import
+  all 100).
+- NOT built yet (user: wait for Renson sample files): Renson Check-in /
+  Check-out. Freedom Check-in/Check-out never look at Renson tables.
+- Tests: `tests/renson.test.js` (RENSON_XLSX + XLSX_PATH to include the
+  real file), `tests/sql/renson-pilot.test.sql` (local Postgres),
+  `tests/browser/renson-pilot.js` (stand-in backend: regular user gets no
+  script / no request, Admin import, flag off, no Freedom writes).
+
 ## Kanban replenishment (was "Minimum level")
 
 - ONE rule, in `kanban.js` (`window.ORYX_KANBAN.kanbanState`, loaded from
