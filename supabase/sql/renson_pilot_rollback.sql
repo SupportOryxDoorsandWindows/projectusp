@@ -4,6 +4,9 @@
 -- Deletes the Renson pilot data (items, imports, transactions) for good.
 -- To only switch the pilot off (keep its data), use instead:
 --   update public.app_feature_flags set enabled = false, updated_at = now() where key = 'renson_pilot';
+drop function if exists public.renson_set_levels(text, numeric, numeric);
+drop function if exists public.renson_adjust(jsonb);
+drop function if exists public.renson_checkin(jsonb);
 drop function if exists public.renson_checkout(jsonb);
 drop function if exists public.renson_reset_pilot(text);
 drop function if exists public.renson_import_stock(jsonb);

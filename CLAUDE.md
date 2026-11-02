@@ -246,7 +246,7 @@ product lines — never treat one family's item as a match for another's:
   permissions. Do NOT widen access on your own.
 - Data is kept APART from Freedom: tables `renson_items` (one row per code,
   `current_value` = stock x unit cost, generated), `renson_imports`,
-  `renson_transactions` ('opening_import', 'check_out'). SQL:
+  `renson_transactions` ('opening_import', 'check_out', 'check_in', 'adjustment'). SQL:
   `supabase/sql/renson_pilot.sql` (applied live 2026-11-02; Freedom
   fingerprint -- items md5, value, transactions, profiles, functions,
   policies -- identical before/after), undo `renson_pilot_rollback.sql`.
@@ -289,11 +289,48 @@ product lines — never treat one family's item as a match for another's:
   one Check-out per job list (SHA-256). "Movements" tab lists them.
   Real file: 35 lines (22 fittings + 7 gaskets + 6 bar items), 8 left out,
   AED 10,664.86 at the opening costs.
-- NOT built yet: Renson Check-in (no sample file yet). Freedom
-  Check-in/Check-out never look at Renson tables.
+- OPENING STOCK LIVE (2026-11-02, user: "use the stock data I provided"):
+  the 100 items of RENSON STOCK OCT 27.xlsx were written directly (same
+  values as the page's import; recorded as "Setup import (Claude, at the
+  owner's request)", performed_by null). Checksum of code/alt/description/
+  unit/qty/cost per row = the file's (md5 7b15e4be...). 41 with stock,
+  AED 161,171.60. The workbook's CHECK IN / CHECK OUT / FREEDOM sheets are
+  Freedom data copied into it -- NOT Renson; only STOCK is used.
+- FULL WORKFLOW (2026-11-02, user: "the same workflow as Freedom ...
+  operate separately"; `supabase/sql/renson_workflow.sql`, applied live,
+  Freedom fingerprint identical; tested with
+  `tests/sql/renson-workflow.test.sql`):
+  - Sidebar: "Freedom" / "Renson (pilot)" submenu under Master Inventory
+    (`nav .rn-sub`, NOT `button[data-v]`; Admins + pilot only; hidden when
+    the sidebar is folded / on phones, where the page dropdown remains).
+  - Inventory: Show filter (All / Normal / Low / Critical / Out of stock /
+    No cost), Kanban row colours + badges via kanban.js (`rensonStatus`),
+    Extract (.xlsx of the rows shown), row -> item panel (`#rnItemDlg`:
+    stock / average cost / last bought, Adjust, Kanban levels, history).
+  - Check-in (`renson_checkin`): the supplier document is TYPED in (no
+    Renson invoice layout to read yet): supplier, invoice, PO, date,
+    currency + rate (FP.fetchCheckinExchangeRate, editable), shipping split
+    equally per line like Freedom; price paid AED = (price + shipping/qty) x
+    rate, worked out on the server; Freedom's weighted average rule; an
+    unknown code = NEW Renson item (description + unit required); once per
+    document when a hash is sent. `checkinPreview` mirrors the server sums.
+  - Adjust (`renson_adjust`): stock count / add (optional cost, averaged) /
+    take out; reason required; type 'adjustment', quantity = signed change.
+  - Kanban levels (`renson_set_levels`): same rule as Freedom (critical only
+    with a trigger, below it); checked in the browser with KANBAN.parseLevels.
+  - Check-out: PDF (as before) OR lines typed by hand (no document; the
+    server then skips the once-per-document check).
+  - Check-in / hand Check-out boxes are drawn ONCE; typing only updates the
+    worked-out cells (`updateCheckin` / `updateManualOut`). A full redraw on
+    "change" replaced the box someone was clicking into and lost what they
+    typed (found by the browser test).
+- NOT done: reading Renson supplier invoices (PDF) automatically -- needs a
+  sample; Dashboard / Activity do not include Renson (Freedom pages are not
+  changed). Freedom Check-in/Check-out never look at Renson tables.
 - Tests: `tests/renson.test.js` (RENSON_XLSX + XLSX_PATH to include the
   real file), `tests/sql/renson-pilot.test.sql` (local Postgres),
   `tests/sql/renson-checkout.test.sql` (after the pilot test),
+  `tests/sql/renson-workflow.test.sql` (after the Check-out test),
   `tests/browser/renson-pilot.js` (stand-in backend: regular user gets no
   script / no request, Admin import, `--job-pdf` Check-out, flag off, no
   Freedom writes). Real job list text for the unit test: RENSON_JOB_TXT

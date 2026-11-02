@@ -190,4 +190,35 @@ if (process.env.RENSON_JOB_TXT && process.env.RENSON_XLSX && process.env.XLSX_PA
   });
 }
 
+// ---------------------------------------------------------------- Check-in
+// The preview must give the same numbers as renson_checkin() (the database
+// test tests/sql/renson-workflow.test.sql uses the same example).
+t("check-in preview: shipping split, price paid, Freedom's average rule", () => {
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(R.splitShipping(10, 3))), [3.33, 3.33, 3.34]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(R.splitShipping(0, 2))), [null, null]);
+  const items = new Map([["22874", { item_code: "22874", current_qty: 10, unit_cost: 153 }], ["17710", { item_code: "17710", current_qty: 17.5, unit_cost: null }],
+    ["D6110097", { item_code: "D6110097", current_qty: -3, unit_cost: null }]]);
+  const rows = JSON.parse(JSON.stringify(R.checkinPreview([
+    { item_code: "22874", qty: 10, price: 40 }, { item_code: "17710", qty: 5, price: "" },
+    { item_code: "d6110097", qty: 5, price: 2.5 }, { item_code: "NEW-1", qty: 3, price: 10 }], { rate: 4, shipping: 80 }, items)));
+  // shipping 80 / 4 lines = 20 each
+  assert.deepStrictEqual(rows.map((r) => [r.item_code, r.shipAlloc, r.paid, r.avgAfter, r.after, r.value, r.isNew]), [
+    ["22874", 20, 168, 160.5, 20, 1680, false],          // (40 + 20/10) x 4 = 168; (10x153 + 10x168)/20
+    ["17710", 20, null, null, 22.5, 0, false],           // no price: keeps its (missing) cost
+    ["D6110097", 20, 26, 26, 2, 130, false],             // stock below zero: price paid
+    ["NEW-1", 20, 66.666667, 66.666667, 3, 200, true],   // new item
+  ]);
+});
+
+t("status: out of stock, Kanban (Freedom's rule), no cost", () => {
+  const ctx = { window: {} };
+  vm.runInNewContext(fs.readFileSync("kanban.js", "utf8"), ctx);
+  const K = (i) => ctx.window.ORYX_KANBAN.kanbanState(i);
+  const s = (i) => JSON.parse(JSON.stringify(R.rensonStatus(i, K)));
+  assert.deepStrictEqual(s({ current_qty: 0, unit_cost: 2 }), { out: true, kanban: "unset", noCost: false });
+  assert.deepStrictEqual(s({ current_qty: 5, unit_cost: null, buffer_level: 10, critical_level: 4 }), { out: false, kanban: "low", noCost: true });
+  assert.deepStrictEqual(s({ current_qty: 3, unit_cost: 1, buffer_level: 10, critical_level: 4 }), { out: false, kanban: "critical", noCost: false });
+  assert.deepStrictEqual(s({ current_qty: 30, unit_cost: 1, buffer_level: 10 }), { out: false, kanban: "normal", noCost: false });
+});
+
 console.log(`renson: ${n} tests passed`);
