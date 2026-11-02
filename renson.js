@@ -878,20 +878,15 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     }
     const value = all.reduce((s, i) => s + Number(i.current_value || 0), 0);
     const st = all.map(statusOf);
-    const withStock = all.filter((i) => Number(i.current_qty) > 0);
-    const noCost = withStock.filter((i) => i.unit_cost == null).length;
     const rows = shownItems();
     const shownValue = rows.reduce((s, i) => s + Number(i.current_value || 0), 0);
-    const imp = ui.lastImport;
     const opts = SHOW.map(([k, t, f]) => { const n = st.filter(f).length; return (k === "all" || n || ui.show === k) ? `<option value="${k}" ${ui.show === k ? "selected" : ""}>${t} (${n})</option>` : ""; }).join("");
-    return `<div class="rn-kpis">
-        ${tile("Stock value", aed(value), "stock × unit cost")}
-        ${tile("Items", String(all.length), withStock.length + " with stock")}
-        ${tile("Out of stock", String(st.filter((s) => s.out).length))}
-        ${tile("Low / critical", String(st.filter((s) => !s.out && (s.kanban === "low" || s.kanban === "critical")).length), "Kanban levels")}
-        ${tile("Stock without a cost", String(noCost), noCost ? "value counted as 0" : "")}
+    // Same headline as Freedom's Master Inventory (#miTally): value without
+    // the fils, then items / codes (user's request 2026-11-02).
+    return `<div class="mi-kpis">
+        <span class="mi-kpi"><b>${esc(aed(value).replace(/\.\d\d$/, ""))}</b> stock value</span>
+        <span class="mi-kpi"><b>${all.length}</b> items in ${new Set(all.map((i) => String(i.item_code).toUpperCase())).size} codes</span>
       </div>
-      ${imp ? `<p class="muted">Opening stock from <b>${esc(imp.file_name)}</b>, imported ${esc(when(imp.created_at))} by ${esc(imp.imported_by_name || "—")}.</p>` : ""}
       <div class="rn-tools"><label class="rn-pick">Show <select id="rnShow" class="rn-in" aria-label="Show">${opts}</select></label>
         <input type="search" id="rnSearch" placeholder="Search code, description, size, colour" value="${esc(ui.q)}" aria-label="Search Renson items">
         <span class="muted">${rows.length} of ${all.length} items</span>
