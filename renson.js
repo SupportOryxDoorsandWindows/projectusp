@@ -16,8 +16,9 @@
  * the Renson stock Excel ("RENSON STOCK OCT 27.xlsx": sheet STOCK, header
  * row with "Part Code", stock in the dated column, "OPENING COST PER
  * PROFILE", "Total opening cost", sheet total beside "INVENTORY VALUE"),
- * reviewed before it is confirmed. Check-in / Check-out for Renson are NOT
- * built yet (user: wait for Renson sample files).
+ * reviewed before it is confirmed. Check-out (2026-11-02) from a Renson FP Pro
+ * job list (readJobList / buildRensonCheckout below), Movements list.
+ * Renson Check-in is NOT built yet (user: wait for Renson sample files).
  *
  * Pure parts: window.ORYX_RENSON_CORE (tests/renson.test.js).
  */
@@ -124,7 +125,102 @@
     return out;
   }
 
-  window.ORYX_RENSON_CORE = { splitPartCode, parseRensonSheet, excelDate };
+  // ------------------------------------------------------------ Check-out
+  // Renson job list = the same FP Pro layout as Freedom's ("24222-Paolo OPT
+  // LIST Rev. 02.pdf"): Fittings List (pieces) + GASKETS (metres), and a Bars
+  // Optimization Report whose Renson bars carry no item code. User's answers
+  // (2026-11-02): bars map by their description below; a "Pair" bar = 2
+  // stock bars; 2450 inner guiding rail metres / 6 rounded up = bars; lines
+  // that are not Renson items (Freedom items such as 910010 Patio Mesh, Box
+  // Sections) are left out and listed; stock may go below zero.
+  const RENSON_BARS = [
+    { desc: "fixed profile head box square - 100 (is)", code: "25089", perBar: 1 },
+    { desc: "removable profile head box square - 100 (os)", code: "24295", perBar: 1 },
+    { desc: "fabric tube ø 68 mm", code: "26562", perBar: 1 },
+    { desc: "bottom bar profile square - drawbar", code: "14102", perBar: 1 },
+    { desc: "side guiding channel fixed profile - pair", code: "11583", perBar: 2 },
+    { desc: "side guiding channel removable - pair", code: "24282", perBar: 2 },
+  ];
+  const METRES_TO_BARS = { "2450": 6 };       // code -> stock bar length in metres
+  const lowKey = (s) => norm(s).toLowerCase().replace(/⌀/g, "ø");
+  const num = (x) => Math.round(x * 1000) / 1000;
+
+  function jobSection(text, startRe, endRe) {
+    const a = text.search(startRe);
+    if (a < 0) return "";
+    const rest = text.slice(a);
+    const b = rest.search(endRe);
+    return b < 0 ? rest : rest.slice(0, b);
+  }
+
+  // Raw entries from the job list text (pdf.js text, as fp-core.js
+  // extractPdfText gives it). {kind: "fitting"|"bar", code, qty, unit,
+  // description, source, why?}
+  function readJobList(text) {
+    const out = { job: (text.match(/Job\/Group:\s*(\S+)/) || [])[1] || "", entries: [] };
+    const fit = jobSection(text, /Fittings List\s*\(1 of/, /Bars Optimization Report|OPTIMIZED CUTTING LIST/);
+    for (const raw of fit.split(/\b(?:ORYX|RENSON)\b(?=\s+[0-9])/).slice(1)) {
+      const chunk = norm(raw.split(/Class:|Printout date|Job\/Group:/)[0]);
+      const cm = /^([0-9]+[A-Za-z]?)[-(\s]/.exec(chunk);
+      if (!cm) continue;
+      const code = cm[1].toUpperCase();
+      const esc = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const m = new RegExp("\\s(\\d+(?:\\.\\d+)?)\\s*(m)?\\s+(" + esc + "\\b.*)$", "i").exec(chunk);
+      if (!m) { out.entries.push({ kind: "fitting", code, qty: 0, unit: "", description: chunk, source: chunk, why: "The quantity could not be read." }); continue; }
+      const qty = parseFloat(m[1]);
+      const unit = m[2] ? "m" : "pc";
+      out.entries.push({ kind: "fitting", code, qty, unit, description: norm(m[3]), source: `${qty}${unit === "m" ? " m" : " pcs"} on the job list` });
+    }
+    const bars = jobSection(text, /Bars Optimization Report\s*\(1 of/, /OPTIMIZED CUTTING LIST/);
+    const re = /Bars:\s*(\d+)\s*x\s*(\d+)[\s\S]*?Description:\s*([^\n]+?)\s*Total length:\s*([\d.]+)\s*m/g;
+    let m;
+    while ((m = re.exec(bars)) !== null) {
+      const n = parseInt(m[1], 10), len = parseInt(m[2], 10), desc = norm(m[3]);
+      const map = RENSON_BARS.find((b) => b.desc === lowKey(desc));
+      const src = `${n} × ${len} mm "${desc}"`;
+      if (map) {
+        out.entries.push({ kind: "bar", code: map.code, qty: n * map.perBar, unit: "bar", description: desc,
+          source: src + (map.perBar === 2 ? ` = ${n * 2} bars (Pair)` : "") });
+      } else if (/^box section\b/i.test(desc)) {
+        out.entries.push({ kind: "bar", code: "", qty: n, unit: "bar", description: desc, source: src, why: "Box Section: not a Renson item, not taken off." });
+      } else {
+        out.entries.push({ kind: "bar", code: "", qty: n, unit: "bar", description: desc, source: src, why: "No Renson item is set for this bar: not taken off." });
+      }
+    }
+    return out;
+  }
+
+  // itemsByCode: Map(UPPER code -> renson_items row). Returns {job, lines
+  // (to take off, one per Renson item), left (not taken off, with why)}.
+  function buildRensonCheckout(text, itemsByCode) {
+    const read = readJobList(text);
+    const byCode = new Map(), left = [];
+    for (const e of read.entries) {
+      if (e.why) { left.push(e); continue; }
+      const item = itemsByCode.get(e.code);
+      if (!item) { left.push({ ...e, why: "Not a Renson item (e.g. a Freedom item): not taken off." }); continue; }
+      const cur = byCode.get(e.code);
+      if (cur) { cur.jobQty = num(cur.jobQty + e.qty); cur.sources.push(e.source); }
+      else byCode.set(e.code, { item_code: item.item_code, item, jobQty: e.qty, unit: e.unit, description: e.description, sources: [e.source] });
+    }
+    const lines = [...byCode.values()].map((l) => {
+      const barM = METRES_TO_BARS[l.item_code.toUpperCase()];
+      let qty = l.jobQty, unit = l.unit, note = l.sources.join(" + ");
+      if (barM && l.unit === "m") {
+        qty = Math.ceil(l.jobQty / barM - 1e-9);
+        unit = "bar";
+        note += ` → ${l.jobQty} m ÷ ${barM} m = ${qty} bars (rounded up)`;
+      }
+      const before = Number(l.item.current_qty) || 0;
+      const cost = l.item.unit_cost == null ? null : Number(l.item.unit_cost);
+      return { item_code: l.item_code, description: l.item.description, jobDescription: l.description, qty, unit, source: note,
+        before, after: num(before - qty), unit_cost: cost, value: Math.round(qty * (cost || 0) * 100) / 100 };
+    });
+    lines.sort((a, b) => a.item_code.localeCompare(b.item_code, "en", { numeric: true }));
+    return { job: read.job, lines, left };
+  }
+
+  window.ORYX_RENSON_CORE = { splitPartCode, parseRensonSheet, excelDate, readJobList, buildRensonCheckout, RENSON_BARS, METRES_TO_BARS };
 })();
 
 // ======================================================================
@@ -146,7 +242,8 @@
   const qtyFmt = (x) => Number(x || 0).toLocaleString("en-US", { maximumFractionDigits: 3 });
   const when = (t) => (t ? new Date(t).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
 
-  const ui = { tab: "inventory", items: [], lastImport: null, loading: false, loadError: "", q: "", file: null, hash: "", parsed: null, msg: null, busy: false };
+  const ui = { tab: "inventory", items: [], lastImport: null, moves: [], loading: false, loadError: "", q: "", file: null, hash: "", parsed: null, msg: null, busy: false,
+    out: { file: null, hash: "", job: "", result: null, skip: new Set(), busy: false, reading: false } };
 
   // Ask the database first: Admin AND pilot flag on. Anything else = nothing appears.
   sb.rpc("renson_access").then(({ data, error }) => {
@@ -227,14 +324,17 @@
 
   async function load() {
     ui.loading = true; ui.loadError = ""; render();
-    const [items, imports] = await Promise.all([
+    const [items, imports, moves] = await Promise.all([
       sb.from("renson_items").select("*").order("item_code").order("id"),
       sb.from("renson_imports").select("*").order("created_at", { ascending: false }).limit(1),
+      sb.from("renson_transactions").select("*").neq("type", "opening_import").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(300),
     ]);
     ui.loading = false;
-    if (items.error || imports.error) { ui.loadError = (items.error || imports.error).message; return render(); }
+    const bad = items.error || imports.error || moves.error;
+    if (bad) { ui.loadError = bad.message; return render(); }
     ui.items = items.data || [];
     ui.lastImport = (imports.data || [])[0] || null;
+    ui.moves = moves.data || [];
     if (!ui.items.length && ui.tab === "inventory" && !ui.parsed) ui.tab = "import";
     render();
   }
@@ -247,11 +347,13 @@
     if (!body) return;
     const tabs = `<div class="rn-tabs" role="tablist">
       <button type="button" data-rn-tab="inventory" class="${ui.tab === "inventory" ? "on" : ""}">Inventory</button>
+      <button type="button" data-rn-tab="checkout" class="${ui.tab === "checkout" ? "on" : ""}">Check-out</button>
+      <button type="button" data-rn-tab="moves" class="${ui.tab === "moves" ? "on" : ""}">Movements</button>
       <button type="button" data-rn-tab="import" class="${ui.tab === "import" ? "on" : ""}">Import stock file</button></div>`;
     const msg = ui.msg ? `<div class="rn-msg ${ui.msg[0]}">${esc(ui.msg[1])}</div>` : "";
     if (ui.loading) { body.innerHTML = tabs + `<div class="card">Loading Renson inventory…</div>`; return; }
     if (ui.loadError) { body.innerHTML = tabs + `<div class="rn-msg bad">Could not read the Renson inventory: ${esc(ui.loadError)}</div>`; return; }
-    body.innerHTML = tabs + msg + (ui.tab === "inventory" ? inventoryHtml() : importHtml());
+    body.innerHTML = tabs + msg + ({ inventory: inventoryHtml, checkout: checkoutHtml, moves: movesHtml }[ui.tab] || importHtml)();
   }
 
   function inventoryHtml() {
@@ -334,6 +436,113 @@
     return h;
   }
 
+  // ------------------------------------------------------------ Check-out
+  // Renson job list (FP Pro PDF) -> preview -> Confirm. Only Renson items
+  // are taken off (renson_checkout); everything else is listed as left out.
+  function checkoutHtml() {
+    const o = ui.out;
+    if (!ui.items.length) return `<div class="card"><p>Import the Renson stock file first.</p></div>`;
+    let h = `<div class="card"><div class="rn-file">
+        <input type="file" id="rnOutFile" accept="application/pdf,.pdf" aria-label="Renson job list (PDF)" ${o.busy ? "disabled" : ""}>
+        <span class="muted">${o.file ? esc(o.file.name) : "Choose the Renson job list (PDF from FP Pro)."}</span></div>`;
+    if (o.reading) h += `<p class="muted">Reading the job list…</p>`;
+    const r = o.result;
+    if (r) {
+      const take = r.lines.filter((l) => !o.skip.has(l.item_code));
+      const value = take.reduce((s, l) => s + l.value, 0);
+      const below = take.filter((l) => l.after < 0).length;
+      h += `<div class="rn-tools"><label class="field-label" for="rnOutJob" style="margin:0">Job number</label>
+          <input id="rnOutJob" value="${esc(o.job)}" maxlength="60" style="border:1px solid #C5D0D4;border-radius:10px;padding:8px 12px;font:inherit;width:180px"></div>
+        <div class="rn-kpis">
+          ${tile("Lines to take off", String(take.length), r.lines.length - take.length ? `${r.lines.length - take.length} unticked` : "")}
+          ${tile("Value taken off", aed(value), "stock × unit cost")}
+          ${tile("Going below zero", String(below), below ? "allowed; fix with a later Check-in" : "")}
+          ${tile("Left out", String(r.left.length), "not Renson items")}
+        </div>
+        <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Take off</th><th>Code</th><th>Renson item</th><th>From the job list</th>
+          <th class="r">Qty</th><th class="r">Stock now</th><th class="r">Stock after</th><th class="r">Value</th></tr></thead><tbody>
+          ${r.lines.map((l) => { const on = !o.skip.has(l.item_code); return `<tr class="${on ? "" : "rn-zero"}">
+            <td><input type="checkbox" data-rn-take="${esc(l.item_code)}" ${on ? "checked" : ""} aria-label="Take off ${esc(l.item_code)}"></td>
+            <td class="mono">${esc(l.item_code)}</td><td>${esc(l.description)}</td><td class="muted">${esc(l.source)}</td>
+            <td class="r">${qtyFmt(l.qty)} ${esc(l.unit)}</td><td class="r">${qtyFmt(l.before)}</td>
+            <td class="r">${on ? qtyFmt(l.after) + (l.after < 0 ? ` <span class="rn-pill" style="background:#FEE2E2;color:#991B1B;margin-left:4px">Below zero, allowed</span>` : "") : qtyFmt(l.before)}</td>
+            <td class="r">${l.unit_cost == null ? `<span class="muted">No cost</span>` : aed(l.value)}</td></tr>`; }).join("")}
+          </tbody><tfoot><tr><td colspan="7">Value taken off</td><td class="r">${aed(value)}</td></tr></tfoot></table></div>`;
+      if (r.left.length) {
+        h += `<h3 class="card-title" style="margin-top:18px">Left out (not taken off)</h3>
+          <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Code</th><th>On the job list</th><th class="r">Qty</th><th>Why</th></tr></thead><tbody>
+          ${r.left.map((l) => `<tr><td class="mono">${esc(l.code || "—")}</td><td>${esc(l.description)}</td><td class="r">${qtyFmt(l.qty)} ${esc(l.unit === "pc" ? "pcs" : l.unit)}</td><td class="muted">${esc(l.why)}</td></tr>`).join("")}
+          </tbody></table></div>`;
+      }
+      h += `<div class="rn-actions">
+          <button type="button" class="btn-yellow" data-rn-act="out-confirm" ${take.length && !o.busy ? "" : "disabled"}>${o.busy ? "Saving…" : `Confirm Check-out (${take.length} lines)`}</button>
+          <button type="button" class="btn-outline" data-rn-act="out-cancel" ${o.busy ? "disabled" : ""}>Cancel</button></div>`;
+    }
+    return h + `</div>`;
+  }
+
+  function movesHtml() {
+    if (!ui.moves.length) return `<div class="card"><p>No Renson Check-outs yet.</p><p class="muted">The opening stock import is not listed here.</p></div>`;
+    return `<div class="rn-wrap"><table class="rn-table"><thead><tr><th>When</th><th>Type</th><th>Job</th><th>Code</th><th>Item</th>
+      <th class="r">Qty</th><th class="r">Stock before → after</th><th class="r">Value</th><th>By</th></tr></thead><tbody>
+      ${ui.moves.map((m) => { const it = ui.items.find((i) => i.id === m.item_id); return `<tr><td>${esc(when(m.created_at))}</td>
+        <td>${m.type === "check_out" ? "Check-out" : esc(m.type)}</td><td>${esc(m.job_number || "")}</td><td class="mono">${esc(m.item_code)}</td>
+        <td>${esc(it ? it.description : "")}${m.source ? `<span class="rn-alt">${esc(m.source)}</span>` : ""}</td>
+        <td class="r">${m.type === "check_out" ? "−" : ""}${qtyFmt(m.quantity)} ${esc(m.unit || "")}</td>
+        <td class="r">${qtyFmt(m.qty_before)} → ${qtyFmt(m.qty_after)}</td><td class="r">${aed(m.value)}</td><td>${esc(m.performed_by_name || "")}</td></tr>`; }).join("")}
+      </tbody></table></div>`;
+  }
+
+  async function readJobFile(f) {
+    const o = ui.out;
+    ui.msg = null; o.result = null; o.skip = new Set(); o.file = f; o.hash = "";
+    if (!/\.pdf$/i.test(f.name)) { ui.msg = ["bad", "Choose the job list PDF."]; o.file = null; return render(); }
+    const FP = window.ORYX_FP;
+    if (!FP || !FP.extractPdfText) { ui.msg = ["bad", "The PDF reader is not ready yet. Try again in a moment."]; o.file = null; return render(); }
+    o.reading = true; render();
+    try {
+      const [text, hash] = await Promise.all([FP.extractPdfText(f), FP.pdfFingerprint(f)]);
+      const byCode = new Map(ui.items.map((i) => [String(i.item_code).toUpperCase(), i]));
+      o.result = R.buildRensonCheckout(text, byCode);
+      o.hash = hash;
+      o.job = o.result.job || "";
+      if (!o.result.lines.length) ui.msg = ["bad", "No Renson items were found on this job list."];
+      else if (ui.moves.some((m) => m.type === "check_out" && m.document_hash === hash)) ui.msg = ["bad", "This job list was already checked out. Confirm will be refused."];
+    } catch (err) {
+      ui.msg = ["bad", "Could not read the PDF: " + (err && err.message ? err.message : err)];
+      o.file = null; o.result = null;
+    }
+    o.reading = false;
+    render();
+  }
+
+  async function confirmCheckout() {
+    const o = ui.out, r = o.result;
+    if (!r || o.busy) return;
+    const job = (o.job || "").trim();
+    if (!job) { ui.msg = ["bad", "Type the job number first."]; return render(); }
+    const take = r.lines.filter((l) => !o.skip.has(l.item_code));
+    if (!take.length) return;
+    if (!window.confirm(`Take ${take.length} lines off the RENSON stock for job ${job}?\n\nFreedom stock is not changed.`)) return;
+    o.busy = true; render();
+    const { data, error } = await sb.rpc("renson_checkout", { p: {
+      job_number: job, document_name: o.file.name, document_hash: o.hash,
+      lines: take.map((l) => ({ item_code: l.item_code, qty: l.qty, unit: l.unit, source: l.source })),
+    } });
+    o.busy = false;
+    if (error) {
+      const m = /already_checked_out/.test(error.message) ? "This job list was already checked out."
+        : /renson_not_allowed/.test(error.message) ? "Not allowed: the Renson pilot is for Admins only (or is switched off)."
+        : "The Check-out was refused: " + error.message;
+      ui.msg = ["bad", m + " Nothing was saved."];
+      return render();
+    }
+    ui.msg = ["ok", `Checked out job ${job}: ${data.lines} lines, value ${aed(data.total_value)}${data.below_zero ? `, ${data.below_zero} item(s) now below zero` : ""}.`];
+    ui.out = { file: null, hash: "", job: "", result: null, skip: new Set(), busy: false, reading: false };
+    ui.tab = "moves";
+    await load();
+  }
+
   // ------------------------------------------------------------ events
   function onClick(e) {
     const t = e.target.closest("[data-rn-tab],[data-rn-act]");
@@ -343,8 +552,11 @@
     if (act === "cancel") { ui.file = null; ui.parsed = null; ui.hash = ""; ui.msg = null; return render(); }
     if (act === "confirm") return confirmImport();
     if (act === "reset") return resetPilot();
+    if (act === "out-confirm") return confirmCheckout();
+    if (act === "out-cancel") { ui.out = { file: null, hash: "", job: "", result: null, skip: new Set(), busy: false, reading: false }; ui.msg = null; return render(); }
   }
   function onInput(e) {
+    if (e.target.id === "rnOutJob") { ui.out.job = e.target.value; return; }
     if (e.target.id === "rnSearch") {
       ui.q = e.target.value;
       const pos = e.target.selectionStart;
@@ -354,6 +566,12 @@
   }
   function onChange(e) {
     if (e.target.id === "rnFile" && e.target.files && e.target.files[0]) readFile(e.target.files[0]);
+    if (e.target.id === "rnOutFile" && e.target.files && e.target.files[0]) readJobFile(e.target.files[0]);
+    if (e.target.dataset && e.target.dataset.rnTake) {
+      const c = e.target.dataset.rnTake;
+      if (e.target.checked) ui.out.skip.delete(c); else ui.out.skip.add(c);
+      render();
+    }
   }
 
   function loadXlsx() {

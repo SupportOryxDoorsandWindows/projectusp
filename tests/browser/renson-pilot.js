@@ -8,19 +8,22 @@
 //  - an Admin with the flag OFF: nothing appears;
 //  - during all of it, no write of any kind to a Freedom table or function.
 //   node tests/browser/renson-pilot.js --xlsx "<RENSON STOCK OCT 27.xlsx>"
-//        --node-modules <folder with @supabase/supabase-js@2.45.4 and xlsx-js-style@1.2.0> [--shot <png>]
+//        --node-modules <folder with @supabase/supabase-js@2.45.4, xlsx-js-style@1.2.0, pdfjs-dist@4.7.76>
+//        [--job-pdf "<Renson job list, e.g. 24222-Paolo OPT LIST Rev. 02.pdf>"] [--shot <png>]
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require(require("child_process").execSync("npm root -g").toString().trim() + "/playwright");
 
 const args = process.argv.slice(2);
 const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : null; };
-const xlsx = opt("--xlsx"), nm = opt("--node-modules"), shot = opt("--shot");
+const xlsx = opt("--xlsx"), nm = opt("--node-modules"), shot = opt("--shot"), jobPdf = opt("--job-pdf");
 if (!xlsx || !nm) { console.error("usage: --xlsx <file> --node-modules <folder> [--shot <png>]"); process.exit(2); }
 const repo = path.resolve(__dirname, "../..");
 const cdn = {
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js": "@supabase/supabase-js/dist/umd/supabase.js",
   "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js": "xlsx-js-style/dist/xlsx.bundle.js",
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs": "pdfjs-dist/build/pdf.min.mjs",
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs": "pdfjs-dist/build/pdf.worker.min.mjs",
 };
 
 // Stand-in for supabase/sql/renson_pilot.sql
@@ -40,6 +43,25 @@ function rpc(name, a, admin) {
       current_value: Math.round(i.qty * (i.unit_cost || 0) * 100) / 100 }));
     const total = db.items.reduce((s, i) => s + i.current_value, 0);
     return ok({ import_id: 1, items: db.items.length, items_with_stock: db.items.filter((i) => i.current_qty > 0).length, total_value: Math.round(total * 100) / 100 });
+  }
+  if (name === "renson_checkout") {
+    if (!access) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } };
+    if ((db.moves || []).some((m) => m.document_hash === a.p.document_hash)) return err("renson_job_list_already_checked_out");
+    db.lastCheckout = a.p; db.moves = db.moves || [];
+    let total = 0, below = 0;
+    for (const l of a.p.lines) {
+      const it = db.items.find((i) => i.item_code === l.item_code);
+      if (!it) return err("not_a_renson_item: " + l.item_code);
+    }
+    for (const l of a.p.lines) {
+      const it = db.items.find((i) => i.item_code === l.item_code);
+      const before = it.current_qty; it.current_qty = Math.round((before - l.qty) * 1000) / 1000;
+      it.current_value = Math.round(it.current_qty * (it.unit_cost || 0) * 100) / 100;
+      const value = Math.round(l.qty * (it.unit_cost || 0) * 100) / 100; total += value; if (it.current_qty < 0) below++;
+      db.moves.unshift({ id: db.moves.length + 1, item_id: it.id, item_code: it.item_code, type: "check_out", quantity: l.qty, unit: l.unit, source: l.source,
+        qty_before: before, qty_after: it.current_qty, value, job_number: a.p.job_number, document_hash: a.p.document_hash, performed_by_name: "Admin Test", created_at: new Date().toISOString() });
+    }
+    return ok({ lines: a.p.lines.length, total_value: Math.round(total * 100) / 100, below_zero: below });
   }
   if (name === "renson_reset_pilot") { const n = db.items.length; db.items = []; db.imports = []; return ok({ items_removed: n }); }
   return ok(null);
@@ -85,6 +107,7 @@ async function session(browser, role) {
     }
     if (table === "renson_items") return send(200, admin && db.flag ? db.items : []);
     if (table === "renson_imports") return send(200, admin && db.flag ? db.imports : []);
+    if (table === "renson_transactions") return send(200, admin && db.flag ? (db.moves || []) : []);
     if (table === "systems") return send(200, [{ id: "series-1", name: "Series 1", family: "Sliding", tracks: ["2"], any_config: false, sort_order: 0 }]);
     return send(200, req.method() === "GET" ? [] : {});
   });
@@ -154,6 +177,40 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     await p.selectOption("#rnInventory", "freedom"); await p.waitForTimeout(500);
     check(await p.isVisible("#miSearch") && await p.isVisible("#miExtractBtn") && !(await p.isVisible("#rnBody")), "back to Freedom: Freedom list again");
     check(/Freedom stock\./.test(await p.innerText("#v-master-inventory .page-head p")), "Freedom subtitle restored");
+    if (jobPdf) {
+      // Renson Check-out from the real job list (24222R)
+      await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(800);
+      await p.click('[data-rn-tab="checkout"]');
+      await p.setInputFiles("#rnOutFile", jobPdf);
+      await p.waitForSelector('[data-rn-act="out-confirm"]', { timeout: 60000 });
+      const prev = await p.innerText("#rnBody");
+      check((await p.inputValue("#rnOutJob")) === "24222R", "check-out: job number 24222R read from the job list");
+      check(/Lines to take off\s*35/.test(prev) && /Left out\s*8/.test(prev), "check-out: 35 lines to take off, 8 left out");
+      check(/AED 10,664\.86/.test(prev), "check-out: value AED 10,664.86");
+      check(/910010[\s\S]*Not a Renson item/.test(prev) && /Box Section 40x60[\s\S]*Box Section: not a Renson item/.test(prev), "check-out: 910010 and Box Sections left out with the reason");
+      check(/= 12 bars \(Pair\)/.test(prev) && /42\.9 m ÷ 6 m = 8 bars/.test(prev), "check-out: Pair = 2 bars, 2450 metres to bars shown");
+      check(/Below zero, allowed/.test(prev), "check-out: below-zero lines marked");
+      if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-checkout.png"), fullPage: false });
+      await p.uncheck('[data-rn-take="714"]'); await p.waitForTimeout(200);
+      check(/Lines to take off\s*34/.test(await p.innerText("#rnBody")), "check-out: unticking a line leaves it out");
+      await p.click('[data-rn-act="out-confirm"]');
+      await p.waitForSelector('[data-rn-tab="moves"].on', { timeout: 30000 });
+      const sent = db.lastCheckout;
+      check(sent && sent.job_number === "24222R" && sent.lines.length === 34 && !sent.lines.some((l) => l.item_code === "714" || l.item_code === "910010"), "check-out: 34 Renson lines sent, no 714 / 910010");
+      check(/^[0-9a-f]{64}$/.test(sent.document_hash) && sent.lines.find((l) => l.item_code === "11583").qty === 12 && sent.lines.find((l) => l.item_code === "2450").qty === 8, "check-out: PDF fingerprint, 11583 = 12 bars, 2450 = 8 bars");
+      const mv = await p.innerText("#rnBody");
+      check(/Checked out job 24222R: 34 lines/.test(mv) && /24222R/.test(mv) && /11583/.test(mv), "movements: the Check-out is listed");
+      await p.click('[data-rn-tab="inventory"]');
+      check(db.items.find((i) => i.item_code === "11583").current_qty === -4, "renson stock: 11583 8 -> -4");
+      // same job list again: warned, and the server refuses
+      await p.click('[data-rn-tab="checkout"]');
+      await p.setInputFiles("#rnOutFile", jobPdf);
+      await p.waitForSelector('[data-rn-act="out-confirm"]', { timeout: 60000 });
+      check(/already checked out/.test(await p.innerText("#rnBody")), "same job list again: warned");
+      await p.click('[data-rn-act="out-confirm"]'); await p.waitForTimeout(800);
+      check(/already checked out\. Nothing was saved/.test(await p.innerText("#rnBody")), "same job list again: refused, nothing saved");
+      await p.selectOption("#rnInventory", "freedom"); await p.waitForTimeout(300);
+    }
     check(!freedomWrites(requests).length, "admin: no write to any Freedom table or function " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "admin: no page errors " + errors.join(" | "));
     await p.close();

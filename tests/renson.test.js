@@ -102,4 +102,92 @@ if (process.env.RENSON_XLSX && process.env.XLSX_PATH) {
   });
 } else console.log("  (real file not given: RENSON_XLSX + XLSX_PATH to include it)");
 
+// ---------------------------------------------------------------- Check-out
+// Made-up excerpt in the layout of a Renson FP Pro job list (pdf.js text as
+// fp-core.js extractPdfText gives it; the real "24222-Paolo OPT LIST Rev.
+// 02.pdf" is a customer file and is not committed: RENSON_JOB_TXT=<text dump>
+// + the stock file include it).
+const JOB = `Job/Group:  99999R  Delivery date:  User:  Test User
+ Description:  Test job
+ Fittings List (1 of 2)
+ Printout date/time: 05/10/2026 10:02 AM  Pagina 9 di 19
+ Class:  PIECE BASED FITTINGS
+ Preview  Brand  Code - Colour  Quantity  Description:
+ ORYX  1118-(G6000180)-SOMFY-SITUO-1  6  1118 (G6000180)-Somfy Situo 1 RTS Pure
+ 2
+ ORYX  16870-BASE PLATE-0°-LEFT-SIDE  6  16870-Base plate 0° left side guiding
+ channel (G6020309)
+ ORYX  1379-CLICKER-(G6020304)  24  1379-Clicker (G6020304)
+ Printout date/time: 05/10/2026 10:02 AM  Pagina 10 di 19
+ ORYX  1379-CLICKER-(G6020304)  4  1379-Clicker (G6020304)
+ Class:  GASKETS
+ Preview  Brand  Code - Colour  Quantity  Description:
+ ORYX  2450-INNER-GUIDINGRAIL-PVC-6  42.9 m  2450-INNER GUIDINGRAIL PVC 6,00M
+ DARK GRAY (P6046710)
+ ORYX  910005R-PET-MESH-3000MM-ROLL  10.73 m  910005R-Pet Mesh 3000mm Roll
+ (3mx30m/roll)
+ ORYX  910010-PATIO-MESH-3.2M  12.78 m  910010-Patio-Mesh-3.2m
+
+Job/Group:  99999R
+ Bars Optimization Report (1 of 3)
+ Serie:  BOX_SECTION  Code:  40X60  Bars:  11 x 6000
+ Treatement:
+ Description:  Box Section 40x60
+ Total length:  66 m  Total Weight:  0 kg
+ Serie:  FLYSCREEN  Code:  RENS_SIDE_FIXED
+ _1
+ Bars:  6 x 6000
+ Treatement:
+ Description:  Side guiding channel fixed profile - Pair
+ Total length:  36 m  Total Weight:  0 kg
+ Serie:  FLYSCREEN  Code:  RENSON_100-IS  Bars:  3 x 4000
+ Description:  Fixed profile head box Square - 100 (IS)
+ Total length:  12 m  Total Weight:  0 kg
+ Serie:  FLYSCREEN  Code:  RENSON_100-IS  Bars:  2 x 4500
+ Description:  Fixed profile head box Square - 100 (IS)
+ Total length:  9 m  Total Weight:  0 kg
+ Serie:  FLYSCREEN  Code:  RENSON_150-IS  Bars:  1 x 6000
+ Description:  Fixed profile head box Square - 150 (IS)
+ Total length:  6 m  Total Weight:  0 kg
+ OPTIMIZED CUTTING LIST - Cutting cicles 76 (1 of 6)
+ Bars:  9 x 6000 Description: Fabric tube Ø 68 mm Total length: 54 m`;
+
+t("job list: fittings, metres, bars, pairs, left-out lines", () => {
+  const items = new Map([["1118", 0, null], ["16870", 110, 2], ["1379", 58, 2], ["2450", 24, 132], ["910005R", 30, 77], ["11583", 8, 165], ["25089", 20, 230.93]]
+    .map(([c, q, k]) => [c, { item_code: c, description: "item " + c, current_qty: q, unit_cost: k }]));
+  const r = JSON.parse(JSON.stringify(R.buildRensonCheckout(JOB, items)));
+  assert.strictEqual(r.job, "99999R");
+  const got = Object.fromEntries(r.lines.map((l) => [l.item_code, [l.qty, l.unit, l.before, l.after, l.value]]));
+  assert.deepStrictEqual(got, {
+    "1118": [6, "pc", 0, -6, 0],                 // no stock: below zero, allowed; no cost = 0
+    "1379": [28, "pc", 58, 30, 56],              // same code on two pages adds up
+    "2450": [8, "bar", 24, 16, 1056],            // 42.9 m / 6 m = 7.15 -> 8 bars
+    "11583": [12, "bar", 8, -4, 1980],           // 6 "Pair" bars = 12 stock bars
+    "16870": [6, "pc", 110, 104, 12],            // code with a space after it ("BASE PLATE")
+    "25089": [5, "bar", 20, 15, 1154.65],        // 3 x 4000 + 2 x 4500 = 5 bars
+    "910005R": [10.73, "m", 30, 19.27, 826.21],
+  });
+  assert.match(r.lines.find((l) => l.item_code === "2450").source, /42\.9 m ÷ 6 m = 8 bars/);
+  const left = r.left.map((l) => (l.code || l.description) + ": " + l.why.split(":")[0]);
+  assert.deepStrictEqual(left, ["910010: Not a Renson item (e.g. a Freedom item)", "Box Section 40x60: Box Section",
+    "Fixed profile head box Square - 150 (IS): No Renson item is set for this bar"]);
+  // nothing from the cutting list after the bars report is counted
+  assert.ok(!r.lines.some((l) => /tube/i.test(l.description)));
+});
+
+if (process.env.RENSON_JOB_TXT && process.env.RENSON_XLSX && process.env.XLSX_PATH) {
+  t("the real job list 24222R", () => {
+    const XLSX = require(process.env.XLSX_PATH);
+    const book = XLSX.read(fs.readFileSync(process.env.RENSON_XLSX), { type: "buffer" });
+    const p = R.parseRensonSheet(XLSX.utils.sheet_to_json(book.Sheets.STOCK, { header: 1, raw: true, defval: null, blankrows: true }));
+    const items = new Map(p.items.map((i) => [i.item_code, { ...i, current_qty: i.qty }]));
+    const r = R.buildRensonCheckout(fs.readFileSync(process.env.RENSON_JOB_TXT, "utf8"), items);
+    assert.strictEqual(r.job, "24222R");
+    assert.strictEqual(r.lines.length, 35);                       // 22 fittings + 7 gaskets + 6 bar items
+    assert.strictEqual(r.left.length, 8);                         // 910010 + 7 Box Section sizes
+    assert.strictEqual(Math.round(r.lines.reduce((s, l) => s + l.value, 0) * 100) / 100, 10664.86);
+    console.log("  real job list: 35 lines, 8 left out, AED 10,664.86");
+  });
+}
+
 console.log(`renson: ${n} tests passed`);
