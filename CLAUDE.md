@@ -286,7 +286,7 @@ product lines — never treat one family's item as a match for another's:
   Lines can be unticked. Server: `renson_checkout(jsonb)`
   (`supabase/sql/renson_checkout.sql`, applied live 2026-11-02, Freedom
   fingerprint identical): all or nothing, every code must be a Renson item,
-  one Check-out per job list (SHA-256). "Movements" tab lists them.
+  one Check-out per job list (SHA-256). Listed on the Activity page.
   Real file: 35 lines (22 fittings + 7 gaskets + 6 bar items), 8 left out,
   AED 10,664.86 at the opening costs.
 - OPENING STOCK LIVE (2026-11-02, user: "use the stock data I provided"):
@@ -360,9 +360,20 @@ product lines — never treat one family's item as a match for another's:
     worked-out cells (`updateCheckin` / `updateManualOut`). A full redraw on
     "change" replaced the box someone was clicking into and lost what they
     typed (found by the browser test).
+- NO TABS (2026-11-02, user: "remove this and use the activity for the
+  movement"): the Renson box is just the list; the import step shows only
+  while there are no Renson items (opening stock is imported once; "Clear
+  the Renson pilot data" went with the Import tab -- SQL `renson_reset_pilot`
+  still exists). Renson movements are on the ACTIVITY page: renson.js sets
+  `window.ORYX_RENSON_ACTIVITY.rows()` in `mount()` (Admin + pilot only) and
+  fires `oryx-renson-ready`; activity.js `rensonEvents` turns them into
+  "Renson check-in / check-out / adjustment" events (same kinds in/out/adj,
+  so filters + today's counts include them; grouped by document_hash; no
+  hash given to the event = no PDF links; opening import not listed).
+  Regular users: no hook, no request, nothing shown.
 - Freedom Check-in unchanged: `tests/browser/checkin-same-freedom.js`
   (made-up Freedom quote, Admin + regular user) gives IDENTICAL output on the
-  old and new code. Dashboard / Activity do not include Renson. Freedom's
+  old and new code. Dashboard does not include Renson (Activity does, Admins only). Freedom's
   own Check-in/Check-out never read Renson tables.
 - Tests: `tests/renson.test.js` (RENSON_XLSX + XLSX_PATH to include the
   real file), `tests/sql/renson-pilot.test.sql` (local Postgres),

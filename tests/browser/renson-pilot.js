@@ -96,7 +96,7 @@ function rpc(name, a, admin) {
       it.current_qty = before + l.qty; it.current_value = Math.round(it.current_qty * (it.unit_cost || 0) * 100) / 100;
       const value = Math.round(l.qty * ((paid != null ? paid : cost0) || 0) * 100) / 100; total += value;
       move(it, { type: "check_in", quantity: l.qty, qty_before: before, qty_after: it.current_qty, value, supplier: a.p.supplier, invoice_number: a.p.invoice_number,
-        original_currency: a.p.currency, original_unit_cost: l.original_unit_cost, unit_cost: paid, unit_cost_after: it.unit_cost, is_new_item: !!l.new_item });
+        original_currency: a.p.currency, original_unit_cost: l.original_unit_cost, unit_cost: paid, unit_cost_after: it.unit_cost, is_new_item: !!l.new_item, document_hash: a.p.document_hash, document_name: a.p.document_name });
     }
     return ok({ lines: a.p.lines.length, new_items: created, total_value: Math.round(total * 100) / 100 });
   }
@@ -172,8 +172,8 @@ async function session(browser, role) {
     if (table === "renson_imports") return send(200, admin && db.flag ? db.imports : []);
     if (table === "renson_transactions") {
       const eq = (k) => (u.searchParams.get(k) || "").replace(/^eq\./, "");
-      const itemId = eq("item_id"), type = eq("type"), hash = eq("document_hash");
-      const rows = (db.moves || []).filter((m) => (!itemId || String(m.item_id) === itemId) && (!type || m.type === type) && (!hash || m.document_hash === hash));
+      const itemId = eq("item_id"), type = eq("type"), hash = eq("document_hash"), notType = (u.searchParams.get("type") || "").startsWith("neq.") ? u.searchParams.get("type").slice(4) : "";
+      const rows = (db.moves || []).filter((m) => (!itemId || String(m.item_id) === itemId) && (!type || notType || m.type === type) && (!notType || m.type !== notType) && (!hash || m.document_hash === hash));
       return send(200, admin && db.flag ? rows : []);
     }
     if (table === "systems") return send(200, [{ id: "series-1", name: "Series 1", family: "Sliding", tracks: ["2"], any_config: false, sort_order: 0 }]);
@@ -220,6 +220,8 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
       await p.waitForFunction(() => /Renson document/.test(document.querySelector("#ciStatus").textContent), null, { timeout: 60000 });
       check(!(await p.$("#ciOut table")) && !(await p.$("#ciRenson .card")) && await p.isHidden("#ciConfirmBar"), "regular user: Renson document refused on the shared Check-in, nothing changed");
     }
+    await p.click("#navActivity"); await p.waitForTimeout(800);
+    check(!/Renson/i.test(await p.innerText("#v-activity")) && !requests.some(isRenson), "regular user: Activity has no Renson entries and asks for none");
     check(!freedomWrites(requests).length && !requests.some((r) => /functions\/v1\/check(out|in)/.test(r.url)), "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "regular user: no page errors " + errors.join(" | "));
     await p.close();
@@ -234,7 +236,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     check((await p.inputValue("#rnInventory")) === "freedom" && await p.isVisible("#miSearch") && await p.isVisible("#miExtractBtn"), "admin: starts on Freedom, Freedom list as usual");
     await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(800);
     check(await p.isVisible("#rnBody") && !(await p.isVisible("#miSearch")) && !(await p.isVisible("#miExtractBtn")), "admin: Renson shown in Master Inventory, Freedom list hidden");
-    check(/Import stock file/.test(await p.innerText("#rnBody")) && !!(await p.$("#rnFile")), "admin: empty pilot opens on the import step");
+    check(/Choose the Renson stock Excel/.test(await p.innerText("#rnBody")) && !!(await p.$("#rnFile")), "admin: empty pilot opens on the import step");
     await p.setInputFiles("#rnFile", xlsx);
     await p.waitForSelector('[data-rn-act="confirm"]', { timeout: 30000 });
     const review = await p.innerText("#rnBody");
@@ -288,8 +290,8 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     if (shot) await p.screenshot({ path: shot, fullPage: false });
     await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(2000);
     check((await p.evaluate(() => document.querySelector(".view.on").id)) === "v-master-inventory" && (await p.inputValue("#rnInventory")) === "renson" && await p.isVisible("#rnSearch"), "reload keeps Master Inventory on Renson");
-    await p.click('[data-rn-tab="import"]');
-    check(await p.isDisabled("#rnFile"), "second import blocked while the opening stock exists");
+    check(!(await p.$(".rn-tabs")) && !(await p.$("[data-rn-tab]")) && !(await p.$("#rnFile")) && !/Movements/.test(await p.innerText("#rnBody")),
+      "no Inventory / Movements / Import tabs once the opening stock exists");
     await p.selectOption("#rnInventory", "freedom"); await p.waitForTimeout(500);
     check(await p.isVisible("#miSearch") && await p.isVisible("#miExtractBtn") && !(await p.isVisible("#rnBody")), "back to Freedom: Freedom list again");
     check(/Freedom stock\./.test(await p.innerText("#v-master-inventory .page-head p")), "Freedom subtitle restored");
@@ -366,6 +368,17 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
       }
       await p.click('nav .rn-sub [data-rn-mode="renson"]'); await p.waitForTimeout(800);
     }
+    // Renson movements are on the Activity page (Movements tab removed).
+    await p.click("#navActivity"); await p.waitForTimeout(1200);
+    const act = await p.innerText("#actList");
+    if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-activity.png"), fullPage: false });
+    check(/Renson adjustment/i.test(act) && /stock count · 22874/.test(act), "Activity: Renson adjustment listed");
+    if (jobPdf) check(/Renson check-out[\s\S]*checked out 34 items/i.test(act), "Activity: Renson check-out listed (34 ticked items)");
+    if (rensonDocs.length) check((act.match(/Renson check-in/gi) || []).length === rensonDocs.length, "Activity: one Renson check-in per document");
+    check(!/Opening stock|opening_import/.test(act), "Activity: opening import not listed");
+    await p.click('#actTypes [data-type="adj"]'); await p.waitForTimeout(300);
+    check(/Renson adjustment/i.test(await p.innerText("#actList")), "Activity: Adjustments filter includes Renson");
+    await p.click('#actTypes [data-type=""]');
     check(!freedomWrites(requests).length, "admin: no write to any Freedom table or function " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "admin: no page errors " + errors.join(" | "));
     await p.close();

@@ -122,6 +122,43 @@
   const PAGE = 25;
   const TYPES = [["", "All"], ["out", "Check-out"], ["in", "Check-in"], ["adj", "Adjustments"], ["del", "Deleted lines"], ["acc", "Accounts"]];
   let events = [], page = 0, type = "", loaded = false, loading = null;
+  // Renson movements (Admin-only pilot): rows come from renson.js
+  // (window.ORYX_RENSON_ACTIVITY exists only for Admins with the pilot on).
+  // Same kinds as Freedom so the type filters work; tagged "Renson ..." and
+  // never given a document hash (their PDFs are not kept in
+  // transaction_documents, so no View / Attach PDF links).
+  function rensonEvents(rows) {
+    const groups = new Map();
+    for (const t of rows) {
+      const ref = t.type === "check_in" ? (t.invoice_number || t.po_number || "") : t.type === "check_out" ? (t.job_number || "") : "";
+      // A document is checked in / out once, so its fingerprint is the group.
+      const key = t.type === "adjustment" ? `ren|adj|${t.id}` : t.document_hash ? `ren|${t.type}|${t.document_hash}` : `ren|${t.type}|${ref}|${t.created_at}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = { key, at: new Date(t.created_at), txType: t.type, ref, party: t.supplier || "", doc: t.document_name || "", lines: [],
+          who: t.performed_by_name || null, whoEmail: "", value: 0, hash: null, reason: t.reason || "", reference: t.reference || "" };
+        groups.set(key, g);
+      }
+      g.lines.push({ item_code: t.item_code, description: t.description, quantity: Math.abs(Number(t.quantity) || 0), unit: t.unit, value: Math.abs(Number(t.value) || 0) });
+      g.value += Math.abs(Number(t.value) || 0);
+      if (t.type === "adjustment" && Number(t.quantity) < 0) g.txType = "check_out"; // shown with "−"
+    }
+    return [...groups.values()].map((g) => {
+      const n = g.lines.length, items = `${n} item${n === 1 ? "" : "s"}`, first = g.lines[0];
+      if (g.key.startsWith("ren|adj|")) {
+        const sign = g.txType === "check_out" ? "−" : "+";
+        return { ...g, kind: "adj", tag: "Renson adjustment", did: `${(g.reference || "adjusted stock").toLowerCase()} · ${first.item_code} ${sign}${num(first.quantity)}`,
+          detail: [first.description, g.reason ? `Reason: ${g.reason}` : ""].filter(Boolean).join(" · ") };
+      }
+      if (g.txType === "check_in") {
+        return { ...g, kind: "in", tag: "Renson check-in", did: `checked in ${items}`,
+          detail: [g.party, g.ref ? `Order Number ${g.ref}` : "", g.doc, aed(g.value)].filter(Boolean).join(" · ") };
+      }
+      return { ...g, kind: "out", tag: "Renson check-out", did: `checked out ${items}`,
+        detail: [g.ref ? `Order Number ${g.ref}` : "", g.doc, aed(g.value)].filter(Boolean).join(" · ") };
+    });
+  }
+
   let keptDocs = new Map(); // source_document_hash -> kept original PDF
 
   async function loadKeptDocs() {
@@ -138,12 +175,14 @@
       const admin = AUTH.isAdmin();
       $("#actAdminNote").hidden = !admin;
       try {
-        const [txs, dels, accs] = await Promise.all([
+        const ren = window.ORYX_RENSON_ACTIVITY;
+        const [txs, dels, accs, rens] = await Promise.all([
           pagedSelect("inventory_transactions", "type, item_id, item_code, description, quantity, unit, value, job_number, client, supplier, invoice_number, po_number, source_document_name, source_document_hash, created_at, performed_by_name, performed_by_email", "created_at", 20000),
           admin ? pagedSelect("delete_audit_log", "*", "happened_at", 10000).catch(() => []) : [],
           admin ? pagedSelect("account_activity_log", "*", "happened_at", 5000).catch(() => []) : [],
+          admin && ren ? ren.rows().catch((err) => { console.error("Renson activity", err); return []; }) : [],
         ]);
-        events = [...txEvents(txs), ...deleteEvents(dels), ...accountEvents(accs)].sort((a, b) => b.at - a.at);
+        events = [...txEvents(txs), ...deleteEvents(dels), ...accountEvents(accs), ...rensonEvents(rens)].sort((a, b) => b.at - a.at);
         loaded = true;
         fillPeople();
         drawTypes();
@@ -295,6 +334,7 @@
   // Fresh every time the tab is opened.
   $("#navActivity").addEventListener("click", () => { load(); });
   document.addEventListener("oryx-permissions", () => { if (loaded) load(); });
+  document.addEventListener("oryx-renson-ready", () => { if (loaded) load(); });
   document.addEventListener("oryx-doc-kept", async () => { if (loaded) { await loadKeptDocs(); draw(); } });
 
   window.ORYX_ACTIVITY = { reload: load };
