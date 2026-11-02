@@ -255,6 +255,14 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     await p.fill("#rnSearch", "somfy"); await p.waitForTimeout(300);
     check(/4 of 100 items/.test(await p.innerText("#rnBody")), "search: 4 Somfy items");
     await p.fill("#rnSearch", ""); await p.waitForTimeout(200);
+    // Item photos (from the stock file's Picture column)
+    const nPhotos = await p.$$eval("#rnBody [data-rn-photo]", (b) => b.length);
+    check(nPhotos === 60, "list: 60 items show their photo from the stock file (" + nPhotos + ")");
+    check(await p.evaluate(async () => (await Promise.all([...document.querySelectorAll("#rnBody [data-rn-photo]")].map((b) => new Promise((ok) => { const i = new Image(); i.onload = () => ok(i.naturalWidth > 0); i.onerror = () => ok(false); i.src = b.dataset.rnPhoto; })))).every(Boolean)), "list: every photo loads");
+    await p.click('tr[data-rn-item]:has-text("22874") [data-rn-photo]'); await p.waitForTimeout(300);
+    check(await p.evaluate(() => document.querySelector("#lightbox").open && /assets\/renson\/22874\.png/.test(document.querySelector("#lbImg").src))
+      && !(await p.$("#rnItemDlg[open]")), "list: clicking a photo opens the photo viewer, not the item panel");
+    await p.keyboard.press("Escape"); await p.waitForTimeout(200);
     // Show filter + Extract
     await p.selectOption("#rnShow", "out"); await p.waitForTimeout(200);
     check(/59 of 100 items/.test(await p.innerText("#rnBody")), "Show: Out of stock = 59 items");
@@ -273,6 +281,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     // Item panel: Adjust + Kanban levels
     await p.click('tr[data-rn-item] >> text="22874"'); await p.waitForSelector("#rnItemDlg[open]");
     check(/Bar Ø 18 mm/.test(await p.innerText("#rnItemBody")), "item panel opens for 22874");
+    check(!!(await p.$('#rnItemBody [data-rn-photo="assets/renson/22874.png"]')), "item panel shows the photo");
     await p.fill("#rnAdjQty", "12"); await p.fill("#rnAdjReason", "Stock count 2 Nov");
     check(/Stock 14 → 12 \(-2\)/.test(await p.innerText("#rnAdjPreview")), "adjust preview: 14 -> 12");
     await p.click('[data-rn-dlg="adjust"]'); await p.waitForTimeout(800);
@@ -312,6 +321,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
       if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-checkout.png"), fullPage: true });
       await p.uncheck('#fpRenson [data-rn-take="714"]'); await p.waitForTimeout(300);
       check(/34 of 35 lines/.test(await p.innerText("#fpRenson")), "one check-out: unticking a Renson line leaves it out");
+      check(!!(await p.$('#fpRenson [data-rn-photo="assets/renson/714.png"]')), "Check-out Renson box shows the photos");
       for (let k = 0; k < 40; k++) { const b2 = p.locator('#fpOut button[data-act="skip"]:not(.on):text-is("Acknowledge")').first(); if (!(await b2.count())) break; await b2.click(); await p.waitForTimeout(40); }
       if (!(await p.inputValue("#fpClient"))) await p.fill("#fpClient", "Paolo Rusolen");
       check(/\+ 34 Renson items/.test(await p.innerText("#fpConfirmSummary")), "confirm bar counts the Renson items");
@@ -343,6 +353,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
         await p.waitForSelector("#ciRenson .card", { timeout: 60000 });
         await p.waitForTimeout(600);
         const box = await p.innerText("#ciRenson"), st = await p.innerText("#ciStatus");
+        check((await p.$$("#ciRenson [data-rn-photo]")).length > 0, doc.name + ": Check-in Renson box shows photos of known items");
         check(!(await p.$("#ciOut table")) && await p.isHidden("#ciConfirmBar"), doc.name + ": Freedom preview not used");
         check(/✓ The lines add up to the document's total before VAT/.test(box), doc.name + ": lines add up to the document total");
         check(new RegExp("Renson document read — " + doc.lines + " lines").test(st), doc.name + ": " + doc.lines + " lines read (" + st.slice(0, 90) + ")");

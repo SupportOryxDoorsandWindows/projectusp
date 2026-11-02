@@ -371,6 +371,15 @@ product lines — never treat one family's item as a match for another's:
   so filters + today's counts include them; grouped by document_hash; no
   hash given to the event = no PDF links; opening import not listed).
   Regular users: no hook, no request, nothing shown.
+- PHOTOS (2026-11-02, user: "add the picture to renson"): the in-cell
+  pictures of column D "Picture" on the STOCK sheet (Excel richData:
+  cell vm -> metadata -> rdrichvalue -> richValueRel -> xl/media) for 60
+  codes, resized to <= 400 px, in `assets/renson/<code>.png` + `index.json`
+  (apart from Freedom's assets/items/). renson.js `photoBtn` / `withPhoto`
+  (Freedom's thumbnail classes + FP.openItemPhoto viewer, own
+  `data-rn-photo` click listener in capture so a photo never opens the
+  row): list, item panel, Check-out and Check-in Renson boxes. The file
+  itself gives 2405 Spline and 22874 Steel bar the SAME picture.
 - Freedom Check-in unchanged: `tests/browser/checkin-same-freedom.js`
   (made-up Freedom quote, Admin + regular user) gives IDENTICAL output on the
   old and new code. Dashboard does not include Renson (Activity does, Admins only). Freedom's
