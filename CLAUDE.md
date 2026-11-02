@@ -303,7 +303,7 @@ product lines — never treat one family's item as a match for another's:
   - Sidebar: "Freedom" / "Renson (pilot)" submenu under Master Inventory
     (`nav .rn-sub`, NOT `button[data-v]`; Admins + pilot only; hidden when
     the sidebar is folded / on phones, where the page dropdown remains).
-  - Inventory: Show filter (All / Normal / Low / Critical / Out of stock /
+  - Inventory: headline = Freedom's (`.mi-kpis`: "AED x stock value" + "n items in n codes"; the 5 tiles + import line were replaced 2026-11-02 at the user's request), Show filter (All / Normal / Low / Critical / Out of stock /
     No cost), Kanban row colours + badges via kanban.js (`rensonStatus`),
     Extract (.xlsx of the rows shown), row -> item panel (`#rnItemDlg`:
     stock / average cost / last bought, Adjust, Kanban levels, history).
