@@ -264,7 +264,26 @@
     return { out: qty <= 0, kanban: k, noCost: item.unit_cost == null };
   }
 
-  window.ORYX_RENSON_CORE = { splitPartCode, parseRensonSheet, excelDate, readJobList, buildRensonCheckout, RENSON_BARS, METRES_TO_BARS,
+  // One Check-out (2026-11-02): Freedom's own rows for a Renson job list
+  // still contain the Renson lines (as unmatched rows -- no code is in both
+  // inventories). Take out those that the Renson reader turned into Renson
+  // lines: rows with a Renson item code, and the code-less bar rows whose
+  // description is a known Renson bar. Everything else (e.g. 910010 Patio
+  // Mesh = Freedom, Box Sections, an unknown bar) stays with Freedom exactly
+  // as Freedom handles it. No Renson lines = the same array, untouched.
+  function splitRensonRows(rows, rensonLines) {
+    if (!rensonLines || !rensonLines.length) return rows;
+    const codes = new Set(rensonLines.map((l) => String(l.item_code).toUpperCase()));
+    const bars = new Set(RENSON_BARS.map((b) => b.desc));
+    return rows.filter((r) => {
+      if (r.itemId) return true;
+      if (r.code && codes.has(String(r.code).toUpperCase())) return false;
+      if (r.kind === "bar" && !r.code && bars.has(lowKey(r.description))) return false;
+      return true;
+    });
+  }
+
+  window.ORYX_RENSON_CORE = { splitRensonRows, splitPartCode, parseRensonSheet, excelDate, readJobList, buildRensonCheckout, RENSON_BARS, METRES_TO_BARS,
     splitShipping, checkinPreview, rensonStatus };
 })();
 
@@ -302,11 +321,10 @@
   const CURRENCIES = ["AED", "EUR", "USD", "AUD", "GBP"];
   const TYPE_LABEL = { check_out: "Check-out", check_in: "Check-in", adjustment: "Adjustment", opening_import: "Opening stock" };
 
-  const newOut = () => ({ file: null, hash: "", job: "", result: null, skip: new Set(), busy: false, reading: false, manual: false, lines: [{ item_code: "", qty: "" }] });
   const newIn = () => ({ supplier: "Renson", invoice: "", po: "", date: today(), currency: "EUR", rate: "", rateNote: "", shipping: "",
     lines: [{ item_code: "", qty: "", price: "", desc: "", unit: "" }], busy: false });
   const ui = { mode: "freedom", tab: "inventory", items: [], lastImport: null, moves: [], loading: false, loadError: "", q: "", show: "all",
-    file: null, hash: "", parsed: null, msg: null, busy: false, out: newOut(), cin: newIn() };
+    file: null, hash: "", parsed: null, msg: null, busy: false, cin: newIn() };
   const byCode = () => new Map(ui.items.map((i) => [String(i.item_code).toUpperCase(), i]));
 
   // Ask the database first: Admin AND pilot flag on. Anything else = nothing appears.
@@ -416,6 +434,15 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     dlg.addEventListener("input", onDlgInput);
 
     $("#rnInventory").addEventListener("change", (e) => setMode(e.target.value));
+    // Shared Check-out page: Renson lines of a Renson job list.
+    window.ORYX_RENSON_CHECKOUT = RENSON_CHECKOUT;
+    document.addEventListener("change", (e) => {
+      const el = e.target;
+      if (!el.dataset || !el.dataset.rnTake || !el.closest("#fpRenson")) return;
+      if (el.checked) co.skip.delete(el.dataset.rnTake); else co.skip.add(el.dataset.rnTake);
+      coDraw();
+      if (window.ORYX_FP && window.ORYX_FP.render && window.ORYX_FP.state && window.ORYX_FP.state.rows) window.ORYX_FP.render();
+    });
     box.addEventListener("click", onClick);
     box.addEventListener("input", onInput);
     box.addEventListener("change", onChange);
@@ -425,6 +452,95 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     if (last === "renson") setMode("renson");
     markSub();
   }
+
+  // ------------------------------------------------------------ shared Check-out
+  // One Check-out page for every stock category (2026-11-02, user's request,
+  // answers: each line to its own stock; Renson lines refused for regular
+  // users; the old Renson Check-out tab removed). fp-checkout.js calls this
+  // object (window.ORYX_RENSON_CHECKOUT, only set for Admins with the pilot
+  // on): split() after a job list is read, count() for the Confirm button,
+  // commit() AFTER the Freedom part was saved, doneHtml()/wireDone() for the
+  // done message, reset(). Renson lines are drawn in #fpRenson under the
+  // Freedom preview; Freedom's own rows and buttons are not touched.
+  const co = { lines: [], skip: new Set(), hash: "", file: null, already: false, retry: null };
+  function coBox() {
+    let b = $("#fpRenson");
+    const out = $("#fpOut");
+    if (!b && out) { b = document.createElement("div"); b.id = "fpRenson"; out.after(b); }
+    return b;
+  }
+  function coDraw() {
+    const b = coBox();
+    if (!b) return;
+    if (!co.lines.length) { b.innerHTML = ""; return; }
+    const take = co.lines.filter((l) => !co.skip.has(l.item_code));
+    const value = take.reduce((x, l) => x + l.value, 0);
+    b.innerHTML = `<div class="card" style="margin-top:16px">
+      <div class="fp-section-h">Renson items <span class="rn-pill">Renson stock · Admin pilot</span></div>
+      <p class="small muted">These lines are Renson items: they come off the <b>Renson</b> stock, not Freedom. The lines above stay with Freedom.</p>
+      ${co.already ? `<div class="rn-msg bad">The Renson items of this job list were already checked out. Confirm will refuse them.</div>` : ""}
+      <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Take off</th><th>Code</th><th>Renson item</th><th>From the job list</th>
+        <th class="r">Qty</th><th class="r">Stock now</th><th class="r">Stock after</th><th class="r">Value</th></tr></thead><tbody>
+        ${co.lines.map((l) => { const on = !co.skip.has(l.item_code); return `<tr class="${on ? "" : "rn-zero"}">
+          <td><input type="checkbox" data-rn-take="${esc(l.item_code)}" ${on ? "checked" : ""} aria-label="Take off ${esc(l.item_code)}"></td>
+          <td class="mono">${esc(l.item_code)}</td><td>${esc(l.description)}</td><td class="muted">${esc(l.source)}</td>
+          <td class="r">${qtyFmt(l.qty)} ${esc(l.unit)}</td><td class="r">${qtyFmt(l.before)}</td>
+          <td class="r">${on ? qtyFmt(l.after) + (l.after < 0 ? ` <span class="rn-badge out">Below zero, allowed</span>` : "") : qtyFmt(l.before)}</td>
+          <td class="r">${l.unit_cost == null ? `<span class="muted">No cost</span>` : aed(l.value)}</td></tr>`; }).join("")}
+        </tbody><tfoot><tr><td colspan="7">Renson value taken off (${take.length} of ${co.lines.length} lines)</td><td class="r">${aed(value)}</td></tr></tfoot></table></div></div>`;
+  }
+  async function coSend(job) {
+    const take = co.lines.filter((l) => !co.skip.has(l.item_code));
+    const { data, error } = await sb.rpc("renson_checkout", { p: {
+      job_number: job, document_name: co.file ? co.file.name : null, document_hash: co.hash || null,
+      lines: take.map((l) => ({ item_code: l.item_code, qty: l.qty, unit: l.unit, source: l.source })) } });
+    if (error) {
+      const m = /already_checked_out/.test(error.message) ? "The Renson items of this job list were already checked out."
+        : /renson_not_allowed/.test(error.message) ? "Renson is for Admins only (or switched off)." : error.message;
+      return { ok: false, message: "Renson items NOT taken off: " + m };
+    }
+    return { ok: true, data };
+  }
+  const RENSON_CHECKOUT = {
+    async split(text, rows, hash) {
+      co.lines = []; co.skip = new Set(); co.hash = hash || ""; co.file = (window.ORYX_FP && window.ORYX_FP.state && window.ORYX_FP.state.pdfFile) || null;
+      co.already = false; co.retry = null;
+      const { data, error } = await sb.from("renson_items").select("*").order("item_code").order("id");
+      if (error) throw new Error("Could not read the Renson inventory: " + error.message);
+      const items = new Map((data || []).map((i) => [String(i.item_code).toUpperCase(), i]));
+      const res = R.buildRensonCheckout(text, items);
+      co.lines = res.lines;
+      if (co.lines.length && hash) {
+        const prev = await sb.from("renson_transactions").select("id").eq("type", "check_out").eq("document_hash", hash).limit(1);
+        co.already = !!(prev.data && prev.data.length);
+      }
+      coDraw();
+      return R.splitRensonRows(rows, co.lines);
+    },
+    count() { return co.lines.filter((l) => !co.skip.has(l.item_code)).length; },
+    async commit({ job }) {
+      const r = await coSend(job);
+      if (!r.ok) co.retry = job;
+      return r;
+    },
+    doneHtml(r) {
+      if (r.ok) return `<p class="small"><b>Renson:</b> ${r.data.lines} Renson item${r.data.lines === 1 ? "" : "s"} taken off the Renson stock, value ${aed(r.data.total_value)}${r.data.below_zero ? `, ${r.data.below_zero} now below zero` : ""}.</p>`;
+      return `<div class="rn-msg bad" id="rnCoFail">${esc(r.message)} The Freedom part above is saved. <button type="button" class="btn-outline" id="rnCoRetry">Try again</button></div>`;
+    },
+    wireDone(container) {
+      $("#fpRenson") && ($("#fpRenson").innerHTML = "");
+      const btn = container.querySelector("#rnCoRetry");
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        const r = await coSend(co.retry);
+        const box = container.querySelector("#rnCoFail");
+        box.outerHTML = RENSON_CHECKOUT.doneHtml(r);
+        if (!r.ok) RENSON_CHECKOUT.wireDone(container);
+      });
+    },
+    reset() { co.lines = []; co.skip = new Set(); co.hash = ""; co.file = null; co.already = false; co.retry = null; coDraw(); },
+  };
 
   function setMode(which) {
     const ren = which === "renson";
@@ -460,7 +576,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 
   // ------------------------------------------------------------ render
   const tile = (label, value, note) => `<div class="kpi"><span>${esc(label)}</span><b>${esc(value)}</b>${note ? `<span class="kpi-note">${esc(note)}</span>` : ""}</div>`;
-  const TABS = [["inventory", "Inventory"], ["checkin", "Check-in"], ["checkout", "Check-out"], ["moves", "Movements"], ["import", "Import stock file"]];
+  const TABS = [["inventory", "Inventory"], ["checkin", "Check-in"], ["moves", "Movements"], ["import", "Import stock file"]];
 
   function render() {
     const body = $("#rnBody");
@@ -469,10 +585,9 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     const msg = ui.msg ? `<div class="rn-msg ${ui.msg[0]}">${esc(ui.msg[1])}</div>` : "";
     if (ui.loading) { body.innerHTML = tabs + `<div class="card">Loading Renson inventory…</div>`; return; }
     if (ui.loadError) { body.innerHTML = tabs + `<div class="rn-msg bad">Could not read the Renson inventory: ${esc(ui.loadError)}</div>`; return; }
-    const draw = { inventory: inventoryHtml, checkin: checkinHtml, checkout: checkoutHtml, moves: movesHtml }[ui.tab] || importHtml;
+    const draw = { inventory: inventoryHtml, checkin: checkinHtml, moves: movesHtml }[ui.tab] || importHtml;
     body.innerHTML = tabs + msg + draw() + codeList();
     if (ui.tab === "checkin") updateCheckin();
-    if (ui.tab === "checkout") updateManualOut();
   }
   const codeList = () => `<datalist id="rnCodes">${ui.items.map((i) => `<option value="${esc(i.item_code)}">${esc(i.description)}</option>`).join("")}</datalist>`;
 
@@ -791,104 +906,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     await load();
   }
 
-  // ------------------------------------------------------------ Check-out
-  // Renson job list (FP Pro PDF) -> preview -> Confirm, or lines typed by
-  // hand (like Freedom's manual entry). Only Renson items are taken off.
-  function checkoutHtml() {
-    const o = ui.out;
-    if (!ui.items.length) return `<div class="card"><p>Import the Renson stock file first.</p></div>`;
-    let h = `<div class="card"><div class="rn-file">
-        <input type="file" id="rnOutFile" accept="application/pdf,.pdf" aria-label="Renson job list (PDF)" ${o.busy ? "disabled" : ""}>
-        <span class="muted">${o.file ? esc(o.file.name) : "Choose the Renson job list (PDF from FP Pro)"}</span>
-        <span class="muted">or</span><button type="button" class="rn-link" data-rn-act="out-manual">${o.manual ? "Hide the lines typed by hand" : "Type the lines by hand"}</button></div>`;
-    if (o.reading) h += `<p class="muted">Reading the job list…</p>`;
-    const jobBox = `<div class="rn-tools"><label class="field-label" for="rnOutJob" style="margin:0">Job number</label>
-          <input id="rnOutJob" class="rn-in" value="${esc(o.job)}" maxlength="60" style="width:180px"></div>`;
-    if (o.manual && !o.result) {
-      h += jobBox + `<div class="rn-wrap"><table class="rn-table"><thead><tr><th style="min-width:150px">Item code</th><th>Renson item</th><th class="r" style="width:110px">Qty</th><th class="r">Stock now</th><th class="r">Stock after</th><th class="r">Value</th><th></th></tr></thead><tbody>
-        ${o.lines.map((l, i) => `<tr><td><input class="rn-in mono" list="rnCodes" data-rn-out="item_code" data-i="${i}" value="${esc(l.item_code)}" aria-label="Item code line ${i + 1}"></td>
-          <td data-rn-ocell="item" data-i="${i}"></td>
-          <td><input class="rn-in rn-num" inputmode="decimal" data-rn-out="qty" data-i="${i}" value="${esc(l.qty)}" aria-label="Quantity line ${i + 1}"></td>
-          <td class="r" data-rn-ocell="now" data-i="${i}"></td><td class="r" data-rn-ocell="after" data-i="${i}"></td><td class="r" data-rn-ocell="value" data-i="${i}"></td>
-          <td><button type="button" class="rn-danger" data-rn-act="out-del" data-i="${i}">Remove</button></td></tr>`).join("")}
-        </tbody><tfoot><tr><td colspan="5">Value taken off</td><td class="r" id="rnOutTotal"></td><td></td></tr></tfoot></table></div>
-        <div class="rn-actions"><button type="button" class="btn-outline" data-rn-act="out-add">+ Add line</button></div>
-        <ul class="rn-issues" id="rnOutProbs" style="margin-top:14px"></ul>
-        <div class="rn-actions"><button type="button" class="btn-yellow" id="rnOutConfirm" data-rn-act="out-confirm-manual"></button>
-          <button type="button" class="btn-outline" data-rn-act="out-cancel" ${o.busy ? "disabled" : ""}>Cancel</button></div>`;
-      return h + `</div>`;
-    }
-    const r = o.result;
-    if (r) {
-      const take = r.lines.filter((l) => !o.skip.has(l.item_code));
-      const value = take.reduce((s, l) => s + l.value, 0);
-      const below = take.filter((l) => l.after < 0).length;
-      h += jobBox + `<div class="rn-kpis">
-          ${tile("Lines to take off", String(take.length), r.lines.length - take.length ? `${r.lines.length - take.length} unticked` : "")}
-          ${tile("Value taken off", aed(value), "stock × unit cost")}
-          ${tile("Going below zero", String(below), below ? "allowed; fix with a later Check-in" : "")}
-          ${tile("Left out", String(r.left.length), "not Renson items")}
-        </div>
-        <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Take off</th><th>Code</th><th>Renson item</th><th>From the job list</th>
-          <th class="r">Qty</th><th class="r">Stock now</th><th class="r">Stock after</th><th class="r">Value</th></tr></thead><tbody>
-          ${r.lines.map((l) => { const on = !o.skip.has(l.item_code); return `<tr class="${on ? "" : "rn-zero"}">
-            <td><input type="checkbox" data-rn-take="${esc(l.item_code)}" ${on ? "checked" : ""} aria-label="Take off ${esc(l.item_code)}"></td>
-            <td class="mono">${esc(l.item_code)}</td><td>${esc(l.description)}</td><td class="muted">${esc(l.source)}</td>
-            <td class="r">${qtyFmt(l.qty)} ${esc(l.unit)}</td><td class="r">${qtyFmt(l.before)}</td>
-            <td class="r">${on ? qtyFmt(l.after) + (l.after < 0 ? ` <span class="rn-badge out">Below zero, allowed</span>` : "") : qtyFmt(l.before)}</td>
-            <td class="r">${l.unit_cost == null ? `<span class="muted">No cost</span>` : aed(l.value)}</td></tr>`; }).join("")}
-          </tbody><tfoot><tr><td colspan="7">Value taken off</td><td class="r">${aed(value)}</td></tr></tfoot></table></div>`;
-      if (r.left.length) {
-        h += `<h3 class="card-title" style="margin-top:18px">Left out (not taken off)</h3>
-          <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Code</th><th>On the job list</th><th class="r">Qty</th><th>Why</th></tr></thead><tbody>
-          ${r.left.map((l) => `<tr><td class="mono">${esc(l.code || "—")}</td><td>${esc(l.description)}</td><td class="r">${qtyFmt(l.qty)} ${esc(l.unit === "pc" ? "pcs" : l.unit)}</td><td class="muted">${esc(l.why)}</td></tr>`).join("")}
-          </tbody></table></div>`;
-      }
-      h += `<div class="rn-actions">
-          <button type="button" class="btn-yellow" data-rn-act="out-confirm" ${take.length && !o.busy ? "" : "disabled"}>${o.busy ? "Saving…" : `Confirm Check-out (${take.length} lines)`}</button>
-          <button type="button" class="btn-outline" data-rn-act="out-cancel" ${o.busy ? "disabled" : ""}>Cancel</button></div>`;
-    }
-    return h + `</div>`;
-  }
-  function updateManualOut() {
-    const box = $("#rnBody"), btn = $("#rnOutConfirm");
-    if (!box || !btn) return;
-    const o = ui.out, items = byCode();
-    let val = 0;
-    o.lines.forEach((l, i) => {
-      const it = items.get(l.item_code.trim().toUpperCase()), q = Number(l.qty), after = it ? Number(it.current_qty) - q : 0;
-      const v = it && q > 0 ? Math.round(q * (Number(it.unit_cost) || 0) * 100) / 100 : 0; val += v;
-      const cells = {
-        item: it ? esc(it.description) : l.item_code.trim() ? `<span class="rn-badge out">Not a Renson item</span>` : "",
-        now: it ? qtyFmt(it.current_qty) : "",
-        after: it && q > 0 ? qtyFmt(after) + (after < 0 ? ` <span class="rn-badge out">Below zero, allowed</span>` : "") : "",
-        value: it && q > 0 ? (it.unit_cost == null ? `<span class="muted">No cost</span>` : aed(v)) : "",
-      };
-      for (const k of Object.keys(cells)) { const el = box.querySelector(`[data-rn-ocell="${k}"][data-i="${i}"]`); if (el && el.innerHTML !== cells[k]) el.innerHTML = cells[k]; }
-    });
-    $("#rnOutTotal").textContent = aed(val);
-    const probs = manualProblems(), pl = $("#rnOutProbs");
-    pl.innerHTML = probs.map((p) => `<li class="warning">${esc(p)}</li>`).join("");
-    pl.style.display = probs.length ? "" : "none";
-    btn.disabled = !!(probs.length || o.busy);
-    btn.textContent = o.busy ? "Saving…" : `Confirm Check-out (${o.lines.filter((l) => l.item_code.trim()).length} lines)`;
-  }
-  function manualProblems() {
-    const o = ui.out, items = byCode(), out = [], seen = new Set();
-    if (!o.job.trim()) out.push("Type the job number.");
-    const used = o.lines.filter((l) => l.item_code.trim() || l.qty !== "");
-    if (!used.length) out.push("Add at least one line.");
-    used.forEach((l, i) => {
-      const code = l.item_code.trim().toUpperCase();
-      if (!code) out.push(`Line ${i + 1}: type the item code.`);
-      else if (!items.has(code)) out.push(`Line ${i + 1}: ${code} is not a Renson item.`);
-      else if (seen.has(code)) out.push(`Line ${i + 1}: ${code} is on two lines. Put it on one line.`);
-      seen.add(code);
-      if (!(Number(l.qty) > 0)) out.push(`Line ${i + 1}: type a quantity above 0.`);
-    });
-    return out;
-  }
-
   function movesHtml() {
     if (!ui.moves.length) return `<div class="card"><p>No Renson movements yet.</p><p class="muted">The opening stock import is not listed here.</p></div>`;
     return `<div class="rn-wrap"><table class="rn-table"><thead><tr><th>When</th><th>Type</th><th>Code</th><th>Item</th>
@@ -899,65 +916,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
         <td class="r">${signed(m)}</td>
         <td class="r">${qtyFmt(m.qty_before)} → ${qtyFmt(m.qty_after)}</td><td class="r">${aed(Math.abs(Number(m.value) || 0))}</td><td>${esc(m.performed_by_name || "")}</td></tr>`; }).join("")}
       </tbody></table></div>`;
-  }
-
-  async function readJobFile(f) {
-    const o = ui.out;
-    ui.msg = null; o.result = null; o.skip = new Set(); o.file = f; o.hash = ""; o.manual = false;
-    if (!/\.pdf$/i.test(f.name)) { ui.msg = ["bad", "Choose the job list PDF."]; o.file = null; return render(); }
-    const FP = window.ORYX_FP;
-    if (!FP || !FP.extractPdfText) { ui.msg = ["bad", "The PDF reader is not ready yet. Try again in a moment."]; o.file = null; return render(); }
-    o.reading = true; render();
-    try {
-      const [text, hash] = await Promise.all([FP.extractPdfText(f), FP.pdfFingerprint(f)]);
-      o.result = R.buildRensonCheckout(text, byCode());
-      o.hash = hash;
-      o.job = o.result.job || "";
-      if (!o.result.lines.length) ui.msg = ["bad", "No Renson items were found on this job list."];
-      else if (ui.moves.some((m) => m.type === "check_out" && m.document_hash === hash)) ui.msg = ["bad", "This job list was already checked out. Confirm will be refused."];
-    } catch (err) {
-      ui.msg = ["bad", "Could not read the PDF: " + (err && err.message ? err.message : err)];
-      o.file = null; o.result = null;
-    }
-    o.reading = false;
-    render();
-  }
-
-  async function sendCheckout(job, lines, doc) {
-    const o = ui.out;
-    if (!window.confirm(`Take ${lines.length} lines off the RENSON stock for job ${job}?\n\nFreedom stock is not changed.`)) return;
-    o.busy = true; render();
-    const { data, error } = await sb.rpc("renson_checkout", { p: Object.assign({ job_number: job, lines }, doc || {}) });
-    o.busy = false;
-    if (error) {
-      const m = /already_checked_out/.test(error.message) ? "This job list was already checked out."
-        : /renson_not_allowed/.test(error.message) ? "Not allowed: the Renson pilot is for Admins only (or is switched off)."
-        : "The Check-out was refused: " + error.message;
-      ui.msg = ["bad", m + " Nothing was saved."];
-      return render();
-    }
-    ui.msg = ["ok", `Checked out job ${job}: ${data.lines} lines, value ${aed(data.total_value)}${data.below_zero ? `, ${data.below_zero} item(s) now below zero` : ""}.`];
-    ui.out = newOut();
-    ui.tab = "moves";
-    await load();
-  }
-  function confirmCheckout() {
-    const o = ui.out, r = o.result;
-    if (!r || o.busy) return;
-    const job = (o.job || "").trim();
-    if (!job) { ui.msg = ["bad", "Type the job number first."]; return render(); }
-    const take = r.lines.filter((l) => !o.skip.has(l.item_code));
-    if (!take.length) return;
-    return sendCheckout(job, take.map((l) => ({ item_code: l.item_code, qty: l.qty, unit: l.unit, source: l.source })),
-      { document_name: o.file.name, document_hash: o.hash });
-  }
-  function confirmManualCheckout() {
-    const o = ui.out;
-    if (manualProblems().length || o.busy) return;
-    const items = byCode();
-    const lines = o.lines.filter((l) => l.item_code.trim()).map((l) => { const it = items.get(l.item_code.trim().toUpperCase());
-      return { item_code: it.item_code, qty: Number(l.qty), unit: it.unit || "", source: "Typed by hand" }; });
-    return sendCheckout(o.job.trim(), lines, null);
   }
 
   // ------------------------------------------------------------ events
@@ -978,12 +936,6 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     if (act === "confirm") return confirmImport();
     if (act === "reset") return resetPilot();
     if (act === "extract") return extract();
-    if (act === "out-confirm") return confirmCheckout();
-    if (act === "out-confirm-manual") return confirmManualCheckout();
-    if (act === "out-cancel") { ui.out = newOut(); ui.msg = null; return render(); }
-    if (act === "out-manual") { const m = !ui.out.manual; ui.out = newOut(); ui.out.manual = m; ui.msg = null; return render(); }
-    if (act === "out-add") { ui.out.lines.push({ item_code: "", qty: "" }); return render(); }
-    if (act === "out-del") { ui.out.lines.splice(i, 1); if (!ui.out.lines.length) ui.out.lines.push({ item_code: "", qty: "" }); return render(); }
     if (act === "in-add") { ui.cin.lines.push({ item_code: "", qty: "", price: "", desc: "", unit: "" }); return render(); }
     if (act === "in-del") { ui.cin.lines.splice(i, 1); if (!ui.cin.lines.length) ui.cin.lines.push({ item_code: "", qty: "", price: "", desc: "", unit: "" }); return render(); }
     if (act === "in-clear") { ui.cin = newIn(); ui.msg = null; return render(); }
@@ -993,10 +945,8 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
   const IN_FIELDS = { rnInSupplier: "supplier", rnInInvoice: "invoice", rnInPo: "po", rnInDate: "date", rnInRate: "rate", rnInShip: "shipping" };
   function onInput(e) {
     const el = e.target;
-    if (el.id === "rnOutJob") { ui.out.job = el.value; return updateManualOut(); }
     if (IN_FIELDS[el.id]) { ui.cin[IN_FIELDS[el.id]] = el.value; return updateCheckin(); }
     if (el.dataset.rnIn) { ui.cin.lines[Number(el.dataset.i)][el.dataset.rnIn] = el.value; return updateCheckin(); }
-    if (el.dataset.rnOut) { ui.out.lines[Number(el.dataset.i)][el.dataset.rnOut] = el.value; return updateManualOut(); }
     if (el.id === "rnSearch") {
       ui.q = el.value;
       const pos = el.selectionStart;
@@ -1007,17 +957,11 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
   function onChange(e) {
     const el = e.target;
     if (el.id === "rnFile" && el.files && el.files[0]) return readFile(el.files[0]);
-    if (el.id === "rnOutFile" && el.files && el.files[0]) return readJobFile(el.files[0]);
     if (el.id === "rnShow") { ui.show = el.value; return render(); }
     if (el.id === "rnInCur") { ui.cin.currency = el.value; ui.cin.rate = ""; ui.cin.rateNote = ""; render(); return getRate(); }
     if (el.id === "rnInDate") { ui.cin.date = el.value; updateCheckin(); return ui.cin.currency !== "AED" ? getRate() : undefined; }
     // Typed fields are kept and the sums updated on input (no redraw).
-    if (IN_FIELDS[el.id] || el.dataset.rnIn || el.dataset.rnOut || el.id === "rnOutJob") return;
-    if (el.dataset && el.dataset.rnTake) {
-      const c = el.dataset.rnTake;
-      if (el.checked) ui.out.skip.delete(c); else ui.out.skip.add(c);
-      render();
-    }
+    if (IN_FIELDS[el.id] || el.dataset.rnIn) return;
   }
 
   // ------------------------------------------------------------ import

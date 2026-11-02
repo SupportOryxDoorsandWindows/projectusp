@@ -212,6 +212,18 @@
     render();
   }
 
+  // One Check-out for every stock category (2026-11-02, user's request).
+  // A Renson job list (FP Pro, "RENSON Fixscreen" items, RENSON_/RENS_ bar
+  // codes) carries lines that belong to the Renson inventory. Admins (pilot
+  // on) get renson.js's window.ORYX_RENSON_CHECKOUT, which takes those lines
+  // out of the Freedom rows and handles them; everyone else is refused the
+  // whole file. A Freedom job list never matches this and is untouched.
+  function isRensonJobList(text) {
+    return /\bRENSON\b|\bRENS(?:ON)?_[A-Z0-9]/.test(String(text || ""));
+  }
+  const rensonCheckout = () => window.ORYX_RENSON_CHECKOUT || null;
+  const rensonCount = () => { const R = rensonCheckout(); return R && !state.done ? R.count() : 0; };
+
   function render() {
     applyCombinedStock(state.rows);
     // Item photos (same ones as Master Inventory): loaded once, then the
@@ -338,12 +350,13 @@
     const canConfirm =
       !state.done && !state.confirming &&
       t.unresolved === 0 &&
-      t.totalItems > 0 &&
+      (t.totalItems > 0 || rensonCount() > 0) &&
       !state.rows.some((r) => r.editing);
     const missing = missingJobDetail();
     $("#fpConfirmSummary").textContent =
       `${t.totalItems} items · ${money(t.totalValue)}` +
       (t.skipped ? ` · ${t.skipped} skipped` : "") +
+      (rensonCount() ? ` + ${rensonCount()} Renson items` : "") +
       (missing ? ` · ${missing.label} needed` : "");
     $("#fpConfirmBar").hidden = state.done;
     $("#fpConfirm").disabled = !canConfirm;
@@ -417,44 +430,62 @@
       .map((r) => ({ item_id: r.itemId, quantity: r.requiredQty, unit: r.unit }));
 
     const pdfFile = state.pdfFile, pdfHash = state.pdfHash;
-    const res = await fetch(CHECKOUT_FN_URL, await confirmRequest({
-      job_number: jobRef,
-      client,
-      pdf_hash: pdfHash,
-      source_document_name: pdfFile ? pdfFile.name : null,
-      lines,
-    }, pdfHash ? pdfFile : null));
-    const data = await readFnJson(res);
+    // Renson lines of a Renson job list (Admins): saved by renson.js AFTER
+    // the Freedom part. Without Renson lines this is exactly the old path.
+    const ren = rensonCount() > 0 ? rensonCheckout() : null;
+    let data = null;
+    if (lines.length || !ren) {
+      const res = await fetch(CHECKOUT_FN_URL, await confirmRequest({
+        job_number: jobRef,
+        client,
+        pdf_hash: pdfHash,
+        source_document_name: pdfFile ? pdfFile.name : null,
+        lines,
+      }, pdfHash ? pdfFile : null));
+      data = await readFnJson(res);
 
-    if (!data.ok) {
-      if (data.error === "duplicate_document") {
-        throw new Error("This PDF has already been checked out — re-processing it would double-count the deduction.");
+      if (!data.ok) {
+        if (data.error === "duplicate_document") {
+          throw new Error("This PDF has already been checked out — re-processing it would double-count the deduction.");
+        }
+        if (data.error === "insufficient_stock") {
+          throw new Error("Stock changed since this was analysed — re-run Analyse and preview to refresh availability.");
+        }
+        throw new Error(data.detail || data.error || "The Check-out was not applied.");
       }
-      if (data.error === "insufficient_stock") {
-        throw new Error("Stock changed since this was analysed — re-run Analyse and preview to refresh availability.");
-      }
-      throw new Error(data.detail || data.error || "The Check-out was not applied.");
     }
+    // Freedom part saved (or none): now the Renson part. Nothing Freedom was
+    // saved -> a Renson failure stops here with nothing saved at all.
+    const renRes = ren ? await ren.commit({ job: jobRef, client, file: pdfFile, hash: pdfHash }) : null;
+    if (ren && !data && !renRes.ok) throw new Error(renRes.message);
 
     state.done = true;
     $("#fpConfirmBar").hidden = true;
     document.querySelectorAll("#fpOut button").forEach((b) => { b.disabled = true; });
-    $("#fpDone").innerHTML = `
+    $("#fpDone").innerHTML = data ? `
       <div class="fp-done">
         <h3>Check-out confirmed — ${data.lines.length} item${data.lines.length === 1 ? "" : "s"} deducted</h3>
         <p class="small">Job <code>${esc(jobRef)}</code> for <b>${esc(client)}</b>. The Master Inventory
         and the Inventory tab now reflect this. A permanent Check-out transaction has been recorded for each item.</p>
         ${keptDocNote(data, pdfHash ? pdfFile : null, pdfHash, "check_out")}
+        ${ren ? ren.doneHtml(renRes) : ""}
+        <div class="fp-done-actions">
+          <button class="ghost" id="fpNew">Start another Check-out</button>
+        </div>
+      </div>` : `
+      <div class="fp-done">
+        ${ren.doneHtml(renRes)}
         <div class="fp-done-actions">
           <button class="ghost" id="fpNew">Start another Check-out</button>
         </div>
       </div>`;
-    wireDocRetry($("#fpDone"), "check_out", pdfFile, pdfHash);
+    if (data) wireDocRetry($("#fpDone"), "check_out", pdfFile, pdfHash);
+    if (ren) ren.wireDone($("#fpDone"));
     $("#fpNew").addEventListener("click", resetAll);
     // Delivery notes (delivery-notes.js): prepared from the same job list now
     // that the Check-out is saved. Never affects it; a failure only shows
     // "Try again" below the done message. Hand entry (no PDF) has none.
-    if (pdfHash && window.ORYX_DN) {
+    if (data && pdfHash && window.ORYX_DN) {
       try {
         window.ORYX_DN.afterCheckout({ container: $("#fpDone .fp-done"), file: pdfFile, hash: pdfHash, job: jobRef, client });
       } catch (e) { console.error("delivery notes", e); }
@@ -483,7 +514,17 @@
 
       const entries = parsePdf(pdfText);
       state.done = false;
+      const ren = rensonCheckout();
+      if (ren) ren.reset();
+      if (!ren && isRensonJobList(pdfText)) {
+        state.rows = null;
+        $("#fpOut").innerHTML = "";
+        $("#fpConfirmBar").hidden = true;
+        status("This is a Renson job list. Renson is in Admin testing, so it can't be checked out from this account yet — ask an Admin. Nothing was taken off.", "err");
+        return;
+      }
       state.rows = buildRows(entries, state.itemsByCode);
+      if (ren) state.rows = await ren.split(pdfText, state.rows, hash);
       state.removedRows = [];
       render();
 
@@ -644,6 +685,7 @@
     $("#fpManualBody").innerHTML = "";
     $("#fpManualStatus").textContent = "";
     fpManualRowCount = 0;
+    if (rensonCheckout()) rensonCheckout().reset();
     status("");
   }
 
@@ -676,7 +718,7 @@
   }
 
   // Used by the other stock-screen files.
-  Object.assign(FP, { TRASH_ICON, analyse, applyCombinedStock, ciStatusChip, confirmAllocation, deleteRowAt,
+  Object.assign(FP, { TRASH_ICON, isRensonJobList, analyse, applyCombinedStock, ciStatusChip, confirmAllocation, deleteRowAt,
     deletedItemsBox, fpManualAddRow, fpManualToggle, fpManualUse, promptForMissingJobDetails,
     render, resetAll, restoreDeleted, setJobFieldInvalid, status, wireDrop });
 })();
