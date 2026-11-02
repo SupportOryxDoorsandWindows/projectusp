@@ -246,7 +246,7 @@ product lines — never treat one family's item as a match for another's:
   permissions. Do NOT widen access on your own.
 - Data is kept APART from Freedom: tables `renson_items` (one row per code,
   `current_value` = stock x unit cost, generated), `renson_imports`,
-  `renson_transactions` (only 'opening_import' so far). SQL:
+  `renson_transactions` ('opening_import', 'check_out'). SQL:
   `supabase/sql/renson_pilot.sql` (applied live 2026-11-02; Freedom
   fingerprint -- items md5, value, transactions, profiles, functions,
   policies -- identical before/after), undo `renson_pilot_rollback.sql`.
@@ -271,12 +271,33 @@ product lines — never treat one family's item as a match for another's:
   brackets or after it, e.g. "1465-G6020837-..."), stock = dated column
   before "OPENING COST PER PROFILE". Blank count = 0 stock (user: import
   all 100).
-- NOT built yet (user: wait for Renson sample files): Renson Check-in /
-  Check-out. Freedom Check-in/Check-out never look at Renson tables.
+- Renson CHECK-OUT (2026-11-02, from "24222-Paolo OPT LIST Rev. 02.pdf",
+  same FP Pro layout as Freedom job lists): tab "Check-out" in the Renson
+  box (NOT the Freedom Check-out page, which is untouched). Reads the PDF
+  with fp-core's `extractPdfText` / `pdfFingerprint` (read-only reuse) and
+  its own `readJobList` / `buildRensonCheckout` (ORYX_RENSON_CORE). User's
+  answers: Renson bars have no code -> `RENSON_BARS` by description
+  (100 IS = 25089, 100 OS = 24295, Fabric tube 68 = 26562, Drawbar = 14102,
+  Side channel fixed - Pair = 11583, removable - Pair = 24282); a "Pair" bar
+  = 2 stock bars; 2450 metres / 6 rounded UP = bars (`METRES_TO_BARS`);
+  anything not a Renson item (910010 Patio Mesh = Freedom item, Box Sections,
+  an unknown bar such as a 150 head box) is LEFT OUT and listed with the
+  reason, never guessed; stock MAY go below zero (constraint dropped).
+  Lines can be unticked. Server: `renson_checkout(jsonb)`
+  (`supabase/sql/renson_checkout.sql`, applied live 2026-11-02, Freedom
+  fingerprint identical): all or nothing, every code must be a Renson item,
+  one Check-out per job list (SHA-256). "Movements" tab lists them.
+  Real file: 35 lines (22 fittings + 7 gaskets + 6 bar items), 8 left out,
+  AED 10,664.86 at the opening costs.
+- NOT built yet: Renson Check-in (no sample file yet). Freedom
+  Check-in/Check-out never look at Renson tables.
 - Tests: `tests/renson.test.js` (RENSON_XLSX + XLSX_PATH to include the
   real file), `tests/sql/renson-pilot.test.sql` (local Postgres),
+  `tests/sql/renson-checkout.test.sql` (after the pilot test),
   `tests/browser/renson-pilot.js` (stand-in backend: regular user gets no
-  script / no request, Admin import, flag off, no Freedom writes).
+  script / no request, Admin import, `--job-pdf` Check-out, flag off, no
+  Freedom writes). Real job list text for the unit test: RENSON_JOB_TXT
+  (pdf.js text, same joining as extractPdfText).
 
 ## Kanban replenishment (was "Minimum level")
 
