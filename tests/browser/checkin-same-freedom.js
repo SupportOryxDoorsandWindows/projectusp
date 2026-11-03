@@ -21,7 +21,8 @@ const cdn = {
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs": "pdfjs-dist/build/pdf.min.mjs",
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs": "pdfjs-dist/build/pdf.worker.min.mjs",
 };
-const ITEMS = [
+// --items <json>: use these Master Inventory rows instead (e.g. a read-only copy of the live list).
+const ITEMS = opt("--items") ? JSON.parse(fs.readFileSync(opt("--items"), "utf8")) : [
   { id: "f-magnet", item_code: "330071", description: "ZLS1 Magnet - 01", current_qty: 5, unit_cost: 900, status: "active", bar_length_mm: null },
   { id: "f-330068", item_code: "330068", description: "ZLS1-Brake Lever-01", current_qty: 100, unit_cost: 2.47, status: "active", bar_length_mm: null },
   { id: "f-620001", item_code: "620001", description: "IZLX Drawbar Mohair Holder", current_qty: 20, unit_cost: 30, status: "active", bar_length_mm: 5100 },

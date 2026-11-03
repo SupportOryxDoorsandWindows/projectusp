@@ -10,7 +10,7 @@
     invoiceRollLengthM, keptDocNote, knownRollLengthM, loadInventoryItems, lookupExactCode, money,
     pdfFingerprint, readFnJson, wireDocRetry, itemPhotoButton, keepOpenEdits, keepListScroll, restoreListScroll, loadItemPhotos,
     openItemPhoto, pickedInventoryRow, restoreOpenEdits, wireCodePicker, ciStatusChip,
-    deletedItemsBox, CHECKIN_FN_URL, ciState, detectDocumentCurrencyInfo, detectShippingCharge,
+    deletedItemsBox, CHECKIN_FN_URL, ciState, detectDocumentCurrencyInfo, detectShippingCharge, isCrateChargeEntry,
     genericMoney, genericUnitMoney, loadExchangeRates, ocrPdfPages, RATE_SOURCE_LABEL,
     textLayerLooksUsable, parseCheckinHeader, parseCommercialInvoiceDescriptions,
     parseCheckinDocument, aliasCodeKey, aliasDescriptionKey, applyCiRowAction, buildAliasIndex,
@@ -1042,6 +1042,9 @@
       ciState.shippingAmountOriginal = shipping.amount;
       ciState.shippingNote = shipping.note;
       ciState.shippingNeedsReview = shipping.needsReview;
+      // The crate charge is now the shipping amount: its own goods row goes
+      // (it would otherwise be an unmatched row to skip, and its cost lost).
+      if (shipping.amount != null && shipping.crate) doc.entries = doc.entries.filter((e) => !isCrateChargeEntry(e));
 
       await ciLoadExchangeRate(dEl.value || null);
 

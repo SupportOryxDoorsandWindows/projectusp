@@ -309,6 +309,16 @@
   // its own tax-rate token ("0% EXEMPT") is what distinguishes it from an
   // actual freight charge line, so a line carrying one is never a candidate.
   const ITEM_ROW_SHAPE_RE = /\d+(?:\.\d+)?\s*%/;
+  // ...EXCEPT the "Shipping Crate" line itself (2026-11-03, owner's decision
+  // after quotation S00155 "Shipping Crate 1.00 Units USD 900.00 0% EXEMPT
+  // USD 900.00" went in without its crate cost): a code-less line that STARTS
+  // with "Shipping Crate" / "Crate" / "Crating" is the shipment's crate charge
+  // -- spread over the items like freight, and taken out of the goods rows
+  // (isCrateChargeEntry), never a stock item.
+  const CRATE_CHARGE_RE = /^\s*(?:shipping\s+crates?|crat(?:e|es|ing))\b/i;
+  function isCrateChargeEntry(e) {
+    return !!e && !String(e.code || "").trim() && CRATE_CHARGE_RE.test(String(e.description || ""));
+  }
   const MONEY_TOKEN_RE = /([\d,]+\.\d{1,4})/;
   // A DD.MM.YYYY / DD-MM-YYYY / DD/MM/YYYY date reads as a valid (wrong)
   // money token to MONEY_TOKEN_RE (e.g. "07.11.2025" contains "07.11") --
@@ -339,11 +349,12 @@
     const candidates = [];
     for (let i = 0; i < rawLines.length; i++) {
       const line = rawLines[i].trim();
-      if (!line || !SHIPPING_TERM_RE.test(line) || NOT_SHIPPING_RE.test(line) || ITEM_ROW_SHAPE_RE.test(line)) continue;
+      const isCrate = CRATE_CHARGE_RE.test(line);
+      if (!line || !(isCrate || SHIPPING_TERM_RE.test(line)) || NOT_SHIPPING_RE.test(line) || (ITEM_ROW_SHAPE_RE.test(line) && !isCrate)) continue;
       const onLine = lastMoneyMatch(stripDates(line));
       if (onLine) {
         const amt = parseFloat(onLine[1].replace(/,/g, ""));
-        if (amt > 0) candidates.push({ label: line, amount: amt });
+        if (amt > 0) candidates.push({ label: line, amount: amt, crate: isCrate });
         continue;
       }
       // OCR often splits one visual table row into several lines. The real
@@ -412,7 +423,8 @@
         note: `Found ${uniq.length} possible shipping/freight/packing amounts (${uniq.map((c) => c.amount).join(", ")}) — couldn't tell which one is correct. Enter the confirmed amount manually, or leave blank if there's no such charge.`,
       };
     }
-    return { amount: uniq[0].amount, needsReview: false, label: uniq[0].label.trim(), note: `Detected from "${uniq[0].label.trim()}" — review before confirming.` };
+    return { amount: uniq[0].amount, needsReview: false, label: uniq[0].label.trim(), ...(uniq.every((c) => c.crate) ? { crate: true } : {}),
+      note: `Detected from "${uniq[0].label.trim()}" — review before confirming.` };
   }
 
   function genericMoney(n, code) {
@@ -427,6 +439,6 @@
 
   // Used by the other stock-screen files.
   Object.assign(FP, { CHECKIN_FN_URL, RATE_SOURCE_LABEL, SUPPORTED_CURRENCIES, ciState,
-    detectDocumentCurrencyInfo, detectShippingCharge, fetchCheckinExchangeRate, genericMoney,
+    detectDocumentCurrencyInfo, detectShippingCharge, isCrateChargeEntry, fetchCheckinExchangeRate, genericMoney,
     genericUnitMoney, loadExchangeRates, ocrPdfPages, textLayerLooksUsable });
 })();

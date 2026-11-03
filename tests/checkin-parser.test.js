@@ -35,7 +35,7 @@ const context = {
   crypto: { subtle: {} },
 };
 
-const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader } = loadFp(context);
+const { parseCheckinDocument, textLayerLooksUsable, detectShippingCharge, buildCheckinRows, storedInventoryUnitCostAed, detectDocumentCurrencyInfo, parseCheckinHeader, isCrateChargeEntry } = loadFp(context);
 
 const freedomApproval = `
 COMMON PARTS
@@ -440,5 +440,32 @@ assert.equal(ocr.poNumber, "");
 assert.equal(parseCheckinHeader("PROFORMA INVOICE\n13 Blue Rock Drive,").invoiceNumber, "");
 assert.equal(parseCheckinHeader("Quote # SQ-1042\nPO 26-1139").invoiceNumber, "SQ-1042");
 assert.equal(parseCheckinHeader("Quote # SQ-1042\nPO 26-1139").poNumber, "PO 26-1139");
+
+// "Shipping Crate" on a Freedom Screens Global quotation (S00155 layout,
+// 2026-11-03 owner's decision): it is the shipment's crate charge, spread like
+// freight, and not a goods row. A code-less PRODUCT row ("SMB1 Sill Cover")
+// stays a goods row.
+{
+  const crateQuote = [
+    "Description  Quantity  Unit Price  Taxes  Amount",
+    " [210001] SMB1 Sill Mount (Mill)  30.00  Units  USD  31.18  0% EXEMPT  USD  935.40",
+    " SMB1 Sill Cover (Mill)  30.00  Units  USD  31.18  0% EXEMPT  USD  935.40",
+    " Shipping Crate  1.00  Units  USD  900.00  0% EXEMPT  USD  900.00",
+    " Untaxed Amount  USD  2,770.80",
+    " VAT 0%  USD  0.00",
+    " Total  USD  2,770.80",
+  ].join("\n");
+  const ship = detectShippingCharge(crateQuote);
+  assert.equal(ship.amount, 900);
+  assert.equal(ship.crate, true);
+  const doc = parseCheckinDocument(crateQuote, null);
+  const crates = doc.entries.filter(isCrateChargeEntry);
+  assert.equal(crates.length, 1, "the crate line is read as a row, then taken out by the screen");
+  assert.equal(crates[0].unitCost, 900);
+  assert.ok(doc.entries.some((e) => /Sill Cover/.test(e.description) && !isCrateChargeEntry(e)), "a code-less product row is not a crate");
+  assert.equal(isCrateChargeEntry({ code: "999", description: "Shipping Crate" }), false, "a coded row is never the crate charge");
+  // Wording that only mentions a crate later on is not the crate charge line.
+  assert.equal(isCrateChargeEntry({ code: "", description: "Additional Packing charges (in crate)" }), false);
+}
 
 console.log("check-in parser tests passed");
