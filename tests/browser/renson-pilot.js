@@ -232,7 +232,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     const { p, errors, requests } = await session(browser, "admin");
     check((await p.evaluate(() => document.querySelector(".view.on").id)) === "v-dashboard", "admin: first page still the Freedom Dashboard");
     await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
-    check(await p.isVisible("#rnInventory"), "admin: Inventory dropdown shown in Master Inventory");
+    check(await p.isVisible("#rnInventory") && !!(await p.$(".mi-toolbar #rnInventory")) && !(await p.$("nav .rn-sub")), "admin: Inventory dropdown beside Freedom's search, no sidebar submenu");
     check((await p.inputValue("#rnInventory")) === "freedom" && await p.isVisible("#miSearch") && await p.isVisible("#miExtractBtn"), "admin: starts on Freedom, Freedom list as usual");
     await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(800);
     check(await p.isVisible("#rnBody") && !(await p.isVisible("#miSearch")) && !(await p.isVisible("#miExtractBtn")), "admin: Renson shown in Master Inventory, Freedom list hidden");
@@ -272,12 +272,11 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     const xrows = X.utils.sheet_to_json(X.readFile(xf).Sheets["Renson inventory"]);
     check(/^Renson inventory \d{4}-\d{2}-\d{2}\.xlsx$/.test(dl.suggestedFilename()) && xrows.length === 59 && xrows.every((r) => r.Status === "Out of stock" || r.Stock <= 0), "Extract: the 59 rows shown, with status");
     await p.selectOption("#rnShow", "all"); await p.waitForTimeout(200);
-    // Sidebar submenu
+    // One dropdown beside the search (sidebar submenu removed 2026-11-03)
+    check(!!(await p.$(".rn-tools #rnInventory")) && (await p.$$("#rnInventory")).length === 1 && !(await p.$("nav .rn-sub")), "Renson: the same Inventory dropdown sits beside the Renson search");
     await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(400);
-    check(await p.isVisible('nav .rn-sub [data-rn-mode="renson"]') && await p.isVisible('nav .rn-sub [data-rn-mode="freedom"]'), "sidebar: Freedom / Renson submenu under Master Inventory");
-    await p.click('nav .rn-sub [data-rn-mode="renson"]'); await p.waitForTimeout(600);
-    check((await p.evaluate(() => document.querySelector(".view.on").id)) === "v-master-inventory" && await p.isVisible("#rnSearch")
-      && (await p.getAttribute('nav .rn-sub [data-rn-mode="renson"]', "class")).includes("rn-sub-on"), "sidebar: Renson opens Master Inventory on Renson, highlighted");
+    await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
+    check(await p.isVisible("#rnSearch") && (await p.inputValue("#rnInventory")) === "renson", "back to Master Inventory: still on Renson");
     // Item panel: Adjust + Kanban levels
     await p.click('tr[data-rn-item] >> text="22874"'); await p.waitForSelector("#rnItemDlg[open]");
     check(/Bar Ø 18 mm/.test(await p.innerText("#rnItemBody")), "item panel opens for 22874");
@@ -302,6 +301,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     check(!(await p.$(".rn-tabs")) && !(await p.$("[data-rn-tab]")) && !(await p.$("#rnFile")) && !/Movements/.test(await p.innerText("#rnBody")),
       "no Inventory / Movements / Import tabs once the opening stock exists");
     await p.selectOption("#rnInventory", "freedom"); await p.waitForTimeout(500);
+    check(!!(await p.$(".mi-toolbar #rnInventory")) && await p.isVisible("#rnInventory"), "back to Freedom: dropdown beside Freedom's search again");
     check(await p.isVisible("#miSearch") && await p.isVisible("#miExtractBtn") && !(await p.isVisible("#rnBody")), "back to Freedom: Freedom list again");
     check(/Freedom stock\./.test(await p.innerText("#v-master-inventory .page-head p")), "Freedom subtitle restored");
     if (jobPdf) {
@@ -377,7 +377,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
         check(doc.check(ci), doc.name + ": " + doc.checkText);
         check(/Renson Check-in confirmed/.test(await p.innerText("#ciRenson")), doc.name + ": done message");
       }
-      await p.click('nav .rn-sub [data-rn-mode="renson"]'); await p.waitForTimeout(800);
+      await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
     }
     // Renson movements are on the Activity page (Movements tab removed).
     await p.click("#navActivity"); await p.waitForTimeout(1200);

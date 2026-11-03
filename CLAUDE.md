@@ -300,9 +300,15 @@ product lines — never treat one family's item as a match for another's:
   operate separately"; `supabase/sql/renson_workflow.sql`, applied live,
   Freedom fingerprint identical; tested with
   `tests/sql/renson-workflow.test.sql`):
-  - Sidebar: "Freedom" / "Renson (pilot)" submenu under Master Inventory
-    (`nav .rn-sub`, NOT `button[data-v]`; Admins + pilot only; hidden when
-    the sidebar is folded / on phones, where the page dropdown remains).
+  - ONE "Inventory" dropdown (Freedom / Renson (pilot)) BESIDE THE SEARCH
+    (2026-11-03, user: "just merge so it will be under Master Inventory as
+    long as there is a dropdown beside search for Freedom, Renson, etc.").
+    The sidebar submenu (`nav .rn-sub`) and the page-head dropdown are gone.
+    The same `#rnInventory` element is moved by `placePick()`: first in
+    Freedom's `.mi-toolbar` (before Show), or first in the Renson
+    `.rn-tools` (top of `#rnBody` while loading / importing). Its listener
+    is attached via `pick.querySelector("select")` (it is not in the page
+    yet when mount() wires it). A new category = one more <option>.
   - Inventory: headline = Freedom's (`.mi-kpis`: "AED x stock value" + "n items in n codes"; the 5 tiles + import line were replaced 2026-11-02 at the user's request), Show filter (All / Normal / Low / Critical / Out of stock /
     No cost), Kanban row colours + badges via kanban.js (`rensonStatus`),
     Extract (.xlsx of the rows shown), row -> item panel (`#rnItemDlg`:
