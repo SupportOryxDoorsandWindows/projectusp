@@ -46,10 +46,11 @@ const db = { items: [], imports: [], flag: true, calls: [], freedomCheckouts: []
 function rpc(name, a, admin) {
   const ok = (b) => ({ status: 200, body: b });
   const err = (m) => ({ status: 400, body: { message: m, code: "P0001" } });
-  const access = admin && db.flag;
+  const access = db.flag;                       // renson_release.sql: all active staff
+  const adminAccess = admin && db.flag;          // Kanban levels, import, reset
   if (name === "renson_access") return ok(access);
   if (name === "renson_import_stock") {
-    if (!access) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } };
+    if (!adminAccess) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } };
     if (db.items.length) return err("renson_already_imported");
     db.imports.push({ id: 1, file_name: a.p.file_name, imported_by_name: "Admin Test", created_at: new Date().toISOString() });
     db.lastPayload = a.p;
@@ -111,13 +112,13 @@ function rpc(name, a, admin) {
     return ok({ item_code: it.item_code, qty_before: before, qty_after: it.current_qty, change: d });
   }
   if (name === "renson_set_levels") {
-    if (!access) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } };
+    if (!adminAccess) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } };
     db.lastLevels = a;
     const it = db.items.find((i) => i.item_code === a.p_item_code);
     it.buffer_level = a.p_trigger; it.critical_level = a.p_critical;
     return ok({ trigger: a.p_trigger, critical: a.p_critical });
   }
-  if (name === "renson_reset_pilot") { const n = db.items.length; db.items = []; db.imports = []; return ok({ items_removed: n }); }
+  if (name === "renson_reset_pilot") { if (!adminAccess) return { status: 403, body: { message: "renson_not_allowed", code: "42501" } }; const n = db.items.length; db.items = []; db.imports = []; return ok({ items_removed: n }); }
   return ok(null);
 }
 
@@ -167,14 +168,14 @@ async function session(browser, role) {
       const prof = { user_id: user.id, email: user.email, full_name: admin ? "Admin Test" : "Staff Test", role: admin ? "admin" : "user", can_delete: false, active: true };
       return send(200, (req.headers()["accept"] || "").includes("vnd.pgrst.object") ? prof : [prof]);
     }
-    if (table === "renson_items") return send(200, admin && db.flag ? db.items : []);
+    if (table === "renson_items") return send(200, db.flag ? db.items : []);
     if (table === "inventory_items") return send(200, [{ id: "f-910010", item_code: "910010", description: "Patio Mesh 3.2m (30M)", current_qty: 1227.14, unit_cost: 12, current_value: 14725.68, status: "active", bar_length_mm: null }]);
-    if (table === "renson_imports") return send(200, admin && db.flag ? db.imports : []);
+    if (table === "renson_imports") return send(200, db.flag ? db.imports : []);
     if (table === "renson_transactions") {
       const eq = (k) => (u.searchParams.get(k) || "").replace(/^eq\./, "");
       const itemId = eq("item_id"), type = eq("type"), hash = eq("document_hash"), notType = (u.searchParams.get("type") || "").startsWith("neq.") ? u.searchParams.get("type").slice(4) : "";
       const rows = (db.moves || []).filter((m) => (!itemId || String(m.item_id) === itemId) && (!type || notType || m.type === type) && (!notType || m.type !== notType) && (!hash || m.document_hash === hash));
-      return send(200, admin && db.flag ? rows : []);
+      return send(200, db.flag ? rows : []);
     }
     if (table === "systems") return send(200, [{ id: "series-1", name: "Series 1", family: "Sliding", tracks: ["2"], any_config: false, sort_order: 0 }]);
     return send(200, req.method() === "GET" ? [] : {});
@@ -199,34 +200,18 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
 (async () => {
   const browser = await chromium.launch();
 
-  // 1. Regular user
+  // 1. Regular user, before the opening import (Renson released to all staff 2026-11-03)
   {
     const { p, errors, requests } = await session(browser, "user");
-    check(!requests.some((r) => /renson\.js/.test(r.url)), "regular user: renson.js not loaded");
-    check(!(await p.$("#rnInventory")) && !(await p.$("#rnBody")) && !(await p.$("nav .rn-sub")), "regular user: no dropdown, no Renson box, no sidebar submenu");
-    check(!requests.some(isRenson), "regular user: no Renson request at all");
-    await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(1200);
-    const famU = await p.innerText("#dbFam");
-    check(/Stock value by inventory/.test(await p.innerText("#dbFamH")) && /^Freedom/m.test(famU) && !/Renson/i.test(famU) && !/Flyscreen|Smartscreen|Other & shared/.test(famU),
-      "regular user: Dashboard 'Stock value by inventory' shows Freedom only");
-    await p.evaluate(() => { sessionStorage.setItem("oryx_view", "master-inventory"); sessionStorage.setItem("oryx_mi_inventory", "renson"); });
-    await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(1500);
-    check(await p.isVisible("#miSearch") && !(await p.$("#rnBody")), "regular user with a stored 'renson' choice: Freedom list only");
-    if (jobPdf) {
-      await p.click('nav button[data-v="fp"]'); await p.waitForTimeout(300);
-      await p.setInputFiles("#fpPdf", jobPdf); await p.click("#fpExtract");
-      await p.waitForFunction(() => /Renson job list/.test(document.querySelector("#fpStatus").textContent), null, { timeout: 60000 });
-      check(!(await p.$("#fpOut table")) && await p.isHidden("#fpConfirmBar") && !db.freedomCheckouts.length, "regular user: Renson job list refused on the shared Check-out, nothing taken off");
-    }
-    if (rensonDocs.length) {
-      await p.click('nav button[data-v="checkin"]'); await p.waitForTimeout(300);
-      await p.setInputFiles("#ciPdf", rensonDocs[0].file); await p.click("#ciExtract");
-      await p.waitForFunction(() => /Renson document/.test(document.querySelector("#ciStatus").textContent), null, { timeout: 60000 });
-      check(!(await p.$("#ciOut table")) && !(await p.$("#ciRenson .card")) && await p.isHidden("#ciConfirmBar"), "regular user: Renson document refused on the shared Check-in, nothing changed");
-    }
-    await p.click("#navActivity"); await p.waitForTimeout(800);
-    check(!/Renson/i.test(await p.innerText("#v-activity")) && !requests.some(isRenson), "regular user: Activity has no Renson entries and asks for none");
-    check(!freedomWrites(requests).length && !requests.some((r) => /functions\/v1\/check(out|in)/.test(r.url)), "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
+    check(requests.some((r) => /renson\.js/.test(r.url)), "regular user: renson.js loaded (released)");
+    await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
+    check(await p.isVisible("#rnInventory") && !!(await p.$(".mi-toolbar #rnInventory")), "regular user: Inventory dropdown beside the search");
+    await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(800);
+    const body0 = await p.innerText("#rnBody");
+    check(/An Admin imports the Renson opening stock/.test(body0) && !(await p.$("#rnFile")), "regular user: no import step (Admins only), told an Admin imports");
+    check(!/pilot|Admins only/i.test(await p.innerText("#v-master-inventory .page-head")), "regular user: no pilot / Admins-only labels");
+    await p.selectOption("#rnInventory", "freedom"); await p.waitForTimeout(300);
+    check(!freedomWrites(requests).length, "regular user: no writes " + JSON.stringify(freedomWrites(requests)));
     check(!errors.length, "regular user: no page errors " + errors.join(" | "));
     await p.close();
   }
@@ -279,7 +264,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     // Dashboard: Stock value by inventory = Freedom + Renson (Admin, pilot on)
     await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(1500);
     const famA = await p.innerText("#dbFam");
-    check(/Freedom/.test(famA) && /Renson/.test(famA) && /pilot · Admins only/i.test(famA) && /100 items/.test(famA) && /59 out of stock/.test(famA)
+    check(/Freedom/.test(famA) && /Renson/.test(famA) && !/pilot · Admins only/i.test(famA) && /100 items/.test(famA) && /59 out of stock/.test(famA)
       && /AED 14,726[\s\S]*Renson[\s\S]*AED 16\d,\d{3}|Renson[\s\S]*AED 16\d,\d{3}[\s\S]*Freedom/.test(famA), "admin: Dashboard shows a Freedom row and a Renson row (" + famA.replace(/\s+/g, " ").slice(0, 160) + ")");
     await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
     // One dropdown beside the search (sidebar submenu removed 2026-11-03)
@@ -405,11 +390,41 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     await p.close();
   }
 
+  // 2b. Regular user after the import: sees and works Renson, no Kanban edit
+  {
+    const { p, errors, requests } = await session(browser, "user");
+    await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(1500);
+    const famU = await p.innerText("#dbFam");
+    check(/Freedom/.test(famU) && /Renson/.test(famU) && !/pilot|Admins only/i.test(famU), "regular user: Dashboard shows Freedom and Renson rows");
+    await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
+    await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(1000);
+    check(/of 100 items/.test(await p.innerText("#rnBody")) || /of 101 items/.test(await p.innerText("#rnBody")), "regular user: Renson list shown");
+    await p.click('tr[data-rn-item] >> text="22874"'); await p.waitForSelector("#rnItemDlg[open]");
+    check(!(await p.$("#rnLvT")) && !!(await p.$("#rnLvRead")) && /Only Admins change these/.test(await p.innerText("#rnItemBody")), "regular user: Kanban levels read-only");
+    const adjBefore = db.lastAdjust;
+    await p.fill("#rnAdjQty", "13"); await p.fill("#rnAdjReason", "Staff count"); await p.waitForTimeout(150);
+    await p.click('[data-rn-dlg="adjust"]'); await p.waitForTimeout(800);
+    check(db.lastAdjust && db.lastAdjust !== adjBefore && db.lastAdjust.reason === "Staff count", "regular user: Adjust works (as Freedom)");
+    await p.click('[data-rn-dlg="close"]'); await p.waitForTimeout(300);
+    await p.click("#navActivity"); await p.waitForTimeout(1200);
+    check(/Renson adjustment/i.test(await p.innerText("#actList")), "regular user: Activity lists Renson movements");
+    check(!freedomWrites(requests).length, "regular user: no Freedom writes " + JSON.stringify(freedomWrites(requests)));
+    check(!errors.length, "regular user (after import): no page errors " + errors.join(" | "));
+    await p.close();
+  }
+
   // 3. Admin, pilot flag OFF
   {
     db.flag = false;
     const { p, errors } = await session(browser, "admin");
     check(!(await p.$("#rnInventory")) && !(await p.$("#rnBody")), "flag off: Admin sees no dropdown, no Renson box");
+    if (jobPdf) {
+      const before = db.freedomCheckouts.length;
+      await p.click('nav button[data-v="fp"]'); await p.waitForTimeout(300);
+      await p.setInputFiles("#fpPdf", jobPdf); await p.click("#fpExtract");
+      await p.waitForFunction(() => /Renson job list/.test(document.querySelector("#fpStatus").textContent), null, { timeout: 60000 });
+      check(!(await p.$("#fpOut table")) && await p.isHidden("#fpConfirmBar") && db.freedomCheckouts.length === before, "flag off: Renson job list refused, nothing taken off");
+    }
     check(!(await p.$("#navAdmin[hidden]")) && (await p.isVisible('nav button[data-v="master-inventory"]')), "flag off: Freedom menu as usual");
     check(!errors.length, "flag off: no page errors " + errors.join(" | "));
     await p.close();

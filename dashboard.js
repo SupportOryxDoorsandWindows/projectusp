@@ -183,7 +183,7 @@
         const ren = window.ORYX_RENSON_DASH ? await window.ORYX_RENSON_DASH.totals().catch((e) => { console.error("Renson totals", e); return null; }) : null;
         s.inventories = inventoryLines([
           { name: "Freedom", value: s.stockValue, items: s.itemCount, out: s.outCount },
-          ren && { name: "Renson", value: ren.value, items: ren.items, out: ren.out, pilot: true },
+          ren && { name: "Renson", value: ren.value, items: ren.items, out: ren.out },
         ]);
         render(s);
         $("#dbStatus").textContent = "";
@@ -220,7 +220,7 @@
 
     const inv = s.inventories;
     $("#dbFam").innerHTML = inv.lines.map((f) => `
-      <div class="db-fam"><div class="db-fam-1"><span>${esc(f.name)}${f.pilot ? ` <small>(pilot · Admins only)</small>` : ""}</span><span>AED ${aed0(f.value)}<small>${pct(f.share)}</small></span></div>
+      <div class="db-fam"><div class="db-fam-1"><span>${esc(f.name)}</span><span>AED ${aed0(f.value)}<small>${pct(f.share)}</small></span></div>
         <div class="db-bar"><i style="width:${Math.max(0.5, f.pct * 100).toFixed(1)}%"></i></div>
         <div class="db-fam-2">${f.items} items${f.out ? ` · <em>${f.out} out of stock</em>` : ""}</div></div>`).join("") +
       `<div class="db-total"><span>Total</span><b>AED ${aed0(inv.total)}</b></div>`;

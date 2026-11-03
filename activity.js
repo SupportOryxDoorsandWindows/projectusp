@@ -180,7 +180,7 @@
           pagedSelect("inventory_transactions", "type, item_id, item_code, description, quantity, unit, value, job_number, client, supplier, invoice_number, po_number, source_document_name, source_document_hash, created_at, performed_by_name, performed_by_email", "created_at", 20000),
           admin ? pagedSelect("delete_audit_log", "*", "happened_at", 10000).catch(() => []) : [],
           admin ? pagedSelect("account_activity_log", "*", "happened_at", 5000).catch(() => []) : [],
-          admin && ren ? ren.rows().catch((err) => { console.error("Renson activity", err); return []; }) : [],
+          ren ? ren.rows().catch((err) => { console.error("Renson activity", err); return []; }) : [],
         ]);
         events = [...txEvents(txs), ...deleteEvents(dels), ...accountEvents(accs), ...rensonEvents(rens)].sort((a, b) => b.at - a.at);
         loaded = true;

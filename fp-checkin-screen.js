@@ -967,7 +967,7 @@
         $("#ciConfirmBar").hidden = true;
         $("#ciDone").innerHTML = "";
         if (!window.ORYX_RENSON_CHECKIN) {
-          ciStatus("This is a Renson document. Renson is in Admin testing, so it can't be checked in from this account yet — ask an Admin. Nothing was changed.", "err");
+          ciStatus("This is a Renson document, but Renson is switched off (or still loading — reload the page and try again). Nothing was changed.", "err");
           return;
         }
         const r = await window.ORYX_RENSON_CHECKIN.open({ text: pdfText, file: ciState.pdfFile, hash });

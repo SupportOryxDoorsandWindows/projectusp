@@ -262,11 +262,26 @@ product lines — never treat one family's item as a match for another's:
   Trim items ("also remove the flat trim and L angle"): 42 hidden in all.
   List + undo: `supabase/sql/hide_unlisted_items_2026_10_30.sql`.
 
-## Renson inventory -- ADMIN-ONLY PILOT (2026-11-02)
+## Renson inventory (pilot 2026-11-02, RELEASED to all staff 2026-11-03)
 
-- User's rules: Admins only until the user personally approves a release;
-  never change Freedom stock, codes, history, Check-in/Check-out or
-  permissions. Do NOT widen access on your own.
+- RELEASED 2026-11-03 (owner's personal approval: "for renson make it live
+  now"): `supabase/sql/renson_release.sql` (applied live; Freedom items /
+  value / transactions / profiles / policies md5 identical before and
+  after; undo `renson_release_rollback.sql`) sets `renson_access()` =
+  `is_active_staff()` AND the flag, and adds `AND is_admin()` to the access
+  check of `renson_set_levels` / `renson_import_stock` / `renson_reset_pilot`
+  (taken from the live definitions, only that line changed). So, like
+  Freedom: every active staff sees Renson and does Check-in / Check-out /
+  Adjust; Kanban levels (read-only for staff, `#rnLvRead`), opening import
+  and reset stay Admin-only. boot.js loads renson.js for everyone (boot.js
+  v=17); "pilot / Admins only" labels removed; Activity and the Dashboard
+  Renson row are shown to all staff. The flag still switches Renson off for
+  everyone. Tested: `tests/sql/renson-release.test.sql` (after the workflow
+  test), browser test sections 1 / 2b (regular user), Freedom Check-in /
+  Check-out IDENTICAL old vs new. Notes below that say "Admins only" describe
+  the pilot.
+- User's rules (pilot): never change Freedom stock, codes, history,
+  Check-in/Check-out or permissions.
 - Data is kept APART from Freedom: tables `renson_items` (one row per code,
   `current_value` = stock x unit cost, generated), `renson_imports`,
   `renson_transactions` ('opening_import', 'check_out', 'check_in', 'adjustment'). SQL:
