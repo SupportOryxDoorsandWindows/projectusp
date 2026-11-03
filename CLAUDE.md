@@ -732,6 +732,26 @@ product lines — never treat one family's item as a match for another's:
   (`parseZiplineOrderForm`, one cell per line). Real samples are in
   `tests/checkin-parser.test.js`; a line is only read when qty × price
   reconciles to its total.
+- "Shipping Crate" line = the shipment's crate charge (2026-11-03, owner's
+  decision after S00155 went in without its USD 900 crate): a CODE-LESS line
+  that STARTS with "Shipping Crate" / "Crate" / "Crating" is taken as the
+  shipping amount even though it has a tax column (`CRATE_CHARGE_RE` in
+  fp-checkin-read.js, `crate: true` on the result) and its goods row is
+  removed (`isCrateChargeEntry`, fp-checkin-screen.js), so it is spread over
+  the lines like freight. Before, it was an unmatched row to skip and the
+  cost was lost. Compared old vs new on S00155 (real PDF, live Master list via
+  `checkin-same-freedom.js --items`): only difference = USD 900 shipping on
+  the same 29 lines; a made-up Freedom quote IDENTICAL.
+- S00155 crate cost added afterwards (2026-11-03, owner: "Add it to current
+  cost"): `supabase/sql/s00155_crate_cost_2026_11_03.sql` (applied live)
+  raised the average cost of the 29 items by share / (stock before + qty
+  received), share = USD 900 / 29 lines x 3.6725 = AED 113.97 per line,
+  "stock before" by ENTRY time (`transaction_date_corrections`), which
+  reproduces every stored average exactly. Stock value +AED 3,197.85
+  (782,325.52 -> 785,523.37); the rest (~AED 107) belonged to stock already
+  checked out, whose values stay. S00155 lines / all transactions / quantities
+  unchanged. Log + undo: table `item_cost_corrections` (staff-only read).
+  Test: `tests/sql/s00155-crate-cost.test.sql`.
 - Freedom Screens **India** sends a third layout, a proforma
   (`parseSlNoParticulars`: Sl No · Particulars · Rolls · Rate $USD · Per ·
   Amount; rates often without decimals; sizes in feet, e.g. 9' x 100'). Its
