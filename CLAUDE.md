@@ -224,6 +224,23 @@ product lines — never treat one family's item as a match for another's:
   (`.order("id")`): one Check-in / Check-out shares one `created_at` (up to
   181 lines), and without the tie-break a page edge can skip or repeat rows.
 
+## Check-out dates corrected (2026-11-03)
+
+- A Check-out's date is `inventory_transactions.created_at` = when it was
+  ENTERED (there is no production / completion date field). 10 job lists
+  entered by Paulo Averil on 2 Nov 2026 (419 lines) were completed in
+  October; at the owner's request their `created_at` was set to the
+  completion date from the team's list (time of day kept, Dubai):
+  26294 9 Oct, 26273 13 Oct, 26371 19 Oct, 25313 26 Oct, 26256 27 Oct,
+  26397 29 Oct (last of 24/26/29), 26052 F1-5 + F1-7 29 Oct; no completion
+  date -> printout date of the job list: 26399 22 Oct, 26391 7 Oct.
+  `supabase/sql/checkout_dates_2026_11_03.sql` (applied live; undo at its
+  end), every old/new time in table `transaction_date_corrections`
+  (staff-only read). Freedom items md5 / value / transactions-without-date
+  md5 / all other dates identical before and after. Test:
+  `tests/sql/checkout-dates.test.sql` (local Postgres). The "FLYSCREEN
+  STOCK OCT 14 (3).xlsx" sent first had NO dates (only 5 job columns).
+
 ## Hidden items (not on the official stock list, 2026-10-30)
 
 - `inventory_items.status = 'inactive'` AND `current_qty = 0` = hidden from
