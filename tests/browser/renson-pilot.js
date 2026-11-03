@@ -205,6 +205,10 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     check(!requests.some((r) => /renson\.js/.test(r.url)), "regular user: renson.js not loaded");
     check(!(await p.$("#rnInventory")) && !(await p.$("#rnBody")) && !(await p.$("nav .rn-sub")), "regular user: no dropdown, no Renson box, no sidebar submenu");
     check(!requests.some(isRenson), "regular user: no Renson request at all");
+    await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(1200);
+    const famU = await p.innerText("#dbFam");
+    check(/Stock value by inventory/.test(await p.innerText("#dbFamH")) && /^Freedom/m.test(famU) && !/Renson/i.test(famU) && !/Flyscreen|Smartscreen|Other & shared/.test(famU),
+      "regular user: Dashboard 'Stock value by inventory' shows Freedom only");
     await p.evaluate(() => { sessionStorage.setItem("oryx_view", "master-inventory"); sessionStorage.setItem("oryx_mi_inventory", "renson"); });
     await p.reload({ waitUntil: "networkidle" }); await p.waitForTimeout(1500);
     check(await p.isVisible("#miSearch") && !(await p.$("#rnBody")), "regular user with a stored 'renson' choice: Freedom list only");
@@ -272,6 +276,12 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     const xrows = X.utils.sheet_to_json(X.readFile(xf).Sheets["Renson inventory"]);
     check(/^Renson inventory \d{4}-\d{2}-\d{2}\.xlsx$/.test(dl.suggestedFilename()) && xrows.length === 59 && xrows.every((r) => r.Status === "Out of stock" || r.Stock <= 0), "Extract: the 59 rows shown, with status");
     await p.selectOption("#rnShow", "all"); await p.waitForTimeout(200);
+    // Dashboard: Stock value by inventory = Freedom + Renson (Admin, pilot on)
+    await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(1500);
+    const famA = await p.innerText("#dbFam");
+    check(/Freedom/.test(famA) && /Renson/.test(famA) && /pilot · Admins only/i.test(famA) && /100 items/.test(famA) && /59 out of stock/.test(famA)
+      && /AED 14,726[\s\S]*Renson[\s\S]*AED 16\d,\d{3}|Renson[\s\S]*AED 16\d,\d{3}[\s\S]*Freedom/.test(famA), "admin: Dashboard shows a Freedom row and a Renson row (" + famA.replace(/\s+/g, " ").slice(0, 160) + ")");
+    await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
     // One dropdown beside the search (sidebar submenu removed 2026-11-03)
     check(!!(await p.$(".rn-tools #rnInventory")) && (await p.$$("#rnInventory")).length === 1 && !(await p.$("nav .rn-sub")), "Renson: the same Inventory dropdown sits beside the Renson search");
     await p.click('nav button[data-v="dashboard"]'); await p.waitForTimeout(400);

@@ -199,8 +199,14 @@ product lines — never treat one family's item as a match for another's:
   checked out / in in the last 30 days. Needs attention: Reorder (out of stock
   AND used), Kanban Critical / Low (same counts as Master Inventory's Show
   choices, via kanban.js), other out of stock, no cost, no photo; links open
-  Master Inventory with that Show choice. Product lines by the description's
-  first word (ZLS1, ZLS2, SMB1, ZLX/IZLX, other). "Most used" = last 30 days,
+  Master Inventory with that Show choice. "Stock value by inventory"
+  (2026-11-03, user: "remove this and change it by Freedom and then Renson";
+  was "by product line", `productLine` / `families` are still computed but
+  no longer shown): `inventoryLines()` = one row per inventory -- Freedom
+  for everyone; Renson only when renson.js set `window.ORYX_RENSON_DASH`
+  (Admins + pilot; row labelled "pilot · Admins only"); total = rows shown.
+  The top "Stock value" tile stays Freedom only. Dashboard re-reads on
+  `oryx-renson-ready`. "Most used" = last 30 days,
   by number of jobs. "Running out soon" = stock / daily use over min(60 days,
   time since the first recorded movement); red <= 14 days, amber <= 30.
   "Recent activity" was left out on purpose (the Activity page has it).
@@ -405,7 +411,7 @@ product lines — never treat one family's item as a match for another's:
   itself gives 2405 Spline and 22874 Steel bar the SAME picture.
 - Freedom Check-in unchanged: `tests/browser/checkin-same-freedom.js`
   (made-up Freedom quote, Admin + regular user) gives IDENTICAL output on the
-  old and new code. Dashboard does not include Renson (Activity does, Admins only). Freedom's
+  old and new code. Dashboard: only the "Stock value by inventory" Renson row (Admins); Activity: Renson movements (Admins). Freedom's
   own Check-in/Check-out never read Renson tables.
 - Tests: `tests/renson.test.js` (RENSON_XLSX + XLSX_PATH to include the
   real file), `tests/sql/renson-pilot.test.sql` (local Postgres),

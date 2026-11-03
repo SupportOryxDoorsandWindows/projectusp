@@ -118,7 +118,19 @@
 
   function fmt(n) { return Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 }); }
 
-  const core = { summarise, productLine, itemLabel, isManual, USE_DAYS, RECENT_DAYS };
+  // "Stock value by inventory" (user's request 2026-11-03, replaces "by
+  // product line"): one row per inventory -- Freedom always, Renson only when
+  // renson.js gave its totals (Admins with the pilot on). share = part of the
+  // total shown; pct = bar length against the largest row.
+  function inventoryLines(rows) {
+    const list = (rows || []).filter(Boolean).map((r) => ({ name: r.name, value: num(r.value), items: num(r.items), out: num(r.out), pilot: !!r.pilot }));
+    const total = list.reduce((s, r) => s + r.value, 0);
+    const top = Math.max(1, ...list.map((r) => r.value));
+    for (const r of list) { r.share = total > 0 ? r.value / total : 0; r.pct = r.value / top; }
+    return { lines: list, total };
+  }
+
+  const core = { summarise, productLine, itemLabel, isManual, inventoryLines, USE_DAYS, RECENT_DAYS };
   (typeof window !== "undefined" ? window : globalThis).ORYX_DASH_CORE = core;
 
   /* ------------------------------------------------------------ screen */
@@ -167,6 +179,12 @@
         if (first.error) throw first.error;
         const s = summarise({ items, txs, firstTxAt: first.data[0] && first.data[0].created_at, photos,
           kanbanState: window.ORYX_KANBAN && window.ORYX_KANBAN.kanbanState });
+        // Renson totals only exist for Admins with the pilot on (renson.js).
+        const ren = window.ORYX_RENSON_DASH ? await window.ORYX_RENSON_DASH.totals().catch((e) => { console.error("Renson totals", e); return null; }) : null;
+        s.inventories = inventoryLines([
+          { name: "Freedom", value: s.stockValue, items: s.itemCount, out: s.outCount },
+          ren && { name: "Renson", value: ren.value, items: ren.items, out: ren.out, pilot: true },
+        ]);
         render(s);
         $("#dbStatus").textContent = "";
       } catch (err) {
@@ -200,11 +218,12 @@
       b.onclick = () => openItem(s.attention[+b.dataset.dbAttn].item);
     });
 
-    $("#dbFam").innerHTML = s.families.map((f) => `
-      <div class="db-fam"><div class="db-fam-1"><span>${esc(f.name)}</span><span>AED ${aed0(f.value)}<small>${pct(f.share)}</small></span></div>
+    const inv = s.inventories;
+    $("#dbFam").innerHTML = inv.lines.map((f) => `
+      <div class="db-fam"><div class="db-fam-1"><span>${esc(f.name)}${f.pilot ? ` <small>(pilot · Admins only)</small>` : ""}</span><span>AED ${aed0(f.value)}<small>${pct(f.share)}</small></span></div>
         <div class="db-bar"><i style="width:${Math.max(0.5, f.pct * 100).toFixed(1)}%"></i></div>
         <div class="db-fam-2">${f.items} items${f.out ? ` · <em>${f.out} out of stock</em>` : ""}</div></div>`).join("") +
-      `<div class="db-total"><span>Total</span><b>AED ${aed0(s.stockValue)}</b></div>`;
+      `<div class="db-total"><span>Total</span><b>AED ${aed0(inv.total)}</b></div>`;
 
     $("#dbUsed").innerHTML = s.mostUsed.length ? `
       <table class="db-table"><thead><tr><th>Item</th><th class="num db-hide-sm">Jobs</th><th class="num">Used</th></tr></thead><tbody>
@@ -255,4 +274,7 @@
   // 2026-10-29): read it now unless the person already went elsewhere.
   const view = $("#v-dashboard");
   if (view && view.classList.contains("on")) load();
+  // renson.js starts after the Dashboard's first read: read again so the
+  // Renson row appears (Admins with the pilot on only).
+  document.addEventListener("oryx-renson-ready", () => { if (view && view.classList.contains("on")) load(); });
 })();
