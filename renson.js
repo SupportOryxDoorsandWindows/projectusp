@@ -474,7 +474,17 @@
     return rows.map((r) => { const it = byId.get(String(r.item_id)) || {}; return Object.assign({}, r, { description: it.description || "", unit: r.unit || it.unit || "" }); });
   }
 
+  // Dashboard "Stock value by inventory": the Renson row (Admins + pilot only;
+  // the read policy enforces the same rule).
+  async function dashTotals() {
+    const { data, error } = await sb.from("renson_items").select("current_qty, current_value");
+    if (error) throw error;
+    const rows = data || [];
+    return { value: rows.reduce((s, r) => s + Number(r.current_value || 0), 0), items: rows.length, out: rows.filter((r) => !(Number(r.current_qty) > 0)).length };
+  }
+
   function mount() {
+    window.ORYX_RENSON_DASH = { totals: dashTotals };
     loadPhotos().then(() => render());
     window.ORYX_RENSON_ACTIVITY = { rows: activityRows };
     document.dispatchEvent(new CustomEvent("oryx-renson-ready"));

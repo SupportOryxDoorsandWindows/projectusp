@@ -8,7 +8,7 @@ const vm = require("vm");
 const context = { window: {} };
 vm.runInNewContext(fs.readFileSync("kanban.js", "utf8"), context);
 vm.runInNewContext(fs.readFileSync("dashboard.js", "utf8"), context);
-const { summarise, productLine, itemLabel } = context.window.ORYX_DASH_CORE;
+const { summarise, productLine, itemLabel, inventoryLines } = context.window.ORYX_DASH_CORE;
 const { kanbanState } = context.window.ORYX_KANBAN;
 
 const now = "2026-10-23T08:00:00Z";
@@ -59,6 +59,17 @@ assert.equal(productLine({ description: "Bug Fur 12mm" }), "Other & shared parts
 assert.equal(s.families[0].name, "Flyscreen (ZLS2)");
 assert.equal(Math.round(s.families[0].share * 100), 89);
 assert.equal(itemLabel({ description: "X", bar_length_mm: 5100 }), "X · 5.1 m");
+
+// Stock value by inventory: Freedom only (regular staff), Freedom + Renson (Admin, pilot on).
+const one = inventoryLines([{ name: "Freedom", value: 782325.52, items: 291, out: 14 }, null]);
+assert.deepEqual(one.lines.map((l) => [l.name, l.share, l.pct]), [["Freedom", 1, 1]]);
+assert.equal(one.total, 782325.52);
+const two = inventoryLines([{ name: "Freedom", value: 782325.52, items: 291, out: 14 }, { name: "Renson", value: 161171.6, items: 100, out: 59, pilot: true }]);
+assert.equal(Math.round(two.total * 100) / 100, 943497.12);
+assert.equal(Math.round(two.lines[0].share * 100), 83);
+assert.equal(Math.round(two.lines[1].share * 100), 17);
+assert.equal(two.lines[1].pilot, true);
+assert.ok(two.lines[1].pct < 1 && two.lines[0].pct === 1);
 
 // Most used: by number of jobs, then quantity.
 assert.deepEqual(s.mostUsed.map((u) => [u.item.id, u.qty, u.jobs]), [["b", 8, 1], ["a", 6, 1], ["e", 1, 1]]);
