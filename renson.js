@@ -402,7 +402,7 @@
   "use strict";
   if (typeof document === "undefined" || !window.ORYX_AUTH) return;
   const AUTH = window.ORYX_AUTH;
-  if (!AUTH.isAdmin()) return;                 // boot.js already skips non-Admins
+  const isAdmin = () => !!(AUTH.isAdmin && AUTH.isAdmin());  // Kanban levels, import, reset
   const R = window.ORYX_RENSON_CORE;
   const sb = AUTH.sb;
   const $ = (s, root) => (root || document).querySelector(s);
@@ -550,7 +550,7 @@
     // moved into whichever toolbar is showing (placePick).
     pick = document.createElement("label");
     pick.className = "rn-pick mi-filter";
-    pick.innerHTML = `<span>Inventory</span> <select id="rnInventory" aria-label="Inventory"><option value="freedom">Freedom</option><option value="renson">Renson (pilot)</option></select>`;
+    pick.innerHTML = `<span>Inventory</span> <select id="rnInventory" aria-label="Inventory"><option value="freedom">Freedom</option><option value="renson">Renson</option></select>`;
     const box = document.createElement("div");
     box.id = "rnBody";
     pageBody.insertBefore(box, pageBody.firstChild);
@@ -608,7 +608,7 @@
     const take = co.lines.filter((l) => !co.skip.has(l.item_code));
     const value = take.reduce((x, l) => x + l.value, 0);
     b.innerHTML = `<div class="card" style="margin-top:16px">
-      <div class="fp-section-h">Renson items <span class="rn-pill">Renson stock · Admin pilot</span></div>
+      <div class="fp-section-h">Renson items <span class="rn-pill">Renson stock</span></div>
       <p class="small muted">These lines are Renson items: they come off the <b>Renson</b> stock, not Freedom. The lines above stay with Freedom.</p>
       ${co.already ? `<div class="rn-msg bad">The Renson items of this job list were already checked out. Confirm will refuse them.</div>` : ""}
       <div class="rn-wrap"><table class="rn-table"><thead><tr><th>Take off</th><th>Code</th><th>Renson item</th><th>From the job list</th>
@@ -628,7 +628,7 @@
       lines: take.map((l) => ({ item_code: l.item_code, qty: l.qty, unit: l.unit, source: l.source })) } });
     if (error) {
       const m = /already_checked_out/.test(error.message) ? "The Renson items of this job list were already checked out."
-        : /renson_not_allowed/.test(error.message) ? "Renson is for Admins only (or switched off)." : error.message;
+        : /renson_not_allowed/.test(error.message) ? "Renson is switched off (or this account is not active)." : error.message;
       return { ok: false, message: "Renson items NOT taken off: " + m };
     }
     return { ok: true, data };
@@ -719,7 +719,7 @@
     if (ci.done) { b.innerHTML = ci.done; return; }
     const h = ci.doc.head, cur = h.currency || "EUR";
     b.innerHTML = `<div class="card" style="margin-top:16px">
-      <div class="fp-section-h">Renson document <span class="rn-pill">Renson stock · Admin pilot</span></div>
+      <div class="fp-section-h">Renson document <span class="rn-pill">Renson stock</span></div>
       <p class="small muted">${esc(h.docType || "Document")} <b>${esc(h.number)}</b> of ${esc(h.date)} from Renson NV${h.orderRef ? ` · order reference ${esc(h.orderRef)}` : ""}. Everything here goes to the <b>Renson</b> stock, never Freedom.</p>
       <p class="small">${ci.doc.totalMatches ? `✓ The lines add up to the document's total before VAT (${esc(cur)} ${money(h.totalBeforeVat)}).` : `<span style="color:var(--danger)">✗ The lines (${esc(cur)} ${money(ci.doc.sum)}) do not add up to the document's total before VAT (${esc(cur)} ${money(h.totalBeforeVat)}). Check the document.</span>`}</p>
       <div class="rn-grid">
@@ -807,7 +807,7 @@
       document_date: h.isoDate || null, currency: h.currency || "EUR", exchange_rate: Number(ci.rate), document_name: ci.file ? ci.file.name : null, document_hash: ci.hash || null, lines } });
     ci.busy = false;
     if (error) {
-      const m = /already_checked_in/.test(error.message) ? "This document was already checked in." : /renson_not_allowed/.test(error.message) ? "Renson is for Admins only (or switched off)." : error.message;
+      const m = /already_checked_in/.test(error.message) ? "This document was already checked in." : /renson_not_allowed/.test(error.message) ? "Renson is switched off (or this account is not active)." : error.message;
       const pl = $("#rciProbs"); pl.innerHTML = `<li class="error">Not saved: ${esc(m)} Nothing was changed.</li>`; pl.style.display = "";
       return ciUpdate();
     }
@@ -844,7 +844,7 @@
     ui.mode = ren ? "renson" : "freedom";
     pick.querySelector("select").value = ui.mode;
     view.classList.toggle("rn-on", ren);
-    if (sub) sub.innerHTML = ren ? `Renson stock <span class="rn-pill">Pilot · Admins only</span> Kept apart from Freedom; nothing here changes Freedom stock.` : esc(freedomSub);
+    if (sub) sub.innerHTML = ren ? `Renson stock. Kept apart from Freedom; nothing here changes Freedom stock.` : esc(freedomSub);
     try { sessionStorage.setItem("oryx_mi_inventory", ui.mode); } catch (e) { /* private mode */ }
     placePick();
     if (ren) load();
@@ -1004,10 +1004,11 @@
       <p class="muted" id="rnAdjPreview">${esc(adjPreview())}</p>
       <div class="rn-actions" style="margin-top:0"><button type="button" class="btn-yellow" data-rn-dlg="adjust" ${panel.busy ? "disabled" : ""}>Save adjustment</button></div>
       <h3>Kanban levels</h3>
-      <div class="rn-grid"><label>Kanban trigger level<input class="rn-in" id="rnLvT" inputmode="decimal" value="${esc(panel.lv.t)}" placeholder="none"></label>
+      ${isAdmin() ? `<div class="rn-grid"><label>Kanban trigger level<input class="rn-in" id="rnLvT" inputmode="decimal" value="${esc(panel.lv.t)}" placeholder="none"></label>
         <label>Critical level (optional)<input class="rn-in" id="rnLvC" inputmode="decimal" value="${esc(panel.lv.c)}" placeholder="none"></label></div>
       <div class="rn-actions" style="margin-top:0"><button type="button" class="btn-outline" data-rn-dlg="levels" ${panel.busy ? "disabled" : ""}>Save levels</button>
-        <button type="button" class="rn-link" data-rn-dlg="levels-clear">Remove both</button></div>
+        <button type="button" class="rn-link" data-rn-dlg="levels-clear">Remove both</button></div>`
+        : `<p class="muted" id="rnLvRead">Trigger level: <b>${esc(panel.lv.t || "none")}</b> · Critical level: <b>${esc(panel.lv.c || "none")}</b>. Only Admins change these (same as Freedom).</p>`}
       <h3>History</h3>
       ${panel.history == null ? `<p class="muted">Loading…</p>` : !panel.history.length ? `<p class="muted">No movements yet.</p>` :
         `<div class="rn-wrap"><table class="rn-table"><thead><tr><th>When</th><th>What</th><th class="r">Change</th><th class="r">Stock after</th><th class="r">Value</th><th>By</th></tr></thead><tbody>
@@ -1107,6 +1108,7 @@
 
   // ------------------------------------------------------------ import
   function importHtml() {
+    if (!isAdmin()) return `<div class="card"><p>No Renson items yet.</p><p class="muted">An Admin imports the Renson opening stock first.</p></div>`;
     const has = ui.items.length > 0;
     let h = "";
     if (has) {
@@ -1195,7 +1197,7 @@
     ui.busy = false;
     if (error) {
       const m = /renson_already_imported/.test(error.message) ? "The opening stock was already imported."
-        : /renson_not_allowed/.test(error.message) ? "Not allowed: the Renson pilot is for Admins only (or is switched off)."
+        : /renson_not_allowed/.test(error.message) ? "Not allowed: the opening import is for Admins only (or Renson is switched off)."
         : "The import was refused: " + error.message;
       ui.msg = ["bad", m + " Nothing was saved."];
       return render();

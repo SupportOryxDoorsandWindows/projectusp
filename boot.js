@@ -333,10 +333,11 @@
       const u = document.createElement("script");
       u.src = "updates.js?v=" + Date.now();
       document.body.appendChild(u);
-      // Renson inventory -- ADMIN-ONLY PILOT (2026-11-02). Not even loaded
-      // for anyone else; the page also asks the database (renson_access():
-      // Admin AND pilot flag on), and the database refuses everyone else.
-      if (AUTH.isAdmin()) {
+      // Renson inventory: released to all active staff 2026-11-03 (owner's
+      // approval, was Admin-only). The page still asks the database
+      // (renson_access(): active staff AND flag 'renson_pilot' on), and the
+      // database refuses everyone else; switching the flag off hides it.
+      {
         const rn = document.createElement("script");
         rn.src = "renson.js?v=" + Date.now();
         document.body.appendChild(rn);

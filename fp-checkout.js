@@ -520,7 +520,7 @@
         state.rows = null;
         $("#fpOut").innerHTML = "";
         $("#fpConfirmBar").hidden = true;
-        status("This is a Renson job list. Renson is in Admin testing, so it can't be checked out from this account yet — ask an Admin. Nothing was taken off.", "err");
+        status("This is a Renson job list, but Renson is switched off (or still loading — reload the page and try again). Nothing was taken off.", "err");
         return;
       }
       state.rows = buildRows(entries, state.itemsByCode);
