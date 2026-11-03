@@ -454,7 +454,7 @@
     mount();
   });
 
-  let view, sub, freedomSub = "";
+  let view, sub, pick, freedomSub = "";
   // Renson movements are listed on the Activity page (user's request
   // 2026-11-02, replaces the Movements tab). Only exists for Admins with the
   // pilot on (mount() runs after renson_access()); the read policy enforces
@@ -484,11 +484,6 @@
 .rn-pick select{border:1px solid #C5D0D4; border-radius:10px; padding:8px 10px; font:inherit; font-weight:600; background:var(--white); color:var(--brand)}
 #v-master-inventory.rn-on .page-body > :not(#rnBody), #v-master-inventory.rn-on #miExtractBtn{display:none !important}
 #v-master-inventory:not(.rn-on) #rnBody{display:none}
-nav.side-nav .rn-sub{display:flex; flex-direction:column; gap:2px; margin:0 0 4px 30px}
-nav.side-nav .rn-sub button{font-size:13.5px; padding:7px 12px; min-height:0}
-nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:var(--white); font-weight:600}
-.side-collapsed nav.side-nav .rn-sub{display:none}
-@media (max-width:900px){nav.side-nav .rn-sub{display:none}}
 .rn-pill{display:inline-block; margin-left:8px; padding:2px 10px; border-radius:999px; background:#FEF3C7; color:#92400E; font-size:12px; font-weight:600; vertical-align:middle}
 .rn-badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap}
 .rn-badge.out{background:#FEE2E2; color:#991B1B}.rn-badge.critical{background:#FEE2E2; color:#991B1B}.rn-badge.low{background:#FEF3C7; color:#92400E}
@@ -538,30 +533,14 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     view = $("#v-master-inventory");
     const head = view && $(".page-head", view), pageBody = view && $(".page-body", view);
     if (!head || !pageBody) return;
-    // In-page dropdown (kept) ...
-    const pick = document.createElement("label");
-    pick.className = "rn-pick";
-    pick.innerHTML = `Inventory <select id="rnInventory" aria-label="Inventory"><option value="freedom">Freedom</option><option value="renson">Renson (pilot)</option></select>`;
-    const actions = $(".page-actions", head);
-    if (actions) actions.insertBefore(pick, actions.firstChild); else head.appendChild(pick);
-    // ... and the sidebar submenu under Master Inventory (user, 2026-11-02:
-    // "displayed under the Renson submenu"). Not nav button[data-v], so
-    // app.js / the reload logic never treat them as pages of their own.
-    const miBtn = $('nav button[data-v="master-inventory"]');
-    if (miBtn) {
-      const subNav = document.createElement("div");
-      subNav.className = "rn-sub";
-      subNav.innerHTML = `<button type="button" data-rn-mode="freedom" title="Freedom inventory">Freedom</button>
-        <button type="button" data-rn-mode="renson" title="Renson inventory (pilot, Admins only)">Renson (pilot)</button>`;
-      miBtn.after(subNav);
-      subNav.addEventListener("click", (e) => {
-        const b = e.target.closest("[data-rn-mode]");
-        if (!b) return;
-        if (!view.classList.contains("on")) miBtn.click();   // opens Master Inventory the usual way
-        setMode(b.dataset.rnMode);
-      });
-      document.querySelectorAll("nav button[data-v]").forEach((b) => b.addEventListener("click", () => setTimeout(markSub, 0)));
-    }
+    // ONE "Inventory" dropdown beside the search box (user, 2026-11-03: "just
+    // merge so it will be under Master Inventory as long as there is a
+    // dropdown beside search for Freedom, Renson, etc."; the sidebar
+    // submenu and the page-head dropdown were removed). The same element is
+    // moved into whichever toolbar is showing (placePick).
+    pick = document.createElement("label");
+    pick.className = "rn-pick mi-filter";
+    pick.innerHTML = `<span>Inventory</span> <select id="rnInventory" aria-label="Inventory"><option value="freedom">Freedom</option><option value="renson">Renson (pilot)</option></select>`;
     const box = document.createElement("div");
     box.id = "rnBody";
     pageBody.insertBefore(box, pageBody.firstChild);
@@ -576,7 +555,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     dlg.addEventListener("change", onDlgChange);
     dlg.addEventListener("input", onDlgInput);
 
-    $("#rnInventory").addEventListener("change", (e) => setMode(e.target.value));
+    pick.querySelector("select").addEventListener("change", (e) => setMode(e.target.value));
     // Shared Check-out page: Renson lines of a Renson job list.
     window.ORYX_RENSON_CHECKOUT = RENSON_CHECKOUT;
     window.ORYX_RENSON_CHECKIN = RENSON_CHECKIN;
@@ -593,8 +572,7 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
 
     let last = null;
     try { last = sessionStorage.getItem("oryx_mi_inventory"); } catch (e) { last = null; }
-    if (last === "renson") setMode("renson");
-    markSub();
+    if (last === "renson") setMode("renson"); else placePick();
   }
 
   // ------------------------------------------------------------ shared Check-out
@@ -854,16 +832,26 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
   function setMode(which) {
     const ren = which === "renson";
     ui.mode = ren ? "renson" : "freedom";
-    $("#rnInventory").value = ui.mode;
+    pick.querySelector("select").value = ui.mode;
     view.classList.toggle("rn-on", ren);
     if (sub) sub.innerHTML = ren ? `Renson stock <span class="rn-pill">Pilot · Admins only</span> Kept apart from Freedom; nothing here changes Freedom stock.` : esc(freedomSub);
     try { sessionStorage.setItem("oryx_mi_inventory", ui.mode); } catch (e) { /* private mode */ }
-    markSub();
+    placePick();
     if (ren) load();
   }
-  function markSub() {
-    const open = view && view.classList.contains("on");
-    document.querySelectorAll("nav .rn-sub [data-rn-mode]").forEach((b) => b.classList.toggle("rn-sub-on", !!open && b.dataset.rnMode === ui.mode));
+  // Freedom: first thing in Freedom's toolbar (before Show). Renson: first
+  // thing in the Renson toolbar, or at the top of the box while it loads.
+  function placePick() {
+    if (!pick) return;
+    if (ui.mode !== "renson") {
+      const tb = view && $(".mi-toolbar", view);
+      if (tb && tb.firstChild !== pick) tb.insertBefore(pick, tb.firstChild);
+      return;
+    }
+    const body = $("#rnBody");
+    if (!body) return;
+    const tb = $(".rn-tools", body) || body;
+    if (tb.firstChild !== pick) tb.insertBefore(pick, tb.firstChild);
   }
 
   async function load() {
@@ -891,10 +879,11 @@ nav.side-nav .rn-sub button.rn-sub-on{background:rgba(255,255,255,0.1); color:va
     // Movements are on the Activity page.
     const tabs = "";
     const msg = ui.msg ? `<div class="rn-msg ${ui.msg[0]}">${esc(ui.msg[1])}</div>` : "";
-    if (ui.loading) { body.innerHTML = tabs + `<div class="card">Loading Renson inventory…</div>`; return; }
-    if (ui.loadError) { body.innerHTML = tabs + `<div class="rn-msg bad">Could not read the Renson inventory: ${esc(ui.loadError)}</div>`; return; }
+    if (ui.loading) { body.innerHTML = tabs + `<div class="card">Loading Renson inventory…</div>`; return placePick(); }
+    if (ui.loadError) { body.innerHTML = tabs + `<div class="rn-msg bad">Could not read the Renson inventory: ${esc(ui.loadError)}</div>`; return placePick(); }
     const draw = ui.items.length ? inventoryHtml : importHtml;
     body.innerHTML = tabs + msg + draw() + codeList();
+    placePick();
   }
   const codeList = () => `<datalist id="rnCodes">${ui.items.map((i) => `<option value="${esc(i.item_code)}">${esc(i.description)}</option>`).join("")}</datalist>`;
 
