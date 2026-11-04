@@ -205,7 +205,7 @@ product lines — never treat one family's item as a match for another's:
   no longer shown): `inventoryLines()` = one row per inventory -- Freedom
   for everyone; Renson only when renson.js set `window.ORYX_RENSON_DASH`
   (Admins + pilot; row labelled "pilot · Admins only"); total = rows shown.
-  The top "Stock value" tile stays Freedom only. Dashboard re-reads on
+  The top "Stock value" tile = Freedom + Renson total (2026-11-04, user's request; `#dbTotalTile`, sub-line "Freedom AED x · Renson AED y"; Freedom only when Renson is off). Dashboard re-reads on
   `oryx-renson-ready`. "Most used" = last 30 days,
   by number of jobs. "Running out soon" = stock / daily use over min(60 days,
   time since the first recorded movement); red <= 14 days, amber <= 30.
