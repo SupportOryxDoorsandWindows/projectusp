@@ -251,7 +251,7 @@ product lines — never treat one family's item as a match for another's:
 
 - User's request ("automate the reports to be sent on the 1st of each
   month"; answers: transactions + summary, email, test recipient first =
-  the owner's own lharylpanares2000@gmail.com; Meena to be added later).
+  the owner's own Gmail, kept only in the live report_recipients table; Meena to be added later).
 - Edge Function `supabase/functions/monthly-report` (deployed, verify_jwt
   OFF -- it checks every caller): `report.js` = pure part (period in Dubai
   time, `freedomLine` / `rensonLine`, `summarise`, `buildWorkbook` with
