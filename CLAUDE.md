@@ -247,6 +247,40 @@ product lines — never treat one family's item as a match for another's:
   `tests/sql/checkout-dates.test.sql` (local Postgres). The "FLYSCREEN
   STOCK OCT 14 (3).xlsx" sent first had NO dates (only 5 job columns).
 
+## Monthly stock report, emailed on the 1st (2026-11-04)
+
+- User's request ("automate the reports to be sent on the 1st of each
+  month"; answers: transactions + summary, email, test recipient first =
+  the owner's own Gmail, kept only in the live report_recipients table; Meena to be added later).
+- Edge Function `supabase/functions/monthly-report` (deployed, verify_jwt
+  OFF -- it checks every caller): `report.js` = pure part (period in Dubai
+  time, `freedomLine` / `rensonLine`, `summarise`, `buildWorkbook` with
+  xlsx-js-style: Summary / Freedom transactions / Renson transactions,
+  `emailHtml`), tested by `tests/monthly-report.test.js` (XLSX_PATH for the
+  workbook checks). `index.ts` reads the month's inventory_transactions +
+  renson_transactions (not opening_import), keeps the file in PRIVATE bucket
+  `monthly-reports` (staff read), logs every run in `monthly_reports`,
+  emails active `report_recipients` (Admin-only read) through Resend
+  (secret `RESEND_API_KEY`; sender `REPORT_FROM`, default
+  onboarding@resend.dev = only the Resend account's own address until
+  oryxdoors.com is verified at Resend). Never writes stock.
+- Callers: the scheduler (pg_cron job `monthly-stock-report`, `0 2 1 * *` =
+  06:00 Dubai on the 1st, pg_net POST with header `x-report-token` = Vault
+  secret `monthly_report_token`, checked by `monthly_report_token_ok()`,
+  service_role only). Action "monthly" = previous month + records
+  month-end values in `stock_value_snapshots` (next month's start value).
+  The same token can ask "preview" (file only) / "send" + month -- used for
+  tests from SQL (`select net.http_post(...)`, result in
+  `net._http_response`). An active Admin's own token can do "preview" /
+  "send" (never "monthly"). Wrong token = 403 (checked).
+- SQL: `supabase/sql/monthly_report.sql` (applied live 2026-11-04: pg_cron +
+  pg_net enabled, 3 tables, bucket, Vault token, schedule, recipient).
+  Switch off: `select cron.unschedule('monthly-stock-report');`.
+- First live preview (October 2026): 1,003 Freedom lines, 0 Renson, same
+  figures as the hand-made October report. Start/end-of-month values say
+  "not recorded" until the first scheduled run (1 Dec 2026 records
+  November's end).
+
 ## Hidden items (not on the official stock list, 2026-10-30)
 
 - `inventory_items.status = 'inactive'` AND `current_qty = 0` = hidden from
