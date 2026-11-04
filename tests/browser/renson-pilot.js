@@ -266,6 +266,8 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     const famA = await p.innerText("#dbFam");
     check(/Freedom/.test(famA) && /Renson/.test(famA) && !/pilot · Admins only/i.test(famA) && /100 items/.test(famA) && /59 out of stock/.test(famA)
       && /AED 14,726[\s\S]*Renson[\s\S]*AED 16\d,\d{3}|Renson[\s\S]*AED 16\d,\d{3}[\s\S]*Freedom/.test(famA), "admin: Dashboard shows a Freedom row and a Renson row (" + famA.replace(/\s+/g, " ").slice(0, 160) + ")");
+    const tile = await p.innerText("#dbTotalTile");
+    check(/Freedom \+ Renson/.test(tile) && /AED\s*17\d,\d{3}/.test(tile) && /Freedom AED 14,726 · Renson AED 16\d,\d{3}/.test(tile), "Dashboard Stock value tile = Freedom + Renson (" + tile.replace(/\s+/g, " ") + ")");
     await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(800);
     // One dropdown beside the search (sidebar submenu removed 2026-11-03)
     check(!!(await p.$(".rn-tools #rnInventory")) && (await p.$$("#rnInventory")).length === 1 && !(await p.$("nav .rn-sub")), "Renson: the same Inventory dropdown sits beside the Renson search");

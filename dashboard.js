@@ -198,8 +198,15 @@
   function render(s) {
     $("#dbDate").textContent = " · " + new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
     $("#dbTiles").innerHTML = `
-      <div class="db-tile dark"><div class="db-k">Stock value</div><div class="db-v"><small>AED</small>${aed0(s.stockValue)}</div>
-        <div class="db-sub">${s.itemCount} items in Master Inventory · ${s.inStockCount} in stock</div></div>
+      ${(() => {
+        // Total of every inventory shown (user's request 2026-11-04: "put the
+        // total for Renson and Freedom here"); Freedom only when Renson is off.
+        const inv = s.inventories, ren = inv && inv.lines.find((l) => l.name === "Renson");
+        if (!ren) return `<div class="db-tile dark"><div class="db-k">Stock value</div><div class="db-v"><small>AED</small>${aed0(s.stockValue)}</div>
+        <div class="db-sub">${s.itemCount} items in Master Inventory · ${s.inStockCount} in stock</div></div>`;
+        return `<div class="db-tile dark" id="dbTotalTile"><div class="db-k">Stock value · Freedom + Renson</div><div class="db-v"><small>AED</small>${aed0(inv.total)}</div>
+        <div class="db-sub">Freedom AED ${aed0(s.stockValue)} · Renson AED ${aed0(ren.value)}<br>${s.itemCount + ren.items} items in Master Inventory</div></div>`;
+      })()}
       <div class="db-tile${s.outCount ? " bad" : ""}"><div class="db-k">Out of stock</div><div class="db-v">${s.outCount} <small>items</small></div>
         <div class="db-sub">${s.outUsed} of them used in the last ${s.useDays} days</div></div>
       <div class="db-tile"><div class="db-k">→ Checked out · last 30 days</div><div class="db-v"><small>AED</small>${aed0(s.checkedOut.value)}</div>
