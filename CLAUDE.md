@@ -260,10 +260,16 @@ product lines — never treat one family's item as a match for another's:
   workbook checks). `index.ts` reads the month's inventory_transactions +
   renson_transactions (not opening_import), keeps the file in PRIVATE bucket
   `monthly-reports` (staff read), logs every run in `monthly_reports`,
-  emails active `report_recipients` (Admin-only read) through Resend
-  (secret `RESEND_API_KEY`; sender `REPORT_FROM`, default
-  onboarding@resend.dev = only the Resend account's own address until
-  oryxdoors.com is verified at Resend). Never writes stock.
+  emails active `report_recipients` (Admin-only read) through MICROSOFT 365
+  (2026-11-04, user: "we are using outlook"; Resend was dropped): Microsoft
+  Graph `POST /users/{sender}/sendMail` (`graphMessage` in report.js; kept
+  in that mailbox's Sent Items), app-only token (client credentials,
+  application permission Mail.Send, admin consent; restrict the app to the
+  one mailbox with an Exchange ApplicationAccessPolicy). Secrets
+  `MS_TENANT_ID` / `MS_CLIENT_ID` / `MS_CLIENT_SECRET`; sender mailbox =
+  `report_settings` key 'sender' (data, Admin-only read; not in this public
+  repo). Without the secrets a "send" builds + keeps the file and logs
+  "Microsoft 365 sending is not set up yet". Never writes stock.
 - Callers: the scheduler (pg_cron job `monthly-stock-report`, `0 2 1 * *` =
   06:00 Dubai on the 1st, pg_net POST with header `x-report-token` = Vault
   secret `monthly_report_token`, checked by `monthly_report_token_ok()`,
@@ -274,7 +280,7 @@ product lines — never treat one family's item as a match for another's:
   `net._http_response`). An active Admin's own token can do "preview" /
   "send" (never "monthly"). Wrong token = 403 (checked).
 - SQL: `supabase/sql/monthly_report.sql` (applied live 2026-11-04: pg_cron +
-  pg_net enabled, 3 tables, bucket, Vault token, schedule, recipient).
+  pg_net enabled, 4 tables incl. `report_settings`, bucket, Vault token, schedule, recipient, sender).
   Switch off: `select cron.unschedule('monthly-stock-report');`.
 - First live preview (October 2026): 1,003 Freedom lines, 0 Renson, same
   figures as the hand-made October report. Start/end-of-month values say

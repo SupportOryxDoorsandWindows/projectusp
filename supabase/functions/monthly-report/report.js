@@ -140,6 +140,22 @@ export function buildWorkbook(XLSX, { period, inventories, preparedAt, notes = [
 
 export function fileName(period) { return `Oryx stock movements - ${period.label}.xlsx`; }
 
+// Microsoft Graph POST /users/{sender}/sendMail body (2026-11-04: the company
+// uses Microsoft 365 / Outlook; the report goes out from a company mailbox and
+// is kept in its Sent Items). contentBase64 = the .xlsx file.
+export function graphMessage({ to, subject, html, fileName: name, contentBase64 }) {
+  return {
+    message: {
+      subject,
+      body: { contentType: "HTML", content: html },
+      toRecipients: to.map((address) => ({ emailAddress: { address } })),
+      attachments: [{ "@odata.type": "#microsoft.graph.fileAttachment", name,
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", contentBytes: contentBase64 }],
+    },
+    saveToSentItems: true,
+  };
+}
+
 export function emailHtml({ period, inventories, totals }) {
   const esc = (v) => String(v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const fmt = (n) => Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
