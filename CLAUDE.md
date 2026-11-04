@@ -785,3 +785,32 @@ product lines — never treat one family's item as a match for another's:
   would be blocked because the data arrives after the click). All staff;
   read-only. Prices before this system (e.g. the Zoho Check-In report) are NOT
   loaded -- only with the user's say-so.
+
+## Monthly opening / closing stock (Freedom, 2026-11-04)
+
+- Owner's rule: November 2026 opening = "Opening Count" / "Total opening
+  cost" of FLYSCREEN STOCK OCT 14.xlsx (unit cost = "OPENING COST PER
+  PROFILE"); closing = opening + check-ins - check-outs (= `current_qty`),
+  closing value = closing qty x unit cost (check-ins still re-average);
+  every later month opens with last month's closing.
+- Set live 2026-11-04: movement history cleared to the 11 documents of the
+  owner's "Transaction_Summary_.xlsx" (10 job-list Check-outs, AED 29,657.01
+  + Check-in S00155, AED 162,782.93; 448 lines kept, 744 deleted), then each
+  of the 249 file lines' item got opening = file, and stock/cost replayed
+  through the kept lines with the live averaging rule: opening AED
+  649,199.86, stock AED 783,163.88, none below zero. Items not in the file
+  (42 hidden, all 0) kept their figures. File 310022 Drawbar 5.8 m = the
+  5100 mm row (no 5800 row); "630063 ZLX" = 630063, "PET MESH" = Pet Mesh.
+  Saved PDFs (11) and the 20 real delivery notes all belong to kept
+  documents; the 419 date corrections too. Full copies before:
+  `backup.inventory_transactions_2026_11_04`, `backup.inventory_items_2026_11_04`
+  (schema `backup`, not exposed to the API).
+- `supabase/sql/monthly_opening_closing.sql`: `stock_month_balances` (one row
+  per item per month, staff-only read, no write policy) and
+  `roll_stock_month(date)` (service only): closes last month (closing qty /
+  value / cost), opens the month with them and copies them into
+  `inventory_items.opening_qty/opening_value`; runs once per month (a month
+  already open is left alone). pg_cron `roll-stock-month` daily 20:05 UTC
+  (00:05 Dubai), acts only on the 1st. Check-in / Check-out unchanged.
+  Checked with a rolled-back run for 1 Dec: Nov closing = Dec opening =
+  AED 783,163.88. No screen shows the month table yet.
