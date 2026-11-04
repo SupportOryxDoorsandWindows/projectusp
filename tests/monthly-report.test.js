@@ -34,6 +34,14 @@ const path = require("path");
   assert.deepEqual([s["Check-out"].docs, s["Check-out"].lines, s["Check-out"].value], [1, 2, -8.44]);
   assert.equal(s["Adjustment (+)"].lines, 1);
 
+  // Microsoft Graph sendMail body
+  const gm = R.graphMessage({ to: ["a@x.com", "b@y.com"], subject: "S", html: "<p>h</p>", fileName: "f.xlsx", contentBase64: "QUJD" });
+  assert.deepEqual(gm.message.toRecipients, [{ emailAddress: { address: "a@x.com" } }, { emailAddress: { address: "b@y.com" } }]);
+  assert.equal(gm.message.body.contentType, "HTML");
+  assert.equal(gm.message.attachments[0]["@odata.type"], "#microsoft.graph.fileAttachment");
+  assert.equal(gm.message.attachments[0].contentBytes, "QUJD");
+  assert.equal(gm.saveToSentItems, true);
+
   const xp = process.env.XLSX_PATH;
   if (!xp) { console.log("monthly-report: workbook checks skipped (set XLSX_PATH)"); return; }
   const XLSX = require(xp);

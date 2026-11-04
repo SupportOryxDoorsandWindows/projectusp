@@ -31,6 +31,13 @@ create table if not exists public.monthly_reports (
   renson_lines int,
   created_at timestamptz not null default now()
 );
+-- Settings (2026-11-04, sending through Microsoft 365): key 'sender' = the
+-- company mailbox the report is sent FROM (set as data, not in this file).
+create table if not exists public.report_settings (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
 -- Month-end stock values (recorded by the scheduled run only), so next month's
 -- report has an exact start-of-month value.
 create table if not exists public.stock_value_snapshots (
@@ -45,13 +52,16 @@ create table if not exists public.stock_value_snapshots (
 );
 
 do $$ declare t text; begin
-  foreach t in array array['report_recipients', 'monthly_reports', 'stock_value_snapshots'] loop
+  foreach t in array array['report_recipients', 'report_settings', 'monthly_reports', 'stock_value_snapshots'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from anon, authenticated', t);
     execute format('grant select on public.%I to authenticated', t);
   end loop;
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'report_recipients' and policyname = 'report_recipients_admin_read') then
     create policy report_recipients_admin_read on public.report_recipients for select to authenticated using (public.is_admin());
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'report_settings' and policyname = 'report_settings_admin_read') then
+    create policy report_settings_admin_read on public.report_settings for select to authenticated using (public.is_admin());
   end if;
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'monthly_reports' and policyname = 'monthly_reports_staff_read') then
     create policy monthly_reports_staff_read on public.monthly_reports for select to authenticated using (public.is_active_staff());
@@ -98,6 +108,8 @@ select cron.schedule('monthly-stock-report', '0 2 1 * *', $job$
     timeout_milliseconds := 120000);
 $job$);
 
--- Recipients are set separately (data, not code):
+-- Recipients and the sender are set separately (data, not code):
 --   insert into public.report_recipients (email, name, note) values ('...', '...', '...');
+--   insert into public.report_settings (key, value) values ('sender', '<mailbox>@oryxdoors.com')
+--     on conflict (key) do update set value = excluded.value, updated_at = now();
 -- Switch the schedule off:  select cron.unschedule('monthly-stock-report');

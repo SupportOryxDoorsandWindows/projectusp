@@ -18,14 +18,16 @@
 //     previous month) to the recipients now; {action: "preview", month?}
 //     builds and keeps the file but sends nothing. These never record a
 //     month-end value.
-// Recipients: table report_recipients (active rows). Email via Resend
-// (secret RESEND_API_KEY; sender REPORT_FROM, default onboarding@resend.dev,
-// which Resend only delivers to the Resend account's own address until a
-// domain is verified).
+// Recipients: table report_recipients (active rows). Email through
+// Microsoft 365 (the company's Outlook; user's choice 2026-11-04): Microsoft
+// Graph sendMail, app-only (client credentials) with Mail.Send, from the
+// mailbox in report_settings 'sender' (kept in the database, not in this
+// public code); secrets MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET.
+// The report is also kept in that mailbox's Sent Items.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import XLSX from "npm:xlsx-js-style@1.2.0";
-import { reportPeriod, freedomLine, rensonLine, buildWorkbook, fileName, emailHtml } from "./report.js";
+import { reportPeriod, freedomLine, rensonLine, buildWorkbook, fileName, emailHtml, graphMessage } from "./report.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -69,18 +71,28 @@ async function stockValues() {
 }
 
 async function sendEmail(to: string[], subject: string, html: string, name: string, bytes: Uint8Array) {
-  const key = Deno.env.get("RESEND_API_KEY");
-  if (!key) return { sent: false, error: "RESEND_API_KEY is not set yet (Supabase → Edge Functions → Secrets)." };
+  const tenant = Deno.env.get("MS_TENANT_ID"), client = Deno.env.get("MS_CLIENT_ID"), secret = Deno.env.get("MS_CLIENT_SECRET");
+  if (!tenant || !client || !secret) return { sent: false, error: "Microsoft 365 sending is not set up yet (secrets MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET)." };
+  const { data: s } = await supabase.from("report_settings").select("value").eq("key", "sender").maybeSingle();
+  const sender = s && s.value;
+  if (!sender) return { sent: false, error: "No sender mailbox in report_settings." };
+  const tok = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: client, client_secret: secret, scope: "https://graph.microsoft.com/.default", grant_type: "client_credentials" }),
+  });
+  const tj = await tok.json().catch(() => ({}));
+  if (!tok.ok || !tj.access_token) return { sent: false, error: `Microsoft sign-in failed (${tok.status}): ${String(tj.error_description || tj.error || "").slice(0, 300)}` };
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  const res = await fetch("https://api.resend.com/emails", {
+  const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/sendMail`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: Deno.env.get("REPORT_FROM") || "Oryx StockFlow <onboarding@resend.dev>", to, subject, html,
-      attachments: [{ filename: name, content: btoa(bin) }] }),
+    headers: { Authorization: `Bearer ${tj.access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(graphMessage({ to, subject, html, fileName: name, contentBase64: btoa(bin) })),
   });
+  if (res.status === 202) return { sent: true, from: sender };
   const body = await res.text();
-  return res.ok ? { sent: true, id: (() => { try { return JSON.parse(body).id; } catch { return null; } })() } : { sent: false, error: `Resend ${res.status}: ${body.slice(0, 300)}` };
+  return { sent: false, error: `Microsoft Graph ${res.status}: ${body.slice(0, 300)}` };
 }
 
 Deno.serve(async (req) => {
