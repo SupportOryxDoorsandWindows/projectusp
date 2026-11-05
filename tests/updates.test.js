@@ -68,4 +68,16 @@ assert.equal(validateForm({ ...good, version: "x".repeat(41) }, "draft").ok, fal
   assert.deepEqual(popupQueue(pl, new Set(["a", "b", "d"]), now, 14), []);
 }
 
+// Details formatting: headings, numbered steps, bullets, notes, screen words; always escaped
+{
+  const { formatDetails } = context.window.ORYX_UPDATES_CORE;
+  const h = formatDetails('Step 1 – Add the order (when the PO is sent)\n1. Click "+ New PO".\n2. Check:\n   ✔ "All read" = ok.\n\nGood to know\n• Stock <b> only at Check-in.\n\nPlain text:\nline two');
+  assert.ok(/<h3 class="upd-h"><span class="upd-step">Step 1<\/span><span>Add the order<\/span><small>when the PO is sent<\/small><\/h3>/.test(h), h);
+  assert.ok(/<ol class="upd-ol"><li>Click <span class="upd-q">\+ New PO<\/span>\.<\/li><li>Check:<span class="upd-sub"><span class="upd-ok">✔<\/span> <span class="upd-q">All read<\/span> = ok\.<\/span><\/li><\/ol>/.test(h), h);
+  assert.ok(/<h3 class="upd-h"><span>Good to know<\/span><\/h3><ul class="upd-ul"><li>Stock &lt;b&gt; only at Check-in\.<\/li><\/ul>/.test(h), h);
+  assert.ok(/<p>Plain text:<br>line two<\/p>/.test(h), h);
+  assert.ok(/<h3 class="upd-h"><span>Good to know<\/span>/.test(formatDetails("GOOD TO KNOW\n• x")));
+  assert.equal(formatDetails("These items:\n• a"), '<p>These items:</p><ul class="upd-ul"><li>a</li></ul>');
+}
+
 console.log("updates tests passed");

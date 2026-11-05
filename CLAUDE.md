@@ -638,6 +638,11 @@ product lines — never treat one family's item as a match for another's:
   `tests/sql/supabase-base.sql` + the SQL file + `tests/sql/system-updates.test.sql`.
   The Supabase connector times out on SQL that catches errors (exception
   blocks), so don't test refusals through it.
+- Details are FORMATTED (2026-11-05, owner: "put a proper design for the
+  writing"): `formatDetails` turns the plain text into headings (short line
+  before a list, ALL CAPS line, "Step N – title (note)" = step badge),
+  numbered steps ("1. "), bullets ("• " / "- "), indented notes under a
+  step (✔ / ✘ coloured), "quoted words" = screen labels. Escaped first.
 - POP-UP when the app is opened (2026-11-05, owner: "once they open the
   application the new update ... will pop"): after the FIRST load only,
   `popNew` opens the published, unread updates of the last 14 days
