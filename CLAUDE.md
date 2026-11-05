@@ -147,6 +147,8 @@ product lines — never treat one family's item as a match for another's:
 
 ## UI layout (approved "Oryx Inventory — New UI Proposal", 12 pages)
 
+- Sidebar Stock order (2026-11-05, user's request): Dashboard, Master
+  Inventory, Check-out, Check-in, Delivery Notes, Activity, Reports (Soon).
 - Shell: left sidebar (`.side`, `nav.side-nav`; Products / Stock / Admin,
   Reports is a disabled "Soon" item) and a `.page-head` band
   (title, subtitle, action) + `.page-body` per view. Tabs are still
