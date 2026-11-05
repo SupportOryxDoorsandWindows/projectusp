@@ -225,12 +225,18 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
 
   // Supplier breakdown + filters
   await p.click('[data-tr-group="Fusion"]'); await p.waitForTimeout(200);
-  check((await p.$$("#trTable tbody tr[data-tr-po]")).length === 2, "supplier card Fusion: only its 2 lines");
-  await p.click('[data-tr-group="Fusion"]'); await p.fill("#trSearch", "brake"); await p.waitForTimeout(200);
-  check((await p.$$("#trTable tbody tr[data-tr-po]")).length === 1, "search 'brake': 1 line");
+  check((await p.$$("#trTable tr[data-tr-toggle]")).length === 1 && !(await p.$("#trTable tr.tr-sub")), "supplier card Fusion: one PO row, materials closed");
+  await p.click('#trTable tr[data-tr-toggle="2"]'); await p.waitForTimeout(150);
+  check((await p.$$("#trTable tr.tr-sub tr[data-tr-po]")).length === 2 && /Materials 1–2 of 2/.test(await p.innerText("#trTable")), "click the PO row: its 2 materials open underneath");
+  await p.click('#trTable tr[data-tr-toggle="2"]'); await p.waitForTimeout(150);
+  check(!(await p.$("#trTable tr.tr-sub")), "click again: closed");
+  await p.click('[data-tr-group="Fusion"]'); await p.waitForTimeout(150);
+  check((await p.$$("#trTable tr[data-tr-toggle]")).length === 2 && /2 purchase orders/.test(await p.innerText("#trTable")), "all: 2 PO rows");
+  await p.fill("#trSearch", "brake"); await p.waitForTimeout(200);
+  check((await p.$$("#trTable tr[data-tr-toggle]")).length === 1 && (await p.$$("#trTable tr.tr-sub tr[data-tr-po]")).length === 1, "search 'brake': only its PO, opened, 1 line");
   await p.fill("#trSearch", ""); await p.waitForTimeout(150);
-  await p.click('[data-tr-sort="qty_pending"]'); await p.click('[data-tr-sort="qty_pending"]'); await p.waitForTimeout(150);
-  check(/310028/.test(await p.innerText("#trTable tbody tr:first-child")), "sort by pending (descending): Track first");
+  await p.click('[data-tr-sort="pending_aed"]'); await p.click('[data-tr-sort="pending_aed"]'); await p.waitForTimeout(150);
+  check(/PO26-2106/.test(await p.innerText("#trTable tr[data-tr-toggle]")), "sort by pending value (descending): PO26-2106 first");
   if (shot) await p.screenshot({ path: shot, fullPage: true });
 
   // Receive from Transit -> Check-in -> PO updated
@@ -286,7 +292,7 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
 
   // PO detail
   await p.click('nav button[data-v="transit"]'); await p.waitForTimeout(600);
-  await p.click('#trTable tr[data-tr-po="1"]'); await p.waitForSelector("#trDlg[open]");
+  await p.click('#trTable tr[data-tr-toggle="1"]'); await p.click('#trTable button[data-tr-po="1"]'); await p.waitForSelector("#trDlg[open]");
   const det = await p.innerText("#trDlg");
   check(/DN-778/.test(det) && /INV-4001/.test(det) && /310028 × 4,000/.test(det) && /134002 × 600/.test(det), "PO detail: delivery history with DN, Check-in and quantities");
   check(/Partially received/i.test(det) && !(await p.$("#trAdm")), "status Partially received; no Admin box for staff");
@@ -296,6 +302,28 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
   check(up && up.a.p.expected_delivery === "2026-12-20" && up.a.p.payment_status === "partially_paid" && /Saved/.test(await p.innerText("#trEMsg")), "edit expected date + payment: saved");
   check(/expected delivery: 2026-12-15 → 2026-12-20/.test(await p.textContent("#trDlg .tr-log")), "history of changes shows the edit");
   await p.click("[data-tr-close]");
+
+  // A PO with 12 materials: opened 10 per page
+  {
+    const wb3 = X.utils.book_new();
+    X.utils.book_append_sheet(wb3, X.utils.aoa_to_sheet([["PO Number", "Supplier", "Material Code", "Description", "Qty", "Unit", "Unit Price", "Currency"],
+      ...Array.from({ length: 12 }, (_, i) => ["PO-LONG", "Fusion Trading LLC", `L-${i + 1}`, `Long part ${i + 1}`, 1, "pcs", 1, "AED"])]), "Incoming");
+    const xf3 = path.join(os.tmpdir(), "transit-long.xlsx"); X.writeFile(wb3, xf3);
+    await p.click("#trNew"); await p.waitForSelector("#trNewDlg[open]");
+    await p.setInputFiles("#trXls", xf3); await p.waitForTimeout(1200);
+    await p.click("[data-tr-save]"); await p.waitForTimeout(900);
+    if (await p.$("#trNewDlg[open]")) await p.click("[data-tr-nclose]");
+    await p.click('nav button[data-v="transit"]'); await p.waitForTimeout(600);
+    const lid = db.orders.find((o) => o.po_number === "PO-LONG").id;
+    await p.click(`#trTable tr[data-tr-toggle="${lid}"]`); await p.waitForTimeout(150);
+    const subSel = `#trTable tr[data-tr-toggle="${lid}"] + tr.tr-sub`, sub = () => p.innerText(subSel);
+    check((await p.$$(`${subSel} tr[data-tr-po]`)).length === 10 && /Materials 1–10 of 12/.test(await sub()) && /Page 1 of 2/.test(await sub()), "12 materials: first page shows 10");
+    await p.click(`[data-tr-page="${lid}:1"]`); await p.waitForTimeout(150);
+    check((await p.$$(`${subSel} tr[data-tr-po]`)).length === 2 && /Materials 11–12 of 12/.test(await sub()) && /Long part 12/.test(await sub()), "Next: materials 11–12");
+    await p.click(`[data-tr-page="${lid}:0"]`); await p.waitForTimeout(150);
+    check(/Materials 1–10 of 12/.test(await sub()), "Previous: back to 1–10");
+    if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-open.png"), fullPage: true });
+  }
 
   // Optional: the real PO / quotation PDFs
   if (docs) {
@@ -327,7 +355,7 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
   {
     const a = await session(browser, "admin");
     await a.p.click('nav button[data-v="transit"]'); await a.p.waitForTimeout(600);
-    await a.p.click('#trTable tr[data-tr-po="1"]'); await a.p.waitForSelector("#trDlg[open]");
+    await a.p.click('#trTable tr[data-tr-toggle="1"]'); await a.p.click('#trTable tr.tr-sub tr[data-tr-po="1"]'); await a.p.waitForSelector("#trDlg[open]");
     check(!!(await a.p.$("#trAdm")), "admin: Admin box in the PO");
     await a.p.click(".tr-admin summary");
     const jig = db.lines.find((l) => l.order_id === 1 && l.item_code === "90001T");

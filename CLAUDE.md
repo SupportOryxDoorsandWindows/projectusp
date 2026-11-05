@@ -335,8 +335,13 @@ product lines — never treat one family's item as a match for another's:
   transit AED = open POs' pending x price x rate, ordered / received /
   pending qty, open POs), supplier cards Freedom / Renson / Fusion / Other
   (click = filter), filters (supplier, PO, material, delivery / payment
-  status, expected from-to, show completed), search, sortable 14-column
-  table (one row per PO line), PO window (details, edit, materials,
+  status, expected from-to, show completed), search, table with ONE ROW
+  PER PO (2026-11-05, user: the line list was too long; `groupByPo`:
+  quotation, materials pending of total, pending qty / value AED, payment,
+  status, expected, last updated; sortable): a click opens its materials
+  underneath, 10 per page (`pageOf`, Previous / Next); a search or Material
+  filter shows only the POs with a matching line, already opened, with only
+  those lines; "Open PO details" or a material row = the PO window (details, edit, materials,
   delivery history, documents, change history, Admin box). Its 3 dialogs
   are moved to <body> (they open from the Check-in page too).
 - + New PO: typed, or "Read PO / quotation PDF" (pdf.js text via

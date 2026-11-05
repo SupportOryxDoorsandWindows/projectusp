@@ -1690,7 +1690,14 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 .tr-scroll{overflow-x:auto; border:1px solid #DCE3E6; border-radius:12px; background:var(--white)}
 .tr-table{width:100%; border-collapse:collapse; font-size:13.5px}
 .tr-table th,.tr-table td{padding:9px 10px; white-space:nowrap; border-bottom:1px solid #EEF2F4; text-align:left}
-.tr-table td:nth-child(4){white-space:normal; min-width:180px}
+.tr-lines-view td:nth-child(2){white-space:normal; min-width:220px}
+.tr-po-row{cursor:pointer} .tr-po-row:hover > td,.tr-po-row:focus > td{background:#F3F7F8} .tr-po-row.open > td{background:#EEF4F6; border-bottom-color:transparent}
+.tr-exp,.tr-exp-h{width:28px; color:var(--brand); font-size:14px; padding-right:0 !important}
+.tr-sub > td{padding:0 10px 12px 38px !important; background:#EEF4F6; white-space:normal !important}
+.tr-sub-in{background:var(--white); border:1px solid #DCE3E6; border-radius:10px; overflow-x:auto}
+.tr-lines-view{font-size:13px} .tr-lines-view th{background:#F7FAFB}
+.tr-pager{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 10px}
+.tr-pager .db-link{margin-left:8px} .tr-pager .btn-sm{min-height:32px}
 .tr-table .num{text-align:right}
 .tr-table tbody tr[data-tr-po]{cursor:pointer} .tr-table tbody tr[data-tr-po]:hover > td,.tr-table tbody tr[data-tr-po]:focus > td{background:#F3F7F8}
 .tr-sort{background:none; border:0; padding:0; font:inherit; font-weight:600; color:var(--brand); cursor:pointer}
