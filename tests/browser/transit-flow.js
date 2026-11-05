@@ -305,6 +305,15 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
     const t = await p.innerText("#trNewDlg");
     check((await p.inputValue("#trNPo")) === "PO26-2107" && (await p.inputValue("#trNCur")) === "AUD" && /12 lines add up to AUD [\d,.]+ = the document total/.test(t), "real PDFs: PO26-2107 + SQ-00000388 read, 12 lines = the document total");
     await p.click("[data-tr-nclose]");
+    // The PO alone first (it lists no materials), then the quotation added
+    await p.click("#trNew"); await p.waitForSelector("#trNewDlg[open]");
+    await p.setInputFiles("#trPdf", [f(/PO_26-2106/)]); await p.waitForTimeout(3000);
+    check(/press Read PO \/ quotation PDF again and choose the quotation/.test(await p.innerText("#trNewDlg")), "PO alone: says to add the quotation");
+    await p.setInputFiles("#trPdf", [f(/S00231/)]); await p.waitForTimeout(5000);
+    const t2 = await p.innerText("#trNewDlg");
+    check((await p.inputValue("#trNPo")) === "PO26-2106" && /Materials \(66\)/.test(t2) && /66 lines add up to USD [\d,.]+ = the document total/.test(t2) && !/No item lines/.test(t2),
+      "quotation added after the PO: PO26-2106 with 66 lines = the document total");
+    await p.click("[data-tr-nclose]");
   }
 
   const staffCalls = db.calls.filter((c) => /^transit_(admin|cancel|delete)/.test(c.name)).length;

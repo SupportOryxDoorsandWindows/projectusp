@@ -345,7 +345,10 @@ product lines — never treat one family's item as a match for another's:
   price = amount; layouts: Freedom Global "[code] desc ... qty Units USD
   price 0% USD amount", Freedom AU quote (pdf.js gives it right to left),
   left-to-right generic; lines total vs document total and PO quote ref vs
-  quote number are checked), or "Import Excel list" (`parseSheetRows`:
+  quote number are checked; PDFs read earlier on the same form are read
+  again with a new pick, so the PO and then its quotation can be chosen one
+  after the other -- a PO that lists no materials says to add the quotation,
+  2026-11-05 after the owner uploaded only PO26-2106), or "Import Excel list" (`parseSheetRows`:
   heading row with PO Number / Supplier / Material Code / Description / Qty
   / Unit / Unit Price / Currency / Expected delivery...; one PO at a time,
   POs already here left out). Always a preview; Save = `transit_create_order`,
