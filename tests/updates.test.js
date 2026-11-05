@@ -52,4 +52,20 @@ assert.equal(validateForm({ ...good, title: "x".repeat(151) }, "draft").ok, fals
 assert.equal(validateForm({ ...good, summary: "x".repeat(501) }, "draft").ok, false);
 assert.equal(validateForm({ ...good, version: "x".repeat(41) }, "draft").ok, false);
 
+// Pop-up when the app is opened: unread, published in the last 14 days, not shown yet, oldest first
+{
+  const { popupQueue } = context.window.ORYX_UPDATES_CORE;
+  const now = Date.parse("2026-11-05T10:00:00Z");
+  const pl = [
+    { id: "a", status: "published", published_at: "2026-11-05T08:00:00Z" },
+    { id: "b", status: "published", published_at: "2026-11-01T08:00:00Z" },
+    { id: "c", status: "published", published_at: "2026-10-01T08:00:00Z" },
+    { id: "d", status: "published", published_at: "2026-11-04T08:00:00Z" },
+    { id: "e", status: "draft", published_at: null },
+  ];
+  assert.deepEqual(popupQueue(pl, new Set(["d"]), now, 14, new Set()).map((u) => u.id), ["b", "a"]);
+  assert.deepEqual(popupQueue(pl, new Set(), now, 14, new Set(["b"])).map((u) => u.id), ["d", "a"]);
+  assert.deepEqual(popupQueue(pl, new Set(["a", "b", "d"]), now, 14), []);
+}
+
 console.log("updates tests passed");

@@ -35,6 +35,17 @@
     return published.filter((u) => u.status === "published" && !readIds.has(u.id));
   }
 
+  // Shown by themselves when the app is opened (2026-11-05, owner: "once
+  // they open the application the new update ... will pop"): published,
+  // unread, published in the last `days` days, not already shown in this
+  // browser tab; oldest first so they read in order.
+  function popupQueue(published, readIds, now, days, shownIds) {
+    const from = now - days * 86400000;
+    return unreadOf(published, readIds)
+      .filter((u) => u.published_at && Date.parse(u.published_at) >= from && !(shownIds && shownIds.has(u.id)))
+      .sort((a, b) => Date.parse(a.published_at) - Date.parse(b.published_at));
+  }
+
   // Search (title or short/full description, any case) + category.
   function filterUpdates(list, { q = "", cat = "all" } = {}) {
     const needle = String(q).trim().toLowerCase();
@@ -76,7 +87,7 @@
   const catBadge = (c) => `<span class="upd-cat upd-cat-${esc(c)}">${esc((CATEGORIES[c] || { label: c }).label)}</span>`;
   const paragraphs = (text) => String(text || "").split(/\n{2,}/).map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("");
 
-  root.ORYX_UPDATES_CORE = { CATEGORIES, LIMITS, unreadOf, filterUpdates, validateForm, when };
+  root.ORYX_UPDATES_CORE = { CATEGORIES, LIMITS, unreadOf, popupQueue, filterUpdates, validateForm, when };
 
   /* ------------------------------------------------------- the screens */
   const AUTH = root.ORYX_AUTH;
@@ -113,7 +124,9 @@
       st.published = pub.data || [];
       st.readIds = new Set((reads.data || []).map((r) => r.update_id));
       st.drafts = drafts.data || [];
+      const first = !st.loaded;
       st.loaded = true; st.loadError = null;
+      if (first) setTimeout(popNew, 600);
     } catch (err) {
       console.error("updates", err);
       st.loadError = err.message || String(err);
@@ -242,7 +255,7 @@
       <div class="upd-detail-body"><p class="upd-lead">${esc(u.summary)}</p>${u.details ? paragraphs(u.details) : ""}</div>`;
   }
 
-  function openDetails(id) {
+  function openDetails(id, pop) {
     const u = findUpdate(id);
     if (!u) return;
     let dlg = $("#updDetail");
@@ -251,19 +264,38 @@
       dlg.id = "updDetail"; dlg.className = "upd-dialog";
       dlg.setAttribute("aria-labelledby", "updDetailTitle");
       document.body.appendChild(dlg);
+      dlg.addEventListener("close", () => { pop_.queue = []; });
       dlg.addEventListener("click", (e) => {
         if (e.target === dlg || e.target.closest("[data-upd-close]")) dlg.close();
+        if (e.target.closest("[data-upd-next]")) { const n = pop_.queue.shift(); if (n) openDetails(n.id, true); else dlg.close(); return; }
         const ed = e.target.closest("[data-upd-edit]");
         if (ed) { dlg.close(); openForm(findUpdate(ed.dataset.updEdit)); }
       });
     }
-    dlg.innerHTML = `<div class="upd-dialog-inner">${detailsHtml(u)}
+    const more = pop ? pop_.queue.length : 0;
+    dlg.innerHTML = `<div class="upd-dialog-inner">${pop ? `<p class="upd-pop-note">What's new since your last visit${pop_.total > 1 ? ` · ${pop_.total - more} of ${pop_.total}` : ""}</p>` : ""}${detailsHtml(u)}
       <div class="upd-dialog-foot">
         ${isAdmin() ? `<button type="button" class="btn-outline" data-upd-edit="${esc(u.id)}">Edit</button>` : ""}
-        <button type="button" class="btn-dark" data-upd-close>Close</button>
+        ${more ? `<button type="button" class="btn-outline" data-upd-close>Close</button><button type="button" class="btn-dark" data-upd-next>Next update ›</button>`
+          : `<button type="button" class="btn-dark" data-upd-close>${pop ? "Got it" : "Close"}</button>`}
       </div></div>`;
     if (!dlg.open) dlg.showModal();
     if (u.status === "published") markRead([u.id]);
+  }
+
+  // Pop the new updates once, when the app is opened (first load only, never
+  // in the middle of work: not when another window is already open).
+  const POP_DAYS = 14, POP_KEY = "oryx_updates_popped";
+  const pop_ = { queue: [], total: 0 };
+  function popNew() {
+    if (document.querySelector("dialog[open]")) return;
+    let shown;
+    try { shown = new Set(JSON.parse(sessionStorage.getItem(POP_KEY) || "[]")); } catch (_) { shown = new Set(); }
+    const q = popupQueue(st.published, st.readIds, Date.now(), POP_DAYS, shown);
+    if (!q.length) return;
+    try { sessionStorage.setItem(POP_KEY, JSON.stringify([...shown, ...q.map((u) => u.id)])); } catch (_) { /* private mode: fine */ }
+    pop_.total = q.length; pop_.queue = q.slice(1);
+    openDetails(q[0].id, true);
   }
 
   /* ------------------------------------------------- full history page */
