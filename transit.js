@@ -761,12 +761,20 @@
     const FP = root.ORYX_FP, msg = $("#trNMsg");
     msg.className = "small"; msg.textContent = "Reading…";
     try {
+      // Files read before on this form are read again with the new ones, so
+      // the PO and its quotation can be chosen one after the other.
+      const before = (ui.draft.files || []).map((x) => x.file).filter((f) => f && /\.pdf$/i.test(f.name)
+        && !files.some((n) => n.name === f.name && n.size === f.size));
+      files = [...before, ...files];
       const docs = [];
       for (const f of files) { const text = await FP.extractPdfText(f); docs.push({ file: f, header: parseHeader(text), lines: parseLines(text) }); }
       const c = combineDocuments(docs);
       const keep = { expected_delivery: ui.draft.expected_delivery, payment_status: ui.draft.payment_status, notes: ui.draft.notes };
       const files2 = docs.map((x) => ({ file: x.file, kind: x.header.kind }));
-      await openNew(Object.assign({}, c.draft, keep, { files: files2, notes2: [...c.notes, `Read: ${files.map((f) => f.name).join(", ")}.`], problems2: c.problems, source: "pdf" }));
+      const notes2 = [...c.notes, `Read: ${files.map((f) => f.name).join(", ")}.`];
+      if (c.problems.some((x) => /No item lines/.test(x)) && docs.some((d) => d.header.kind === "po"))
+        notes2.push("This PO lists no materials itself (\"items as per quotation\"): press Read PO / quotation PDF again and choose the quotation; it is added to this PO.");
+      await openNew(Object.assign({}, c.draft, keep, { files: files2, notes2, problems2: c.problems, source: "pdf" }));
       const m = $("#trNMsg"); if (m) { m.className = "small ok"; m.textContent = "Read. Check every field before saving."; }
     } catch (e) { msg.className = "small error"; msg.textContent = "Could not read the file: " + (e.message || e); }
   }
