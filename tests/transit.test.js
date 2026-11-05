@@ -41,6 +41,21 @@ assert.equal(C.filterRows(rows, { from: "2027-01-01" }).length, 1);
 assert.equal(C.filterRows(rows, { search: "renson" }).length, 1);
 assert.deepEqual(C.sortRows(C.filterRows(rows, {}), "qty_pending", "desc").map((r) => r.id), [11, 21, 12]);
 
+// One row per PO (pending figures over the lines shown), lines in PO order
+const g = C.groupByPo(C.filterRows(rows, {}), "pending_aed", "desc");
+assert.deepEqual(g.map((x) => [x.id, x.lineCount, x.pendingLines, x.qty_pending, x.noPrice]), [[1, 2, 2, 6003, 1], [2, 1, 1, 20, 0]]);
+assert.equal(g[0].pending_aed, Math.round(6000 * 31.5 * 3.6725 * 100) / 100);
+assert.deepEqual(g[0].lines.map((l) => l.id), [11, 12]);
+assert.deepEqual(C.groupByPo(C.filterRows(rows, {}), "po_number", "desc").map((x) => x.id), [2, 1]);
+assert.deepEqual(C.groupByPo(C.filterRows(rows, {}), "lines", "asc").map((x) => x.id), [2, 1]);
+const gs = C.groupByPo(C.filterRows(rows, { search: "jig" }), "po_number", "asc");
+assert.deepEqual([gs.length, gs[0].lineCount], [1, 1], "a search keeps only the POs with a matching line, and only those lines");
+// Pages of 10
+const list = Array.from({ length: 66 }, (_, i) => i);
+assert.deepEqual((({ page, pages, from, to, items }) => [page, pages, from, to, items.length])(C.pageOf(list, 6, 10)), [6, 7, 61, 66, 6]);
+assert.equal(C.pageOf(list, 99, 10).page, 6); assert.equal(C.pageOf(list, -1, 10).page, 0);
+assert.deepEqual([C.pageOf([], 0, 10).pages, C.pageOf([], 0, 10).from], [1, 0]);
+
 // Lines: Freedom Global layout (code in brackets, numbers on their own lines)
 const a = C.parseLines(`DESCRIPTION  QUANTITY  UNIT PRICE  GST  AMOUNT
  [134002] Brake Rod (1.5m)

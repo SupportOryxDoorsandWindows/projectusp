@@ -112,6 +112,39 @@
     });
   }
 
+  // One entry per PO from (already filtered) line rows: the PO's own figures
+  // over the lines shown. key: po_number / supplier / lines / qty_pending /
+  // pending_aed / payment_status / delivery_status / expected_delivery / updated.
+  function groupByPo(rows, key, dir) {
+    const by = new Map();
+    for (const r of rows) {
+      let g = by.get(r.order_id);
+      if (!g) by.set(r.order_id, g = { id: r.order_id, order: r.order, po_number: r.po_number, supplier: r.supplier,
+        quote_ref: r.order.quote_ref || "", currency: r.currency, payment_status: r.payment_status, delivery_status: r.delivery_status,
+        expected_delivery: r.expected_delivery, open: r.open, lines: [], pendingLines: 0, qty_pending: 0, pending_aed: 0, updated: null, noPrice: 0 });
+      g.lines.push(r);
+      if (Number(r.qty_pending) > 0) g.pendingLines += 1;
+      g.qty_pending = round(g.qty_pending + (Number(r.qty_pending) || 0), 4);
+      g.pending_aed = round(g.pending_aed + (r.pending_aed || 0));
+      if (r.unit_price == null && Number(r.qty_pending) > 0) g.noPrice += 1;
+      if (r.updated && (!g.updated || r.updated > g.updated)) g.updated = r.updated;
+    }
+    const pos = [...by.values()];
+    pos.forEach((g) => { g.lines.sort((a, b) => a.line_no - b.line_no); g.lineCount = g.lines.length; });
+    const d = dir === "desc" ? -1 : 1, k = key === "lines" ? "lineCount" : key;
+    return pos.sort((a, b) => {
+      const x = a[k] == null ? "" : a[k], y = b[k] == null ? "" : b[k];
+      const c = typeof x === "number" || typeof y === "number" ? (Number(x) || 0) - (Number(y) || 0) : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return c * d || String(a.po_number).localeCompare(String(b.po_number), undefined, { numeric: true });
+    });
+  }
+  // Page n (0-based) of a list, size per page; n is kept in range.
+  function pageOf(list, n, size) {
+    const pages = Math.max(1, Math.ceil(list.length / size));
+    const p = Math.min(Math.max(0, Number(n) || 0), pages - 1);
+    return { page: p, pages, from: list.length ? p * size + 1 : 0, to: Math.min(list.length, (p + 1) * size), items: list.slice(p * size, (p + 1) * size) };
+  }
+
   /* ---- reading a PO / quote PDF (text from pdf.js, as extractPdfText) ---- */
   const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
   function isoDate(s) {
@@ -320,7 +353,7 @@
     return rows.filter((r) => r.created_at === t).map((r) => String(r.id));
   }
 
-  const CORE = { STATUS, PAYMENT, GROUPS, OPEN, poKey, supplierGroup, rowsOf, summarise, filterRows, sortRows, isoDate,
+  const CORE = { STATUS, PAYMENT, GROUPS, OPEN, poKey, supplierGroup, rowsOf, summarise, filterRows, sortRows, groupByPo, pageOf, isoDate,
     parseLines, parseHeader, combineDocuments, parseSheetRows, draftProblems, receiveCheck, latestBatch, documentTotal };
   root.ORYX_TRANSIT_CORE = CORE;
   if (typeof document === "undefined" || !root.ORYX_AUTH) return;
@@ -359,7 +392,7 @@
   }
 
   const ui = { orders: [], lines: [], receipts: [], rlines: [], docs: [], log: [], loaded: false, busy: false,
-    f: { showClosed: false }, sort: { key: "expected_delivery", dir: "asc" }, freedomItems: null, rensonItems: null, queue: [] };
+    f: { showClosed: false }, sort: { key: "expected_delivery", dir: "asc" }, expanded: new Set(), collapsed: new Set(), linePage: {}, freedomItems: null, rensonItems: null, queue: [] };
 
   async function load() {
     $("#trStatus").textContent = "Loading…";
@@ -414,26 +447,53 @@
       ${Object.keys(f).some((k) => k !== "showClosed" && f[k]) ? `<button type="button" class="db-link" id="trFClear">Clear filters</button>` : ""}`;
   }
 
-  const COLS = [["po_number", "PO number"], ["supplier", "Supplier"], ["item_code", "Code"], ["description", "Description"],
-    ["qty_ordered", "Ordered", "num"], ["qty_received", "Received", "num"], ["qty_pending", "Pending", "num"], ["unit", "Unit"],
-    ["unit_price", "Unit price", "num"], ["line_value", "Line value", "num"], ["payment_status", "Payment"], ["delivery_status", "Delivery status"],
-    ["expected_delivery", "Expected"], ["updated", "Last updated"]];
+  // One row per PO (user's choice 2026-11-05: the line list was too long);
+  // a PO opens its materials underneath, LINES_PER_PAGE at a time.
+  const COLS = [["po_number", "PO number"], ["supplier", "Supplier"], ["quote_ref", "Quotation"], ["lines", "Materials", "num"],
+    ["qty_pending", "Pending qty", "num"], ["pending_aed", "Pending value", "num"], ["payment_status", "Payment"],
+    ["delivery_status", "Delivery status"], ["expected_delivery", "Expected"], ["updated", "Last updated"]];
+  const LINES_PER_PAGE = 10;
+  const lineFilterOn = () => !!(String(ui.f.search || "").trim() || String(ui.f.material || "").trim());
+  const isOpenPo = (id) => ui.expanded.has(id) || (lineFilterOn() && !ui.collapsed.has(id));
+  function linesBlock(g) {
+    const pg = pageOf(g.lines, ui.linePage[g.id], LINES_PER_PAGE);
+    ui.linePage[g.id] = pg.page;
+    return `<tr class="tr-sub"><td colspan="${COLS.length + 1}"><div class="tr-sub-in">
+      <table class="tr-table tr-lines-view"><thead><tr><th>Code</th><th>Description</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Pending</th><th>Unit</th><th class="num">Unit price</th><th class="num">Line value</th></tr></thead>
+      <tbody>${pg.items.map((r) => `<tr data-tr-po="${r.order_id}" tabindex="0" title="Open PO ${esc(r.po_number)}">
+        <td><code>${esc(r.item_code || "—")}</code></td><td>${esc(r.description)}</td>
+        <td class="num">${fmtN(r.qty_ordered)}</td><td class="num">${fmtN(r.qty_received)}</td><td class="num"><b>${fmtN(r.qty_pending)}</b></td><td>${esc(r.unit || "")}</td>
+        <td class="num">${r.unit_price == null ? "—" : money(r.unit_price, r.currency)}</td><td class="num">${r.line_value == null ? "—" : money(r.line_value, r.currency)}</td></tr>`).join("")}</tbody></table>
+      <div class="tr-pager"><span class="small muted">Materials ${pg.from}–${pg.to} of ${g.lines.length}${lineFilterOn() && g.lines.length < ui.lines.filter((l) => l.order_id === g.id).length ? " (matching the search)" : ""}</span>
+        ${pg.pages > 1 ? `<button type="button" class="btn-outline btn-sm" data-tr-page="${g.id}:${pg.page - 1}"${pg.page === 0 ? " disabled" : ""}>‹ Previous</button>
+        <span class="small">Page ${pg.page + 1} of ${pg.pages}</span>
+        <button type="button" class="btn-outline btn-sm" data-tr-page="${g.id}:${pg.page + 1}"${pg.page >= pg.pages - 1 ? " disabled" : ""}>Next ›</button>` : ""}
+        <button type="button" class="db-link" data-tr-po="${g.id}">Open PO details</button></div></div></td></tr>`;
+  }
   function drawTable() {
-    const rows = sortRows(filterRows(rowsOf(ui.orders, ui.lines), ui.f), ui.sort.key, ui.sort.dir);
-    const total = round(rows.reduce((s, r) => s + (r.pending_aed || 0), 0));
     if (!ui.orders.length) {
       $("#trTable").innerHTML = `<div class="tr-empty"><b>No purchase orders yet.</b><p>Add one with <b>+ New PO</b> (type it, or read the PO / quotation PDF or an Excel list). Nothing here is stock until it is received through Check-in.</p></div>`;
       return;
     }
-    $("#trTable").innerHTML = `<div class="tr-count small muted">${rows.length} line${rows.length === 1 ? "" : "s"} · pending value ${aed(total)}</div>
-      <div class="tr-scroll"><table class="mi-table tr-table"><thead><tr>${COLS.map(([k, t, c]) =>
+    const rows = filterRows(rowsOf(ui.orders, ui.lines), ui.f);
+    const pos = groupByPo(rows, ui.sort.key, ui.sort.dir);
+    const total = round(rows.reduce((s, r) => s + (r.pending_aed || 0), 0));
+    $("#trTable").innerHTML = `<div class="tr-count small muted">${pos.length} purchase order${pos.length === 1 ? "" : "s"} · ${rows.length} material line${rows.length === 1 ? "" : "s"} · pending value ${aed(total)} · click a PO to see its materials</div>
+      <div class="tr-scroll"><table class="mi-table tr-table tr-po-table"><thead><tr><th class="tr-exp-h"><span class="sr-only">Open</span></th>${COLS.map(([k, t, c]) =>
         `<th class="${c || ""}"><button type="button" class="tr-sort" data-tr-sort="${k}">${esc(t)}${ui.sort.key === k ? (ui.sort.dir === "asc" ? " ▲" : " ▼") : ""}</button></th>`).join("")}</tr></thead>
-      <tbody>${rows.map((r) => `<tr data-tr-po="${r.order_id}" tabindex="0" title="Open PO ${esc(r.po_number)}">
-        <td><b>${esc(r.po_number)}</b></td><td>${esc(r.supplier)}</td><td><code>${esc(r.item_code || "—")}</code></td><td>${esc(r.description)}</td>
-        <td class="num">${fmtN(r.qty_ordered)}</td><td class="num">${fmtN(r.qty_received)}</td><td class="num"><b>${fmtN(r.qty_pending)}</b></td><td>${esc(r.unit || "")}</td>
-        <td class="num">${r.unit_price == null ? "—" : money(r.unit_price, r.currency)}</td><td class="num">${r.line_value == null ? "—" : money(r.line_value, r.currency)}</td>
-        <td>${payBadge(r.payment_status)}</td><td>${badge(r.delivery_status)}</td><td>${day(r.expected_delivery)}</td><td class="small">${day(r.updated)}</td></tr>`).join("")
-        || `<tr><td colspan="${COLS.length}" class="muted">Nothing matches these filters.</td></tr>`}</tbody></table></div>`;
+      <tbody>${pos.map((g) => { const open = isOpenPo(g.id);
+        return `<tr class="tr-po-row${open ? " open" : ""}" data-tr-toggle="${g.id}" tabindex="0" aria-expanded="${open}" title="${open ? "Hide" : "Show"} the materials of ${esc(g.po_number)}">
+        <td class="tr-exp">${open ? "▾" : "▸"}</td><td><b>${esc(g.po_number)}</b></td><td>${esc(g.supplier)}</td><td>${esc(g.quote_ref || "—")}</td>
+        <td class="num">${g.pendingLines} pending of ${g.lineCount}</td><td class="num"><b>${fmtN(g.qty_pending)}</b></td>
+        <td class="num">${aed(g.pending_aed)}${g.noPrice ? ` <span class="small muted">(${g.noPrice} without price)</span>` : ""}</td>
+        <td>${payBadge(g.payment_status)}</td><td>${badge(g.delivery_status)}</td><td>${day(g.expected_delivery)}</td><td class="small">${day(g.updated)}</td></tr>${open ? linesBlock(g) : ""}`; }).join("")
+        || `<tr><td colspan="${COLS.length + 1}" class="muted">Nothing matches these filters.</td></tr>`}</tbody></table></div>`;
+  }
+  function togglePo(id) {
+    const k = Number(id) || id;
+    if (isOpenPo(k)) { ui.expanded.delete(k); ui.collapsed.add(k); } else { ui.expanded.add(k); ui.collapsed.delete(k); }
+    drawTable();
+    const r = $(`#trTable [data-tr-toggle="${id}"]`); if (r) r.focus();
   }
 
   function onFilter(e) {
@@ -444,6 +504,7 @@
       if (e.type === "input" && !typed) return;          // selects / dates: on change
       f[map[t.id]] = t.value;
       if (t.id === "trFSupplier") f.group = "";
+      ui.linePage = {}; ui.collapsed.clear();
     } else if (t.id === "trFClosed") {
       if (e.type !== "change") return;
       f.showClosed = t.checked;
@@ -979,13 +1040,24 @@
       const s = t.closest("[data-tr-sort]");
       if (s) { const k = s.dataset.trSort; ui.sort = { key: k, dir: ui.sort.key === k && ui.sort.dir === "asc" ? "desc" : "asc" }; drawTable(); return; }
       if (t.id === "trFClear") { ui.f = { showClosed: ui.f.showClosed }; draw(); return; }
+      const pgb = t.closest("[data-tr-page]");
+      if (pgb) { const [id, n] = pgb.dataset.trPage.split(":"); ui.linePage[Number(id) || id] = Number(n); drawTable(); return; }
       const row = t.closest("[data-tr-po]");
-      if (row) openPo(row.dataset.trPo);
+      if (row) { openPo(row.dataset.trPo); return; }
+      const tg = t.closest("[data-tr-toggle]");
+      if (tg) { togglePo(tg.dataset.trToggle); return; }
       if (t.id === "trNew") openNew();
       if (t.id === "trReceive") openReceive(ui.f.po || null);
       if (t.id === "trReload") load();
     });
-    v.addEventListener("keydown", (e) => { const row = e.target.closest && e.target.closest("[data-tr-po]"); if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openPo(row.dataset.trPo); } });
+    v.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+      const tg = e.target.closest && e.target.closest("tr[data-tr-toggle]");
+      if (tg) { e.preventDefault(); togglePo(tg.dataset.trToggle); return; }
+      const row = e.target.closest && e.target.closest("tr[data-tr-po]");
+      if (row) { e.preventDefault(); openPo(row.dataset.trPo); }
+    });
     dlg().addEventListener("click", (e) => {
       const t = e.target;
       if (t.closest("[data-tr-close]")) dlg().close();
