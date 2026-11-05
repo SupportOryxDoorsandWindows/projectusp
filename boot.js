@@ -325,6 +325,11 @@
       const dn = document.createElement("script");
       dn.src = "delivery-notes.js?v=" + Date.now();
       document.body.appendChild(dn);
+      // Materials in Transit (all active staff; 2026-11-05): POs ordered but
+      // not yet received. Never stock; receiving goes through Check-in.
+      const tr = document.createElement("script");
+      tr.src = "transit.js?v=" + Date.now();
+      document.body.appendChild(tr);
       // Film Cutting (Admins only; its own tab, hidden for everyone else).
       const fc = document.createElement("script");
       fc.src = "film-cutting.js?v=" + Date.now();

@@ -70,7 +70,36 @@ export function summarise(lines) {
 }
 
 // inventories: [{name, lines, opening (number|null), closing (number|null), note?}]
-export function buildWorkbook(XLSX, { period, inventories, preparedAt, notes = [] }) {
+// Materials in Transit (2026-11-05, supabase/sql/materials_in_transit.sql):
+// what is ordered but not yet received, at the time the report is made.
+// Open POs only (not completed / cancelled). Value = outstanding qty x unit
+// price x the PO's rate to AED. Shown APART from the stock value (it is not
+// stock). Pending QC = POs marked "Pending QC" (a label: what they received
+// is already in stock); their received value is shown for information.
+export const TRANSIT_STATUS = { ordered: "Ordered", in_transit: "In transit", partially_received: "Partially received",
+  pending_qc: "Pending QC", completed: "Completed", cancelled: "Cancelled" };
+export function transitSummary(orders, lines) {
+  const open = (orders || []).filter((o) => o.delivery_status !== "completed" && o.delivery_status !== "cancelled");
+  const pos = open.map((o) => {
+    const ls = (lines || []).filter((l) => String(l.order_id) === String(o.id));
+    const rate = Number(o.rate_to_aed) || 1;
+    const val = (q) => ls.reduce((t, l) => t + (l.unit_price == null ? 0 : Number(l[q]) * Number(l.unit_price)), 0);
+    return { id: o.id, po: o.po_number, quote: o.quote_ref || "", supplier: o.supplier, group: o.supplier_group, status: TRANSIT_STATUS[o.delivery_status] || o.delivery_status,
+      payment: o.payment_status, expected: o.expected_delivery || "", currency: o.currency, rate, lines: ls,
+      pendingLines: ls.filter((l) => Number(l.qty_pending) > 0).length, noPrice: ls.some((l) => l.unit_price == null && Number(l.qty_pending) > 0),
+      pendingAed: r2(val("qty_pending") * rate), receivedAed: r2(val("qty_received") * rate), pendingQc: o.delivery_status === "pending_qc" };
+  }).sort((a, b) => a.group.localeCompare(b.group) || a.po.localeCompare(b.po));
+  const byGroup = {};
+  for (const g of ["Freedom", "Renson", "Fusion", "Other"]) {
+    const gp = pos.filter((p) => p.group === g);
+    byGroup[g] = { pos: gp.length, value: r2(gp.reduce((t, p) => t + p.pendingAed, 0)) };
+  }
+  const qc = pos.filter((p) => p.pendingQc);
+  return { pos, byGroup, totalAed: r2(pos.reduce((t, p) => t + p.pendingAed, 0)),
+    pendingQc: { pos: qc.length, receivedAed: r2(qc.reduce((t, p) => t + p.receivedAed, 0)) } };
+}
+
+export function buildWorkbook(XLSX, { period, inventories, preparedAt, notes = [], transit = null }) {
   const navy = "0F2C3F";
   const H = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: navy } }, alignment: { wrapText: true, vertical: "center" } };
   const B = { font: { bold: true } };
@@ -96,6 +125,24 @@ export function buildWorkbook(XLSX, { period, inventories, preparedAt, notes = [
     if (inv.closing == null) cKnown = false; else c += inv.closing;
   }
   s.push(["Total", "", oKnown ? r2(o) : "not recorded", "", cKnown ? r2(c) : "not recorded"]);
+  let transitHead = -1, transitRows = [];
+  if (transit) {
+    s.push([]);
+    s.push([`Materials in transit (ordered, not yet received; NOT in the stock value) at ${preparedAt}`]);
+    transitHead = s.length;
+    s.push(["Supplier", "PO no. / quotation", "Status", "Lines outstanding", "Value in transit (AED)"]);
+    if (!transit.pos.length) s.push(["No open purchase orders."]);
+    for (const p of transit.pos) {
+      transitRows.push(s.length);
+      s.push([p.supplier, `${p.po}${p.quote ? " / " + p.quote : ""}`, p.status + (p.expected ? ` (expected ${p.expected})` : ""), p.pendingLines, p.pendingAed]);
+    }
+    for (const [g, x] of Object.entries(transit.byGroup)) if (x.pos) s.push([`  ${g}`, `${x.pos} open PO${x.pos === 1 ? "" : "s"}`, "", "", x.value]);
+    s.push(["Total in transit", "", "", "", transit.totalAed]);
+    if (transit.pendingQc.pos) s.push([`Pending QC: ${transit.pendingQc.pos} PO(s), AED ${transit.pendingQc.receivedAed.toLocaleString("en-US", { minimumFractionDigits: 2 })} received and awaiting inspection (already in the stock value).`]);
+    if (transit.pos.some((p) => p.noPrice)) s.push(["Some outstanding lines have no price; they count as 0 in the value in transit."]);
+    s.push([]);
+    s.push(["Closing stock value (excluding materials in transit)", "", "", "", cKnown ? r2(c) : "not recorded"]);
+  }
   if (notes.length) { s.push([]); s.push(["Notes"]); for (const n of notes) s.push(["• " + n]); }
   const ws = XLSX.utils.aoa_to_sheet(s);
   ws["!cols"] = [{ wch: 18 }, { wch: 44 }, { wch: 16 }, { wch: 8 }, { wch: 16 }];
@@ -110,6 +157,16 @@ export function buildWorkbook(XLSX, { period, inventories, preparedAt, notes = [
     }
   }
   if (ws[XLSX.utils.encode_cell({ r: valueRow, c: 0 })]) ws[XLSX.utils.encode_cell({ r: valueRow, c: 0 })].s = B;
+  if (transitHead >= 0) {
+    const Y = { font: { bold: true }, fill: { patternType: "solid", fgColor: { rgb: "FFF2A8" } } };   // PO / quote highlighted (accounts' request)
+    for (let col = 0; col < 5; col++) { const a = XLSX.utils.encode_cell({ r: transitHead, c: col }); if (ws[a]) ws[a].s = H; }
+    ws[XLSX.utils.encode_cell({ r: transitHead - 1, c: 0 })].s = B;
+    for (const r of transitRows) { const a = XLSX.utils.encode_cell({ r, c: 1 }); if (ws[a]) ws[a].s = Y; }
+    for (let r = transitHead + 1; r < s.length; r++) {
+      const a = XLSX.utils.encode_cell({ r, c: 4 }); if (ws[a] && typeof ws[a].v === "number") ws[a].z = money;
+      if (/^(Total in transit|Closing stock value)/.test(String(s[r][0] || ""))) { ws[XLSX.utils.encode_cell({ r, c: 0 })].s = B; if (ws[a]) ws[a].s = B; }
+    }
+  }
   XLSX.utils.book_append_sheet(wb, ws, "Summary");
 
   // One sheet per inventory
@@ -135,6 +192,28 @@ export function buildWorkbook(XLSX, { period, inventories, preparedAt, notes = [
     if (sorted.length) { sh[XLSX.utils.encode_cell({ r: rows.length - 1, c: 0 })].s = B; sh["!autofilter"] = { ref: `A1:M${rows.length - 1}` }; }
     XLSX.utils.book_append_sheet(wb, sh, `${inv.name} transactions`);
   }
+  if (transit) {
+    const th = ["PO no.", "Quotation", "Supplier", "Status", "Payment", "Expected", "Item code", "Description", "Unit", "Ordered", "Received",
+      "Cancelled", "Outstanding", "Unit price", "Currency", "Rate to AED", "Outstanding value (AED)"];
+    const rows = [th];
+    for (const p of transit.pos) for (const l of p.lines) {
+      rows.push([p.po, p.quote, p.supplier, p.status, p.payment, p.expected, l.item_code || "", l.description, l.unit || "", Number(l.qty_ordered), Number(l.qty_received),
+        Number(l.qty_cancelled), Number(l.qty_pending), l.unit_price == null ? "" : Number(l.unit_price), p.currency, p.rate,
+        l.unit_price == null ? "" : r2(Number(l.qty_pending) * Number(l.unit_price) * p.rate)]);
+    }
+    if (rows.length === 1) rows.push(["No open purchase orders."]);
+    else rows.push(["Total", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", transit.totalAed]);
+    const sh = XLSX.utils.aoa_to_sheet(rows);
+    sh["!cols"] = [{ wch: 12 }, { wch: 13 }, { wch: 28 }, { wch: 17 }, { wch: 12 }, { wch: 11 }, { wch: 10 }, { wch: 40 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 11 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 15 }];
+    const Y = { font: { bold: true }, fill: { patternType: "solid", fgColor: { rgb: "FFF2A8" } } };
+    for (let col = 0; col < th.length; col++) sh[XLSX.utils.encode_cell({ r: 0, c: col })].s = H;
+    for (let r = 1; r < rows.length; r++) {
+      for (const col of [0, 1]) { const a = XLSX.utils.encode_cell({ r, c: col }); if (sh[a] && rows.length > 2 && r < rows.length - 1) sh[a].s = Y; }
+      const v = sh[XLSX.utils.encode_cell({ r, c: 16 })]; if (v && typeof v.v === "number") v.z = money;
+    }
+    if (rows.length > 2) sh[XLSX.utils.encode_cell({ r: rows.length - 1, c: 0 })].s = B;
+    XLSX.utils.book_append_sheet(wb, sh, "Materials in transit");
+  }
   return { wb, totals };
 }
 
@@ -156,7 +235,7 @@ export function graphMessage({ to, subject, html, fileName: name, contentBase64 
   };
 }
 
-export function emailHtml({ period, inventories, totals }) {
+export function emailHtml({ period, inventories, totals, transit = null }) {
   const esc = (v) => String(v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const fmt = (n) => Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const rows = totals.map((t) => {
@@ -172,5 +251,6 @@ export function emailHtml({ period, inventories, totals }) {
     <table style="border-collapse:collapse;border:1px solid #D5DDE1"><tr style="background:#0F2C3F;color:#fff">
     <th style="padding:6px 10px;text-align:left">Inventory</th><th style="padding:6px 10px">Check-ins (documents / value)</th>
     <th style="padding:6px 10px">Check-outs (jobs / value)</th><th style="padding:6px 10px">Stock value at month end</th></tr>${rows}</table>
+    ${transit ? `<p>Materials in transit (ordered, not yet received; not in the stock value): <b>AED ${fmt(transit.totalAed)}</b> on ${transit.pos.length} open purchase order${transit.pos.length === 1 ? "" : "s"}.</p>` : ""}
     <p style="color:#555;font-size:12px">Sent automatically by Oryx StockFlow on the 1st of each month.</p></div>`;
 }

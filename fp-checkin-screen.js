@@ -867,6 +867,16 @@
       </div>`;
     wireDocRetry($("#ciDone"), "check_in", pdfFile, pdfHash);
     $("#ciNew").addEventListener("click", ciResetAll);
+    // Materials in Transit (transit.js, 2026-11-05): only AFTER the stock was
+    // saved -- a "Receive from Transit" waiting for this Check-in (or an open
+    // PO with this PO number) is updated. It never changes this Check-in and
+    // never throws; a problem is shown under the done message.
+    if (window.ORYX_TRANSIT) {
+      const tm = document.createElement("div");
+      $("#ciDone .fp-done").appendChild(tm);
+      window.ORYX_TRANSIT.afterCheckin({ kind: "freedom", hash: pdfHash || null, poNumber, reference: invoiceNumber,
+        docName: pdfFile ? pdfFile.name : null, lines: data.lines.length, mount: tm });
+    }
   }
 
   async function ciAnalyse() {

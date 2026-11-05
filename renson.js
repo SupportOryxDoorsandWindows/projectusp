@@ -814,6 +814,13 @@
     ci.done = `<div class="fp-done"><h3>Renson Check-in confirmed — ${data.lines} line${data.lines === 1 ? "" : "s"}</h3>
       <p class="small">${esc(h.docType || "Document")} <b>${esc(h.number)}</b> checked in to the <b>Renson</b> stock${data.new_items ? `, ${data.new_items} new item${data.new_items > 1 ? "s" : ""} added` : ""}, value ${aed(data.total_value)}. Freedom stock was not changed. See Master Inventory → Renson → Movements.</p></div>`;
     ciDraw();
+    // Materials in Transit (transit.js): after the stock was saved, as for Freedom.
+    if (window.ORYX_TRANSIT && ciBox()) {
+      const tm = document.createElement("div");
+      (ciBox().querySelector(".fp-done") || ciBox()).appendChild(tm);
+      window.ORYX_TRANSIT.afterCheckin({ kind: "renson", hash: ci.hash || null, poNumber: h.orderRef || h.projectRef || "", reference: h.number,
+        docName: ci.file ? ci.file.name : null, lines: data.lines, mount: tm });
+    }
   }
   const RENSON_CHECKIN = {
     async open({ text, file, hash }) {
