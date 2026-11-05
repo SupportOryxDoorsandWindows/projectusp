@@ -85,9 +85,51 @@
   }
 
   const catBadge = (c) => `<span class="upd-cat upd-cat-${esc(c)}">${esc((CATEGORIES[c] || { label: c }).label)}</span>`;
-  const paragraphs = (text) => String(text || "").split(/\n{2,}/).map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("");
+  // Details text -> tidy HTML (2026-11-05, owner: "put a proper design for the
+  // writing"). Plain text stays the way Admins write it: blocks split by a
+  // blank line; "1. " lines = numbered steps, "• " / "- " lines = bullets,
+  // indented lines under a step = notes of that step (✔ / ✘ coloured), a
+  // short first line before a list (or an ALL CAPS line) = heading, "Step 2 –
+  // ..." headings get a step badge, "quoted words" = what is on the screen
+  // (shown like a button label). Everything is escaped first.
+  function formatDetails(text) {
+    const inline = (t) => esc(t).replace(/&quot;([^&\n]{1,80}?)&quot;/g, '<span class="upd-q">$1</span>')
+      .replace(/^(✔|✓)\s*/, '<span class="upd-ok">✔</span> ').replace(/^(✘|✗)\s*/, '<span class="upd-no">✘</span> ');
+    const NUM = /^\s{0,1}(\d{1,2})[.)]\s+(.*)$/, BUL = /^\s{0,1}[•\-*]\s+(.*)$/, SUB = /^\s{2,}\S/;
+    const heading = (t) => {
+      const m = t.match(/^step\s+(\d+)\s*[–—:-]\s*(.*)$/i);
+      let main = m ? m[2] : t, note = "";
+      const par = main.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+      if (par && par[1]) { main = par[1]; note = par[2]; }
+      if (main === main.toUpperCase() && /[A-Z]/.test(main)) main = main.charAt(0) + main.slice(1).toLowerCase();
+      return `<h3 class="upd-h">${m ? `<span class="upd-step">Step ${esc(m[1])}</span>` : ""}<span>${inline(main)}</span>${note ? `<small>${esc(note)}</small>` : ""}</h3>`;
+    };
+    const isCaps = (t) => t.length <= 90 && /[A-Z]{3}/.test(t) && t === t.toUpperCase();
+    return String(text || "").replace(/\r/g, "").split(/\n\s*\n/).map((block) => {
+      const lines = block.split("\n").filter((l) => l.trim());
+      if (!lines.length) return "";
+      let out = "", i = 0;
+      const listy = (l) => NUM.test(l) || BUL.test(l);
+      if (lines.length > 1 && !listy(lines[0]) && listy(lines[1]) && lines[0].trim().length <= 90 && !/[:.]$/.test(lines[0].trim())) { out += heading(lines[0].trim()); i = 1; }
+      else if (isCaps(lines[0].trim()) && !listy(lines[0])) { out += heading(lines[0].trim()); i = 1; }
+      let list = null, items = [];
+      const flush = () => { if (list) out += `<${list} class="upd-${list}">${items.map((x) => `<li>${x}</li>`).join("")}</${list}>`; list = null; items = []; };
+      let para = [];
+      const flushPara = () => { if (para.length) out += `<p>${para.map(inline).join("<br>")}</p>`; para = []; };
+      for (; i < lines.length; i++) {
+        const l = lines[i];
+        let m;
+        if ((m = l.match(NUM))) { flushPara(); if (list !== "ol") flush(); list = "ol"; items.push(inline(m[2])); }
+        else if ((m = l.match(BUL))) { flushPara(); if (list !== "ul") flush(); list = "ul"; items.push(inline(m[1])); }
+        else if (SUB.test(l) && list) items[items.length - 1] += `<span class="upd-sub">${inline(l.trim())}</span>`;
+        else { flush(); para.push(l.trim()); }
+      }
+      flush(); flushPara();
+      return out;
+    }).join("");
+  }
 
-  root.ORYX_UPDATES_CORE = { CATEGORIES, LIMITS, unreadOf, popupQueue, filterUpdates, validateForm, when };
+  root.ORYX_UPDATES_CORE = { CATEGORIES, LIMITS, unreadOf, popupQueue, formatDetails, filterUpdates, validateForm, when };
 
   /* ------------------------------------------------------- the screens */
   const AUTH = root.ORYX_AUTH;
@@ -252,7 +294,7 @@
         <h2 id="updDetailTitle">${esc(u.title)}</h2>
         <p class="upd-meta">${u.status === "published" || preview ? `${preview ? "Will show the publish date" : esc(when(u.published_at))}${u.publisher_name || preview ? ` · by ${esc(preview ? (AUTH.profile && (AUTH.profile.full_name || AUTH.profile.email)) || "you" : u.publisher_name)}` : ""}` : `Last saved ${esc(when(u.updated_at))}`}</p>
       </div>
-      <div class="upd-detail-body"><p class="upd-lead">${esc(u.summary)}</p>${u.details ? paragraphs(u.details) : ""}</div>`;
+      <div class="upd-detail-body"><p class="upd-lead">${esc(u.summary)}</p>${u.details ? formatDetails(u.details) : ""}</div>`;
   }
 
   function openDetails(id, pop) {
