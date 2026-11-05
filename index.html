@@ -1676,6 +1676,52 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 .fc-bad{color:#A23A33}
 .fc-results td.mono{white-space:nowrap}
 .fc-confirm{display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#FFF8E5; border:1px solid #F5C451; border-radius:10px; padding:12px 14px; font-size:14px}
+/* ---------- Materials in Transit (transit.js) ---------- */
+.tr-cards{grid-template-columns:repeat(5,minmax(0,1fr))}
+.tr-groups{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:0 0 18px}
+.tr-group{display:flex; flex-direction:column; align-items:flex-start; gap:3px; text-align:left; background:var(--white); border:1px solid #DCE3E6; border-radius:12px; padding:12px 16px; cursor:pointer; font:inherit; color:var(--brand)}
+.tr-group:hover{border-color:var(--brand)} .tr-group.on{border-color:var(--brand); box-shadow:inset 0 0 0 1px var(--brand); background:#F3F7F8}
+.tr-g-v{font-family:var(--font-display); font-weight:700; font-size:18px}
+.tr-filters{display:flex; flex-wrap:wrap; gap:10px 14px; align-items:flex-end; margin:0 0 12px}
+.tr-filters > div{display:flex; flex-direction:column; min-width:140px} .tr-filters input,.tr-filters select{min-height:38px}
+.tr-filters #trSearch{min-width:220px}
+.tr-closed{display:flex; align-items:center; gap:6px; font-size:13.5px; padding-bottom:8px}
+.tr-closed input{width:18px; height:18px; min-height:0; margin:0; flex:none} .tr-closed{white-space:nowrap}
+.tr-scroll{overflow-x:auto; border:1px solid #DCE3E6; border-radius:12px; background:var(--white)}
+.tr-table{width:100%; border-collapse:collapse; font-size:13.5px}
+.tr-table th,.tr-table td{padding:9px 10px; white-space:nowrap; border-bottom:1px solid #EEF2F4; text-align:left}
+.tr-table td:nth-child(4){white-space:normal; min-width:180px}
+.tr-table .num{text-align:right}
+.tr-table tbody tr[data-tr-po]{cursor:pointer} .tr-table tbody tr[data-tr-po]:hover > td,.tr-table tbody tr[data-tr-po]:focus > td{background:#F3F7F8}
+.tr-sort{background:none; border:0; padding:0; font:inherit; font-weight:600; color:var(--brand); cursor:pointer}
+.tr-count{margin:0 0 6px}
+.tr-empty{background:var(--white); border:1px dashed #C5D0D4; border-radius:12px; padding:22px; color:var(--brand)}
+.tr-st-ordered{background:#ECF0F2; color:#4F5F66} .tr-st-in_transit{background:#E1ECF7; color:#1D4F86}
+.tr-st-partially_received{background:#FDF1D8; color:#8A5A0F} .tr-st-pending_qc{background:#EFE6FA; color:#5B2E91}
+.tr-st-completed{background:#E3F1EA; color:#1F6B45} .tr-st-cancelled{background:#FBE7E6; color:#A23A33}
+.tr-dlg{width:min(1180px,96vw)} .tr-dlg-body{padding:16px 20px 22px; max-height:80vh; overflow:auto}
+.tr-po-head{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px 20px; margin-bottom:14px}
+.tr-po-head > div{display:flex; flex-direction:column; gap:2px} .tr-po-head b{color:var(--brand)}
+.tr-edit{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 14px; align-items:end; margin:8px 0 12px}
+.tr-edit > div{display:flex; flex-direction:column} .tr-edit .tr-wide{grid-column:span 2}
+.tr-edit-act{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+.tr-h3{font-family:var(--font-display); font-size:16px; color:var(--brand); margin:18px 0 8px}
+.tr-lines input{width:100%; min-width:60px} .tr-lines td{white-space:normal}
+.tr-need{border-color:#B42318 !important}
+.tr-probs{margin:8px 0; padding-left:18px} .tr-probs li{margin:2px 0}
+.tr-notes{margin:8px 0; padding-left:18px; color:var(--brand); font-size:13.5px}
+.tr-import{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:6px}
+.tr-file{cursor:pointer}
+.tr-docs{margin:0 0 8px; padding-left:18px}
+.tr-log,.tr-admin{margin-top:14px} .tr-log ul{padding-left:18px; font-size:13.5px}
+.tr-admin summary,.tr-log summary{cursor:pointer; font-weight:600; color:var(--brand)}
+.tr-done-row td{color:var(--text-muted)}
+.tr-ci-banner{display:flex; gap:16px; justify-content:space-between; align-items:flex-start; background:#FFF8DB; border:1px solid #F2D670; border-radius:12px; padding:12px 16px; margin:0 0 14px; color:var(--brand)}
+.tr-banner-in{background:#F3F7F8; border-radius:10px; padding:10px 12px; color:var(--brand)}
+.tr-done{margin-top:10px; padding:10px 12px; border-radius:10px; background:#E3F1EA; color:#1F4D36}
+.tr-done.warn{background:#FDF4E3; color:#7A5310}
+@media (max-width:1100px){.tr-cards{grid-template-columns:repeat(2,minmax(0,1fr))} .tr-groups{grid-template-columns:repeat(2,minmax(0,1fr))} .tr-edit{grid-template-columns:repeat(2,minmax(0,1fr))} .tr-po-head{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){.tr-cards,.tr-groups,.tr-edit,.tr-po-head{grid-template-columns:1fr} .tr-edit .tr-wide{grid-column:auto}}
 </style>
 </head>
 <body>
@@ -1769,8 +1815,9 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
     <div class="side-group">Stock</div>
     <button type="button" data-v="dashboard" id="navDashboard" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard</button>
     <button type="button" data-v="master-inventory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></svg>Master Inventory</button>
-    <button type="button" data-v="fp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Check-out</button>
+    <button type="button" data-v="transit" id="navTransit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5 9 4.5l6 3v7l-6 3-6-3z"/><path d="m3 7.5 6 3 6-3M9 10.5v7"/><path d="M17 9h4M18 12.5h3M17 16h4"/></svg>Materials in Transit</button>
     <button type="button" data-v="checkin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Check-in</button>
+    <button type="button" data-v="fp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Check-out</button>
     <button type="button" data-v="delivery-notes" id="navDeliveryNotes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>Delivery Notes</button>
     <button type="button" data-v="activity" id="navActivity"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Activity</button>
     <button type="button" disabled title="Coming soon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg>Reports <span class="soon">Soon</span></button>
@@ -2195,6 +2242,28 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
   </div>
 </section>
 
+<!-- ================== MATERIALS IN TRANSIT (transit.js, all active staff) ================== -->
+<section id="v-transit" class="view">
+  <div class="page-head">
+    <div><h1>Materials in Transit</h1><p>Ordered from suppliers, not yet received. Not part of the stock value.</p></div>
+    <div class="page-actions">
+      <button type="button" class="btn-outline" id="trNew">+ New PO</button>
+      <button type="button" class="btn-yellow" id="trReceive">Receive from Transit</button>
+    </div>
+  </div>
+  <div class="page-body tr-body">
+    <div id="trStatus" class="small muted" role="status"></div>
+    <div class="db-tiles tr-cards" id="trCards"></div>
+    <div class="tr-groups" id="trGroups" role="group" aria-label="Suppliers"></div>
+    <div class="tr-filters" id="trFilters"></div>
+    <div id="trTable"></div>
+    <p><button type="button" class="btn-outline btn-sm" id="trReload">Reload</button></p>
+  </div>
+  <dialog id="trDlg" class="tr-dlg" aria-label="Purchase order"></dialog>
+  <dialog id="trNewDlg" class="tr-dlg" aria-label="New purchase order"></dialog>
+  <dialog id="trRcvDlg" class="tr-dlg" aria-label="Receive from Transit"></dialog>
+</section>
+
 <!-- ================== FILM CUTTING (film-cutting.js, all active staff) ================== -->
 <section id="v-film-cutting" class="view">
   <div class="page-head">
@@ -2410,6 +2479,6 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 <script src="kanban.js?v=1"></script>
 <!-- price-history.js: purchase price history (Check-in "last bought at", item panel). -->
 <script src="price-history.js?v=1"></script>
-<script src="boot.js?v=17"></script>
+<script src="boot.js?v=18"></script>
 </body>
 </html>

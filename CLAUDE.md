@@ -147,8 +147,9 @@ product lines — never treat one family's item as a match for another's:
 
 ## UI layout (approved "Oryx Inventory — New UI Proposal", 12 pages)
 
-- Sidebar Stock order (2026-11-05, user's request): Dashboard, Master
-  Inventory, Check-out, Check-in, Delivery Notes, Activity, Reports (Soon).
+- Sidebar Stock order (2026-11-05, user's request + the Materials in Transit
+  spec): Dashboard, Master Inventory, Materials in Transit, Check-in,
+  Check-out, Delivery Notes, Activity, Reports (Soon).
 - Shell: left sidebar (`.side`, `nav.side-nav`; Products / Stock / Admin,
   Reports is a disabled "Soon" item) and a `.page-head` band
   (title, subtitle, action) + `.page-body` per view. Tabs are still
@@ -288,6 +289,91 @@ product lines — never treat one family's item as a match for another's:
   figures as the hand-made October report. Start/end-of-month values say
   "not recorded" until the first scheduled run (1 Dec 2026 records
   November's end).
+
+## Materials in Transit (2026-11-05, tab "Materials in Transit")
+
+- From the owner's spec "Feature Development: Materials in Transit" + answers:
+  cost of received goods = the supplier invoice through the NORMAL Check-in
+  (unchanged); "Pending QC" = a status LABEL only (received goods are in
+  stock at Check-in as before); POs live on this page (no separate Purchase
+  Orders page); the owner's 3 sample PDFs were NOT loaded (staff enter POs).
+- NEVER stock: transit quantities are not stock and nothing here writes
+  inventory_* / renson_*. Pending = ordered - received - cancelled
+  (generated column `qty_pending`).
+- SQL `supabase/sql/materials_in_transit.sql` (no DROP; re-run safe): tables
+  `transit_orders` (PO number unique by `po_key` = letters+digits upper, so
+  "PO26-2106" = "po 26/2106"; supplier, `supplier_group` Freedom / Renson /
+  Fusion / Other (from the name), `inventory` freedom|renson (Renson group ->
+  renson), currency + `rate_to_aed`, expected date, payment tbc / unpaid /
+  partially_paid / paid, delivery status ordered / in_transit /
+  partially_received / pending_qc / completed / cancelled), `transit_lines`
+  (code, description, optional link `freedom_item_id` (chosen: one code can
+  be several bar lengths) / `renson_item_id` (by code), qty ordered /
+  received / cancelled, unit price; received + cancelled <= ordered; same
+  code+wording once per PO), `transit_receipts` + `transit_receipt_lines`
+  (one delivery = one Check-in: `receive_key` unique, DN no. / date,
+  `checkin_tx_ids` = that Check-in's own stock line ids), `transit_documents`
+  (PRIVATE bucket `transit-documents`, `<order id>/<sha256>.<pdf|xlsx|xls>`,
+  no update/delete), `transit_log` (audit, no FK: kept after a delete).
+  Staff-only read (`transit_access()` = `is_active_staff()`); writes only via
+  `transit_create_order` / `transit_update_order` (staff: dates, payment,
+  status with rules: Completed only when nothing pending, Cancelled only via
+  Admin, no going back to Ordered after a delivery) / `transit_receive`
+  (staff) / `transit_add_document`, and Admin-only `transit_admin_change`
+  (add / edit qty or price / remove a line without deliveries, reason
+  required; an over-delivery = raise the ordered qty first) /
+  `transit_cancel` / `transit_delete_order` (nothing received). Status after
+  quantity changes: `transit_refresh_status`. Tested on local Postgres:
+  `tests/sql/materials-in-transit.test.sql` (load order in its header).
+- `transit_receive` checks the Check-in really happened: every id must be a
+  `check_in` line of the PO's inventory entered by the same person (Admins:
+  anyone's), not already linked to another delivery of this PO; qty <=
+  pending; a retry with the same `receive_key` returns the first result and
+  changes nothing.
+- Browser `transit.js` (loaded by boot.js, v=18; pure part
+  `window.ORYX_TRANSIT_CORE`, tests `tests/transit.test.js`): cards (value in
+  transit AED = open POs' pending x price x rate, ordered / received /
+  pending qty, open POs), supplier cards Freedom / Renson / Fusion / Other
+  (click = filter), filters (supplier, PO, material, delivery / payment
+  status, expected from-to, show completed), search, sortable 14-column
+  table (one row per PO line), PO window (details, edit, materials,
+  delivery history, documents, change history, Admin box). Its 3 dialogs
+  are moved to <body> (they open from the Check-in page too).
+- + New PO: typed, or "Read PO / quotation PDF" (pdf.js text via
+  `FP.extractPdfText`; `parseHeader` / `parseLines` / `combineDocuments`:
+  header from the PO, lines from the quote; a line is read only when qty x
+  price = amount; layouts: Freedom Global "[code] desc ... qty Units USD
+  price 0% USD amount", Freedom AU quote (pdf.js gives it right to left),
+  left-to-right generic; lines total vs document total and PO quote ref vs
+  quote number are checked), or "Import Excel list" (`parseSheetRows`:
+  heading row with PO Number / Supplier / Material Code / Description / Qty
+  / Unit / Unit Price / Currency / Expected delivery...; one PO at a time,
+  POs already here left out). Always a preview; Save = `transit_create_order`,
+  then the read files are kept as documents. USD/AUD/EUR rate fetched for
+  the PO date (`FP.fetchCheckinExchangeRate`), editable. Real files: PO26-2107
+  + SQ-00000388 = 12 lines, PO26-2106 + S00231 = 66 lines, both = the
+  document total (`TRANSIT_DOCS_JSON` for the unit test; not committed;
+  test figures are made up -- no supplier prices in this public repo).
+- RECEIVE FROM TRANSIT: choose the PO, type what arrived (<= pending) + DN
+  no. / date -> "Continue to Check-in" opens the normal Check-in page with a
+  banner (`#trCiBanner`). After THAT Check-in is confirmed,
+  fp-checkin-screen.js `ciConfirm` (Freedom) / renson.js (Renson) call
+  `ORYX_TRANSIT.afterCheckin()` (only after the stock was saved; never
+  throws; Check-in logic unchanged): it finds the Check-in's own stock lines
+  (by document SHA-256, or typed by hand = the person's newest Check-in
+  batch, one `created_at`) and calls `transit_receive`; failure = "Try
+  again" (same key). No Receive waiting but the document's PO no. is an open
+  PO = offered ("Update the PO from this Check-in"), never automatic. No PO
+  involved = silent (Check-in screen exactly as before:
+  `checkin/checkout-same-freedom.js` IDENTICAL old vs new).
+- Monthly report (`monthly-report`): Summary gets "Materials in transit"
+  (per open PO: supplier, PO / quotation highlighted, status, lines
+  outstanding, value in transit AED; per supplier group; total; Pending QC
+  note) + "Closing stock value (excluding materials in transit)", and a
+  sheet "Materials in transit" (every line); the email states the total.
+  `transitSummary` in report.js (tested in tests/monthly-report.test.js).
+- Browser test: `tests/browser/transit-flow.js --node-modules <dir>
+  [--docs <dir with the PO / quote PDFs>]` (stand-in backend; staff + Admin).
 
 ## Hidden items (not on the official stock list, 2026-10-30)
 

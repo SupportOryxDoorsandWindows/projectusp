@@ -27,7 +27,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import XLSX from "npm:xlsx-js-style@1.2.0";
-import { reportPeriod, freedomLine, rensonLine, buildWorkbook, fileName, emailHtml, graphMessage } from "./report.js";
+import { reportPeriod, freedomLine, rensonLine, buildWorkbook, fileName, emailHtml, graphMessage, transitSummary } from "./report.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -140,7 +140,15 @@ Deno.serve(async (req) => {
     ];
     if (inventories.some((i) => i.opening == null)) notes.push("Start-of-month value 'not recorded': the first automatic month-end value is recorded on 1 Dec 2026.");
     const preparedAt = new Date(Date.now() + 4 * 3600e3).toISOString().slice(0, 16).replace("T", " ") + " (Dubai)";
-    const { wb, totals } = buildWorkbook(XLSX, { period, inventories, preparedAt, notes } as any);
+    // Materials in Transit (2026-11-05): open POs as they stand now, shown
+    // apart from the stock value. Missing tables (not installed) = a note.
+    let transit: any = null;
+    try {
+      const tOrders = await readAll(() => supabase.from("transit_orders").select("*").order("id"));
+      const tLines = await readAll(() => supabase.from("transit_lines").select("*").order("order_id").order("line_no").order("id"));
+      transit = transitSummary(tOrders, tLines);
+    } catch (e) { notes.push("Materials in transit could not be read: " + String((e as Error).message).slice(0, 120)); }
+    const { wb, totals } = buildWorkbook(XLSX, { period, inventories, preparedAt, notes, transit } as any);
     const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
     const name = fileName(period);
 
@@ -156,7 +164,7 @@ Deno.serve(async (req) => {
     const { data: rec } = await supabase.from("report_recipients").select("email").eq("active", true);
     const to = (rec || []).map((r: any) => r.email);
     let mail: any = { sent: false, error: action === "preview" ? "preview only" : "no active recipients" };
-    if (action !== "preview" && to.length) mail = await sendEmail(to, `Oryx stock movements — ${period.label}`, emailHtml({ period, inventories, totals }), name, bytes);
+    if (action !== "preview" && to.length) mail = await sendEmail(to, `Oryx stock movements — ${period.label}`, emailHtml({ period, inventories, totals, transit } as any), name, bytes);
 
     await supabase.from("monthly_reports").insert({
       period_key: period.key, action, requested_by: who.kind === "admin" ? who.name : "scheduler",
