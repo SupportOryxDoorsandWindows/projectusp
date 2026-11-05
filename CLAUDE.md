@@ -638,6 +638,14 @@ product lines — never treat one family's item as a match for another's:
   `tests/sql/supabase-base.sql` + the SQL file + `tests/sql/system-updates.test.sql`.
   The Supabase connector times out on SQL that catches errors (exception
   blocks), so don't test refusals through it.
+- POP-UP when the app is opened (2026-11-05, owner: "once they open the
+  application the new update ... will pop"): after the FIRST load only,
+  `popNew` opens the published, unread updates of the last 14 days
+  (`popupQueue`, oldest first; "1 of 2", Next update / Got it; each shown
+  one is marked read as it opens). Never while another dialog is open; never
+  twice in the same tab (sessionStorage `oryx_updates_popped`); a realtime
+  publish does not pop it for people already working. Test:
+  `tests/browser/updates-popup.js`.
 - The 4 sample updates from the request are TEST DATA (stand-in tests only);
   never insert them into the live table without the user's say-so.
 
