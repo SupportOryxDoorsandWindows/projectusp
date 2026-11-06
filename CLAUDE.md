@@ -447,6 +447,20 @@ product lines — never treat one family's item as a match for another's:
   `loadAllocatedByItem` runs `allocation_sync(null)` first (self-healing if
   a browser missed it). Browser test: `tests/browser/allocations-flow.js
   --pdf <made-up Freedom job list> --node-modules <dir>`.
+- MASTER INVENTORY LAYOUT (2026-11-06, Pau's Excel via the owner; answers:
+  screen + Extract, quantity columns only on screen, Forecast = Available +
+  In transit): screen columns Item, Physical stock, Allocated, In transit,
+  Available, Forecast available, Unit cost, Value, Status, Last change,
+  buttons (fp-inventory.js `stockFigures` / `quantityCells`; the In transit
+  column moved here from after Status). Renson list: Code, Description, Size,
+  Colour, Unit, Physical stock, Allocated, In transit, Available, Forecast
+  available, Unit cost, Value, Status (renson.js `figures` / `allocCells`).
+  Extract (.xlsx, `INVENTORY_COLS`): Code, Description, Category, Bar length,
+  Unit, Physical Stock Qty, Allocated Materials Qty, Materials in Transit
+  Qty, Available Stock Qty, Forecast Available Stock Qty (these 5 headings
+  in red), Unit cost, Value, Kanban trigger, Critical level, Status; the
+  Renson Extract has the same 5 quantity columns. Kanban status / value
+  still on physical stock.
 - Found while testing: leaving a search box fired "change" and redrew the
   table, so the next click on a row was lost (Materials in Transit too) --
   onFilter now skips an unchanged value.

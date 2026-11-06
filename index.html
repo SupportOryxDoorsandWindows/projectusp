@@ -1182,7 +1182,7 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .mi-filter select{width:auto; min-width:210px; font-weight:400; cursor:pointer}
 .mi-card{padding:0; overflow:hidden}
 .mi-scroll{max-height:none}
-.mi-table th,.mi-table td{padding:12px 14px; vertical-align:middle}
+.mi-table th,.mi-table td{padding:12px 9px; vertical-align:middle}
 .mi-table thead th{position:static; background:var(--white)}
 .mi-row{cursor:pointer}
 .mi-al-btn{background:#FDF1D8; color:#8A5A0F; border:1px solid #F1D9A6; border-radius:999px; padding:2px 10px; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap}
@@ -2202,8 +2202,8 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
       <div class="fp-scroll mi-scroll">
         <table class="fp-table mi-table" id="miItemsTable">
           <thead><tr>
-            <th>Item</th><th class="num" title="Physical stock">Total stock</th><th class="num" title="Reserved for jobs (Allocated Materials), still in stock">Allocated</th><th class="num" title="Total stock minus Allocated">Available</th><th class="num">Unit cost (AED)</th><th class="num">Value (AED)</th>
-            <th>Status</th><th class="num" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th><th>Last change</th><th><span class="sr-only">Actions</span></th>
+            <th>Item</th><th class="num" title="Physical stock in the store">Physical stock</th><th class="num" title="Reserved for jobs (Allocated Materials), still in stock">Allocated</th><th class="num" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th><th class="num" title="Physical stock minus Allocated">Available</th><th class="num" title="Available plus In transit">Forecast available</th><th class="num">Unit cost (AED)</th><th class="num">Value (AED)</th>
+            <th>Status</th><th>Last change</th><th><span class="sr-only">Actions</span></th>
           </tr></thead>
           <tbody id="miItemsBody"></tbody>
         </table>

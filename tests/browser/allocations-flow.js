@@ -132,6 +132,9 @@ async function session(browser) {
     if (table === "allocations") return send(200, u.searchParams.get("status") === "eq.open" ? db.allocs.filter((a) => a.status === "open") : db.allocs.slice().reverse());
     if (table === "allocation_lines") return send(200, u.searchParams.get("qty_open") === "gt.0" ? db.lines.filter((l) => l.qty_open > 0) : db.lines);
     if (table === "allocation_log") return send(200, db.log.filter((x) => String(x.allocation_id) === (u.searchParams.get("allocation_id") || "").replace("eq.", "")));
+    // 300 Mohair Holders on an open PO (Materials in Transit), linked to the item
+    if (table === "transit_orders") return send(200, [{ id: 1, po_number: "PO-T1", delivery_status: "ordered", expected_delivery: null }]);
+    if (table === "transit_lines") return send(200, [{ id: 1, order_id: 1, freedom_item_id: "f-620001", renson_item_id: null, qty_pending: 300, unit: "pcs" }]);
     if (table === "systems") return send(200, [{ id: "series-1", name: "Series 1", family: "Sliding", tracks: ["2"], any_config: false, sort_order: 0 }]);
     return send(200, req.method() === "GET" ? [] : {});
   });
@@ -183,12 +186,26 @@ async function readJobList(p) {
   // 2. Master Inventory columns
   await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(1800);
   const head = await p.innerText("#miItemsTable thead");
-  const cells = async (id) => (await p.$$eval(`tr[data-mi-row="${id}"] td`, (td) => td.slice(1, 4).map((x) => x.innerText.trim())));
+  const cells = async (id) => (await p.$$eval(`tr[data-mi-row="${id}"] td`, (td) => td.slice(1, 6).map((x) => x.innerText.trim())));
   const m = await cells("f-620001");
-  check(/Total stock/.test(head) && /Allocated/.test(head) && /Available/.test(head), "Master Inventory: Total stock, Allocated, Available headings");
-  check(m.join("|") === "20|20|0", "620001: 20 in stock, 20 allocated (other job), 0 available (" + m.join("|") + ")");
+  check(/Physical stock\s+Allocated\s+In transit\s+Available\s+Forecast available/.test(head), "Master Inventory: Physical stock, Allocated, In transit, Available, Forecast available (in that order)");
+  check(m.join("|") === "20|20|300|0|300", "620001: 20 physical, 20 allocated (other job), 300 in transit, 0 available, 300 forecast (" + m.join("|") + ")");
   const free = await cells("f-330068");
-  check(free.join("|") === "100|—|100", "330068 (unticked): nothing allocated, all available (" + free.join("|") + ")");
+  check(free.join("|") === "100|—|—|100|100", "330068 (unticked): nothing allocated or in transit, all available (" + free.join("|") + ")");
+  // Extract (.xlsx) in Pau's layout
+  {
+    const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#miExtractBtn")]);
+    const file = await dl.path();
+    const X = require(path.join(nm, "xlsx-js-style"));
+    const ws = X.readFile(file, { cellStyles: true }).Sheets["Master Inventory"];
+    const rows = X.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    const head = rows[3], row = rows.find((r) => r[0] === "620001");
+    check(head.slice(5, 10).join("|") === "Physical Stock Qty|Allocated Materials Qty|Materials in Transit Qty|Available Stock Qty|Forecast Available Stock Qty"
+      && /Oryx Doors & Windows — Master Inventory/.test(rows[0][0]) && /^Generated /.test(rows[1][0]), "Extract: title, date, the five quantity headings in order");
+    check(row && row.slice(5, 10).join("|") === "20|20|300|0|300" && head[14] === "Status", "Extract 620001: 20|20|300|0|300 (" + (row && row.slice(5, 10).join("|")) + ")");
+    const styles = require("child_process").execFileSync("unzip", ["-p", file, "xl/styles.xml"]).toString();
+    check(/FF4D4D/i.test(styles), "Extract: quantity headings in red (red font in the file's styles)");
+  }
   const tip = await p.getAttribute('tr[data-mi-row="f-620001"] [data-mi-alloc]', "title");
   check(/Job OTHER-1 \(Someone\) · 20/.test(tip) && !new RegExp("Job " + job).test(tip), "hover: the job holding it");
   if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-master.png") });

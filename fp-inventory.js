@@ -14,7 +14,22 @@
   // as the Items table shows it (search and Show filter applied, every
   // page), with the same Oryx-blue title/header styling as the
   // transactions report. Read-only -- nothing is written anywhere.
-  const INVENTORY_COLS = ["Code", "Description", "Category", "Bar length (mm)", "Unit", "Qty", "Unit cost (AED)", "Value (AED)", "Kanban trigger", "Critical level", "Status"];
+  // Layout of Pau's sheet (2026-11-06, owner's request): the five quantity
+  // columns, headings in red. Forecast = Available + In transit.
+  const INVENTORY_COLS = ["Code", "Description", "Category", "Bar length (mm)", "Unit", "Physical Stock Qty", "Allocated Materials Qty",
+    "Materials in Transit Qty", "Available Stock Qty", "Forecast Available Stock Qty", "Unit cost (AED)", "Value (AED)", "Kanban trigger", "Critical level", "Status"];
+  const QTY_COLS = [5, 6, 7, 8, 9];
+  // Quantities of one item (display only): allocated / in transit from the
+  // maps read with the list (allocations.js, transit.js).
+  let miAllocated = new Map(), miTransit = new Map();
+  function stockFigures(it) {
+    const r4 = (v) => Math.round(v * 10000) / 10000;
+    const physical = Number(it.current_qty) || 0;
+    const a = miAllocated.get(String(it.id)), t = miTransit.get(String(it.id));
+    const allocated = a ? a.qty : 0, transit = t ? t.qty : 0;
+    const available = r4(physical - allocated);
+    return { physical, allocated, transit, available, forecast: r4(available + transit), a, t };
+  }
   // Same Kanban rule as the rows (kanban.js).
   function inventoryStatus(it) {
     const k = kanbanOf(it);
@@ -35,17 +50,18 @@
       aoa.push([
         it.item_code, it.description || "", it.category || "",
         it.bar_length_mm != null ? it.bar_length_mm : "",
-        it.unit_of_measure || "", it.current_qty, it.unit_cost, it.current_value,
+        it.unit_of_measure || "", ...(() => { const f = stockFigures(it); return [f.physical, f.allocated || "", f.transit || "", f.available, f.forecast]; })(),
+        it.unit_cost, it.current_value,
         it.buffer_level != null ? it.buffer_level : "", it.critical_level != null ? it.critical_level : "", inventoryStatus(it),
       ]);
     }
     const totalRow = aoa.length;
-    aoa.push(["", `${items.length} item${items.length === 1 ? "" : "s"}`, "", "", "", "", "Total",
+    aoa.push(["", `${items.length} item${items.length === 1 ? "" : "s"}`, "", "", "", "", "", "", "", "", "Total",
       items.reduce((s, it) => s + (it.current_value || 0), 0)]);
 
     const ws = window.XLSX.utils.aoa_to_sheet(aoa);
     ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: n - 1 } }];
-    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 10 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 9 }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 17 }, { wch: 21 }, { wch: 21 }, { wch: 18 }, { wch: 26 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 9 }];
     ws["!rows"] = [{ hpt: 22 }];
     ws["!autofilter"] = { ref: window.XLSX.utils.encode_range({ s: { r: firstDataRow - 1, c: 0 }, e: { r: totalRow - 1, c: n - 1 } }) };
     const cell = (r, c) => {
@@ -55,12 +71,13 @@
     };
     cell(0, 0).s = STYLE_TITLE;
     cell(1, 0).s = { font: { italic: true } };
-    for (let c = 0; c < n; c++) cell(firstDataRow - 1, c).s = STYLE_HEADER;
+    for (let c = 0; c < n; c++) cell(firstDataRow - 1, c).s = QTY_COLS.includes(c)
+      ? { ...STYLE_HEADER, font: { ...((STYLE_HEADER && STYLE_HEADER.font) || {}), color: { rgb: "FF4D4D" }, bold: true } } : STYLE_HEADER;
     for (let r = firstDataRow; r <= totalRow; r++) {
-      for (const c of [6, 7]) if (typeof cell(r, c).v === "number") cell(r, c).z = '"AED" #,##0.00';
+      for (const c of [10, 11]) if (typeof cell(r, c).v === "number") cell(r, c).z = '"AED" #,##0.00';
     }
-    cell(totalRow, 6).s = STYLE_LABEL;
-    cell(totalRow, 7).s = STYLE_LABEL;
+    cell(totalRow, 10).s = STYLE_LABEL;
+    cell(totalRow, 11).s = STYLE_LABEL;
     return ws;
   }
   async function exportInventoryList() {
@@ -96,7 +113,7 @@
     }
   }
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="10" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="11" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
       const [itemsRes, txRes, aliases, photos, lastChange, inTransit, allocated] = await Promise.all([
@@ -120,7 +137,7 @@
       renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="10" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="11" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
   }
@@ -159,12 +176,16 @@
     const C = window.ORYX_ALLOC_CORE;
     return C && C.loadAllocatedByItem ? C.loadAllocatedByItem(sb, "freedom") : new Map();
   }
-  function allocatedCells(e, it) {
-    const C = window.ORYX_ALLOC_CORE, q = e ? e.qty : 0;
-    const avail = Math.round(((Number(it.current_qty) || 0) - q) * 10000) / 10000;
-    return (e ? `<td class="num mono"><button type="button" class="mi-al-btn" data-mi-alloc="${esc(it.item_code)}" title="${esc(C ? C.allocTitle(e) : "")}">${fmt(q)}</button></td>`
+  // Allocated · In transit · Available · Forecast available (Pau's layout,
+  // 2026-11-06). Available = physical - allocated; Forecast = Available +
+  // In transit. Display only.
+  function quantityCells(it) {
+    const C = window.ORYX_ALLOC_CORE, f = stockFigures(it);
+    return (f.a ? `<td class="num mono"><button type="button" class="mi-al-btn" data-mi-alloc="${esc(it.item_code)}" title="${esc(C ? C.allocTitle(f.a) : "")}">${fmt(f.allocated)}</button></td>`
       : `<td class="num mono muted">—</td>`)
-      + `<td class="num mono${avail < 0 ? " mi-avail-neg" : ""}">${fmt(avail)}</td>`;
+      + inTransitCell(f.t, it)
+      + `<td class="num mono${f.available < 0 ? " mi-avail-neg" : ""}">${fmt(f.available)}</td>`
+      + `<td class="num mono${f.forecast < 0 ? " mi-avail-neg" : ""}">${fmt(f.forecast)}</td>`;
   }
   function inTransitCell(e, it) {
     if (!e) return `<td class="num mono mi-transit muted">—</td>`;
@@ -384,8 +405,8 @@
     LAST_PAGE_ITEMS.test(a.description || "") - LAST_PAGE_ITEMS.test(b.description || ""));
 
   function renderMasterInventoryView(items, txs, photos, lastChange, inTransit, allocated) {
-    inTransit = inTransit || new Map();
-    allocated = allocated || new Map();
+    miTransit = inTransit || new Map();
+    miAllocated = allocated || new Map();
     items = sortForList(items);
     lastChange = lastChange || new Map();
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
@@ -449,16 +470,15 @@
         return `<tr class="mi-row${kb} ${it.id === openId ? "sel" : ""}" data-mi-row="${esc(it.id)}">
           <td><div class="mi-item">${itemPhotoButton(photos, it)}<div><div class="mi-name">${esc(it.description || it.item_code)}</div><div class="mi-code mono">${sub}</div></div></div></td>
           <td class="num mono">${fmt(it.current_qty)}</td>
-          ${allocatedCells(allocated.get(String(it.id)), it)}
+          ${quantityCells(it)}
           <td class="num mono">${Number(it.unit_cost || 0).toFixed(2)}</td>
           <td class="num mono">${Number(it.current_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
           <td>${miStatus(it).html}</td>
-          ${inTransitCell(inTransit.get(String(it.id)), it)}
           ${lastChangeCell(lastChange.get(it.id))}
           <td class="mi-actions"><button class="btn-outline btn-sm" type="button" data-mi-timeline="${esc(it.id)}">Timeline</button>
             <button class="btn-outline btn-sm" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="10" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="11" class="small muted">No items match.</td></tr>`;
 
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-photo]")) {
         btn.onclick = (e) => { e.stopPropagation(); openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap); };
