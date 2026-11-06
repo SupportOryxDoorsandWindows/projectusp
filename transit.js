@@ -353,7 +353,47 @@
     return rows.filter((r) => r.created_at === t).map((r) => String(r.id));
   }
 
+  // Master Inventory "In transit" column (2026-11-06, owner's request):
+  // per Master item, what is still pending on OPEN POs, from the lines
+  // LINKED to that item (kind "freedom" = freedom_item_id, "renson" =
+  // renson_item_id). Display only: never stock.
+  function transitByItem(orders, lines, kind) {
+    const open = new Map(orders.filter((o) => OPEN(o.delivery_status)).map((o) => [String(o.id), o]));
+    const key = kind === "renson" ? "renson_item_id" : "freedom_item_id";
+    const out = new Map();
+    for (const l of lines) {
+      const o = open.get(String(l.order_id)), id = l[key], q = Number(l.qty_pending) || 0;
+      if (!o || id == null || q <= 0) continue;
+      let e = out.get(String(id));
+      if (!e) out.set(String(id), e = { qty: 0, pos: [] });
+      e.qty = round(e.qty + q, 4);
+      e.pos.push({ po: o.po_number, qty: q, unit: l.unit || "", expected: o.expected_delivery || null, status: o.delivery_status });
+    }
+    for (const e of out.values()) e.pos.sort((a, b) => String(a.expected || "9999").localeCompare(String(b.expected || "9999")) || String(a.po).localeCompare(String(b.po)));
+    return out;
+  }
+  const shortDate = (v) => { const m = String(v || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${Number(m[3])} ${"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ")[Number(m[2]) - 1]} ${m[1]}` : ""; };
+  // Hover text of the cell: one line per PO.
+  function transitTitle(e) {
+    return "In transit (not in stock yet):\n" + e.pos.map((p) => `${p.po} · ${Number(p.qty).toLocaleString("en-US", { maximumFractionDigits: 4 })}${p.unit ? " " + p.unit : ""} · ${STATUS[p.status] || p.status}${p.expected ? " · expected " + shortDate(p.expected) : " · date TBC"}`).join("\n")
+      + "\nClick to open Materials in Transit.";
+  }
+  // Reads the open POs' lines for the Master Inventory lists. Never throws:
+  // no access / not installed = no column figures.
+  async function loadTransitByItem(sb, kind) {
+    try {
+      const col = kind === "renson" ? "renson_item_id" : "freedom_item_id";
+      const [o, l] = await Promise.all([
+        sb.from("transit_orders").select("id, po_number, delivery_status, expected_delivery").order("id").range(0, 4999),
+        sb.from("transit_lines").select(`id, order_id, ${col}, qty_pending, unit`).not(col, "is", null).order("id").range(0, 9999),
+      ]);
+      if (o.error || l.error) throw o.error || l.error;
+      return transitByItem(o.data || [], l.data || [], kind);
+    } catch (e) { console.error("in transit", e); return new Map(); }
+  }
+
   const CORE = { STATUS, PAYMENT, GROUPS, OPEN, poKey, supplierGroup, rowsOf, summarise, filterRows, sortRows, groupByPo, pageOf, isoDate,
+    transitByItem, transitTitle, loadTransitByItem,
     parseLines, parseHeader, combineDocuments, parseSheetRows, draftProblems, receiveCheck, latestBatch, documentTotal };
   root.ORYX_TRANSIT_CORE = CORE;
   if (typeof document === "undefined" || !root.ORYX_AUTH) return;
@@ -380,6 +420,7 @@
     below_received: "The ordered quantity can't be less than what was already received + cancelled.", line_has_receipts: "That line has deliveries recorded.",
     cancel_more_than_pending: "You can't cancel more than is pending.", nothing_to_cancel: "Nothing is pending to cancel.",
     file_not_stored: "The file was not stored.", line_item_mismatch: "The Master Inventory item chosen has a different code.",
+    already_linked: "This line is already linked to a Master Inventory item.", line_has_no_code: "A line without a code can't be linked.",
   };
   function errText(e) {
     const m = String((e && e.message) || e);
@@ -519,7 +560,8 @@
     const o = ui.orders.find((x) => String(x.id) === String(id));
     if (!o) return;
     ui.open = o.id;
-    const { data: log } = await sb.from("transit_log").select("*").eq("order_id", o.id).order("id");
+    const [{ data: log }] = await Promise.all([sb.from("transit_log").select("*").eq("order_id", o.id).order("id"),
+      masterItems(o.inventory).catch(() => [])]);
     ui.log = log || [];
     drawPo();
     if (!dlg().open) dlg().showModal();
@@ -556,7 +598,7 @@
       <p class="small muted">${esc(STATUS_HELP[o.delivery_status] || "")}</p>
       <h3 class="tr-h3">Materials</h3>
       <div class="tr-scroll"><table class="mi-table tr-table"><thead><tr><th>#</th><th>Code</th><th>Description</th><th>Unit</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Cancelled</th><th class="num">Outstanding</th><th class="num">Unit price</th><th class="num">Line value</th><th class="num">Outstanding (AED)</th></tr></thead><tbody>
-      ${lines.map((l) => `<tr><td>${l.line_no}</td><td><code>${esc(l.item_code || "—")}</code></td><td>${esc(l.description)}${l.freedom_item_id || l.renson_item_id ? "" : ` <span class="badge grey" title="Not linked to a Master Inventory item">not in Master</span>`}</td><td>${esc(l.unit || "")}</td>
+      ${lines.map((l) => `<tr><td>${l.line_no}</td><td><code>${esc(l.item_code || "—")}</code></td><td>${esc(l.description)}${l.freedom_item_id || l.renson_item_id ? "" : poLinkCell(o, l)}</td><td>${esc(l.unit || "")}</td>
         <td class="num">${fmtN(l.qty_ordered)}</td><td class="num">${fmtN(l.qty_received)}</td><td class="num">${fmtN(l.qty_cancelled)}</td><td class="num"><b>${fmtN(l.qty_pending)}</b></td>
         <td class="num">${l.unit_price == null ? "—" : money(l.unit_price, o.currency)}</td><td class="num">${l.unit_price == null ? "—" : money(l.qty_ordered * l.unit_price, o.currency)}</td>
         <td class="num">${l.unit_price == null ? "—" : aed(l.qty_pending * l.unit_price * o.rate_to_aed)}</td></tr>`).join("")}</tbody></table></div>
@@ -574,8 +616,30 @@
       <details class="tr-log"><summary>History of changes (${ui.log.length})</summary><ul>${ui.log.map((x) => `<li><b>${day(x.created_at)}</b> ${esc(x.action.replace(/_/g, " "))} by ${esc(x.by_name || "—")} <span class="small muted">${esc(logText(x))}</span></li>`).join("")}</ul></details>
     </div>`;
   }
+  // Unlinked line: choose its Master item (same code; e.g. which bar length
+  // of 310028), so it shows in Master Inventory's "In transit" column.
+  // Nothing with the same code in Master = "not in Master" as before.
+  function poLinkCell(o, l) {
+    const items = (o.inventory === "renson" ? ui.rensonItems : ui.freedomItems) || [];
+    const code = String(l.item_code || "").trim().toUpperCase();
+    const m = code ? items.filter((i) => String(i.item_code || "").trim().toUpperCase() === code) : [];
+    if (!m.length) return ` <span class="badge grey" title="Not linked to a Master Inventory item">not in Master</span>`;
+    return `<div class="tr-link"><select data-tr-link="${l.id}" aria-label="Link line ${l.line_no} to a Master Inventory item">
+      <option value="">Link to Master item…</option>${m.map((i) => `<option value="${esc(i.id)}">${esc(i.description || i.item_code)}${i.bar_length_mm ? ` · ${esc(i.bar_length_mm)} mm` : ""}</option>`).join("")}</select>
+      <span class="small muted" data-tr-linkmsg="${l.id}">Not linked yet: not shown in Master Inventory</span></div>`;
+  }
+  async function linkLine(sel) {
+    const msg = dlg().querySelector(`[data-tr-linkmsg="${sel.dataset.trLink}"]`);
+    if (!sel.value) return;
+    sel.disabled = true; if (msg) { msg.className = "small muted"; msg.textContent = "Linking…"; }
+    const { data, error } = await sb.rpc("transit_link_line", { p_line_id: Number(sel.dataset.trLink), p_item_id: sel.value });
+    if (error) { sel.disabled = false; sel.value = ""; if (msg) { msg.className = "small error"; msg.textContent = errText(error); } return; }
+    await load(); await openPo(ui.open);
+    const m = $("#trEMsg"); if (m) { m.className = "small ok"; m.textContent = `Linked to ${data && data.item ? data.item : "the Master item"}.`; }
+  }
   function logText(x) {
     const d = x.detail || {};
+    if (x.action === "link") return `line ${d.line_no} (${d.code}) → ${d.item || "Master item"}`;
     if (x.action === "updated") return Object.entries(d).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v[0] ?? "—"} → ${v[1] ?? "—"}`).join("; ");
     if (x.action === "received") return `${d.lines} line(s)${d.delivery_note_no ? `, DN ${d.delivery_note_no}` : ""}${d.checkin_reference ? `, Check-in ${d.checkin_reference}` : ""}`;
     if (d.reason) return `Reason: ${d.reason}`;
@@ -1067,6 +1131,7 @@
     });
     dlg().addEventListener("submit", (e) => { if (e.target.id === "trEdit") savePo(e); else e.preventDefault(); });
     dlg().addEventListener("change", async (e) => {
+      if (e.target.dataset && e.target.dataset.trLink) return linkLine(e.target);
       if (e.target.id === "trALine") { const isNew = e.target.value === "new"; dlg().querySelectorAll(".tr-new").forEach((x) => { x.hidden = !isNew; }); dlg().querySelectorAll(".tr-old").forEach((x) => { x.hidden = isNew; }); }
       if (e.target.id === "trDocFile" && e.target.files[0]) {
         const m = $("#trDocMsg"); m.className = "small"; m.textContent = "Keeping…";
@@ -1112,6 +1177,12 @@
     if (v.classList.contains("on")) load();
   }
 
-  root.ORYX_TRANSIT = { afterCheckin, open: openPo, receive: openReceive, reload: load, get pending() { return ui.pending || null; } };
+  // From Master Inventory's "In transit" cell: this page, open POs with that material.
+  function showMaterial(code) {
+    ui.f = { showClosed: false, material: String(code || "") };
+    ui.linePage = {}; ui.collapsed.clear(); ui.expanded.clear();
+    go("transit");
+  }
+  root.ORYX_TRANSIT = { afterCheckin, open: openPo, receive: openReceive, reload: load, showMaterial, get pending() { return ui.pending || null; } };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount); else mount();
 })(typeof window !== "undefined" ? window : globalThis);

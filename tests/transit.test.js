@@ -56,6 +56,25 @@ assert.deepEqual((({ page, pages, from, to, items }) => [page, pages, from, to, 
 assert.equal(C.pageOf(list, 99, 10).page, 6); assert.equal(C.pageOf(list, -1, 10).page, 0);
 assert.deepEqual([C.pageOf([], 0, 10).pages, C.pageOf([], 0, 10).from], [1, 0]);
 
+// Master Inventory "In transit": open POs only, linked lines only, pending > 0
+{
+  const links = [
+    { order_id: 1, freedom_item_id: "f-a", qty_pending: 6000, unit: "Units" },
+    { order_id: 2, freedom_item_id: "f-a", qty_pending: 20, unit: "Units" },
+    { order_id: 1, freedom_item_id: null, qty_pending: 3, unit: "Units" },
+    { order_id: 3, freedom_item_id: "f-b", qty_pending: 5, unit: "pcs" },
+    { order_id: 1, freedom_item_id: "f-c", qty_pending: 0, unit: "pcs" },
+    { order_id: 2, renson_item_id: 7, qty_pending: 4, unit: "pc" },
+  ];
+  const m = C.transitByItem(orders, links, "freedom");
+  assert.deepEqual([...m.keys()], ["f-a"], "completed PO (3), unlinked and nothing pending left out");
+  assert.equal(m.get("f-a").qty, 6020);
+  assert.deepEqual(m.get("f-a").pos.map((p) => p.po), ["PO1", "PO2"], "earliest expected first");
+  assert.deepEqual([...C.transitByItem(orders, links, "renson").entries()].map(([k, v]) => [k, v.qty]), [["7", 4]]);
+  const t = C.transitTitle(m.get("f-a"));
+  assert.ok(/PO1 · 6,000 Units · Partially received · expected 15 Dec 2026/.test(t) && /PO2 · 20 Units · Ordered · expected 10 Jan 2027/.test(t), t);
+}
+
 // Lines: Freedom Global layout (code in brackets, numbers on their own lines)
 const a = C.parseLines(`DESCRIPTION  QUANTITY  UNIT PRICE  GST  AMOUNT
  [134002] Brake Rod (1.5m)

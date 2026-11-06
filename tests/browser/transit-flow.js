@@ -87,6 +87,14 @@ function rpc(name, a, user, admin) {
     for (const l of db.lines.filter((y) => y.order_id === a.p.order_id && (!a.p.line_id || y.id === a.p.line_id))) { const q = "qty" in a.p ? a.p.qty : l.qty_pending; l.qty_cancelled += q; l.qty_pending -= q; }
     return ok({ ok: true, lines: 1, status: "partially_received" });
   }
+  if (name === "transit_link_line") {
+    const l = db.lines.find((x) => x.id === a.p_line_id), it = ITEMS.find((x) => x.id === a.p_item_id);
+    if (!l || !it || it.item_code !== l.item_code) return err("line_item_mismatch");
+    if (l.freedom_item_id) return err("already_linked");
+    l.freedom_item_id = it.id;
+    db.log.push({ id: db.log.length + 1, order_id: l.order_id, action: "link", detail: { line_no: l.line_no, code: l.item_code, item: it.description + " · " + it.bar_length_mm + " mm" }, by_name: "Staff Test", created_at: now() });
+    return ok({ ok: true, line_id: l.id, item: it.description + " · " + it.bar_length_mm + " mm" });
+  }
   if (/^transit_/.test(name)) return { status: 403, body: { message: "admins_only", code: "P0001" } };
   return ok(null);
 }
@@ -342,6 +350,39 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
     check((await p.inputValue("#trNPo")) === "PO26-2106" && /Materials \(66\)/.test(t2) && /66 lines add up to USD [\d,.]+ = the document total/.test(t2) && !/No item lines/.test(t2),
       "quotation added after the PO: PO26-2106 with 66 lines = the document total");
     await p.click("[data-tr-nclose]");
+  }
+
+  // Master Inventory "In transit" column: PO1's 310028 line (linked to the
+  // 5100 mm row) still has 6,000 pending; 134002 nothing left; click = Transit page filtered
+  {
+    await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(1500);
+    const head = await p.innerText("#miItemsTable thead");
+    const row = (id) => p.innerText(`tr[data-mi-row="${id}"] .mi-transit`);
+    check(/In transit/i.test(head) && (await row("f-310028-5100")).trim() === "6000" && (await row("f-310028-2500")).trim() === "—" && (await row("f-134002")).trim() === "—",
+      "Master Inventory: In transit 6000 on the 5100 mm row only, — elsewhere");
+    const tip = await p.getAttribute('tr[data-mi-row="f-310028-5100"] [data-mi-transit]', "title");
+    check(/PO26-2106 · 6,000 Units · Partially received · expected 20 Dec 2026/.test(tip || ""), "hover: PO, quantity, status, expected date (" + String(tip).split("\n")[1] + ")");
+    if (shot) await p.screenshot({ path: shot.replace(/\.png$/, "-master.png") });
+    await p.click('tr[data-mi-row="f-310028-5100"] [data-mi-transit]'); await p.waitForTimeout(800);
+    check(await p.isVisible("#v-transit") && (await p.inputValue("#trFMaterial")) === "310028",
+      "click: Materials in Transit opens filtered on 310028");
+    check((await p.$$("#trTable tr.tr-sub tr[data-tr-po]")).length === 1, "  ... only the 310028 line shown");
+    await p.click("#trFClear"); await p.waitForTimeout(200);
+    // An unlinked line (saved before the bar length was chosen) is linked from the PO window
+    const tl = db.lines.find((l) => l.order_id === 1 && l.item_code === "310028");
+    tl.freedom_item_id = null;
+    await p.click("#trReload"); await p.waitForTimeout(600);
+    await p.click('#trTable tr[data-tr-toggle="1"]'); await p.click('#trTable button[data-tr-po="1"]'); await p.waitForSelector("#trDlg[open]");
+    const sel = `#trDlg select[data-tr-link="${tl.id}"]`;
+    check(!!(await p.$(sel)) && (await p.$$eval(sel + " option", (o) => o.length)) === 3 && (await p.$$("#trDlg select[data-tr-link]")).length === 1,
+      "PO window: unlinked 310028 line offers its two bar lengths; 90001T (not in Master) gets no choice");
+    await p.selectOption(sel, "f-310028-2500"); await p.waitForTimeout(900);
+    check(tl.freedom_item_id === "f-310028-2500" && !(await p.$(sel)) && /Linked to ZLS1 Track 01 MILL · 2500 mm/.test(await p.innerText("#trDlg")) && /link by Staff Test/.test(await p.textContent("#trDlg .tr-log")),
+      "link: saved, choice gone, message + change history");
+    await p.click("[data-tr-close]");
+    await p.click('nav button[data-v="master-inventory"]'); await p.waitForTimeout(1500);
+    check((await row("f-310028-2500")).trim() === "6000" && (await row("f-310028-5100")).trim() === "—", "Master Inventory follows the link (now on the 2500 mm row)");
+    tl.freedom_item_id = "f-310028-5100";
   }
 
   const staffCalls = db.calls.filter((c) => /^transit_(admin|cancel|delete)/.test(c.name)).length;

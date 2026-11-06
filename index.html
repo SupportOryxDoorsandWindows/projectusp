@@ -1185,6 +1185,9 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .mi-table th,.mi-table td{padding:12px 14px; vertical-align:middle}
 .mi-table thead th{position:static; background:var(--white)}
 .mi-row{cursor:pointer}
+.mi-tr-btn{background:#E1ECF7; color:#1D4F86; border:1px solid #C3D7EE; border-radius:999px; padding:2px 10px; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap}
+.mi-tr-btn:hover,.mi-tr-btn:focus-visible{background:#CFE0F3; border-color:#1D4F86}
+.tr-link{display:flex; flex-direction:column; gap:3px; margin-top:4px} .tr-link select{max-width:280px; min-height:32px; font-size:13px}
 .mi-row.sel td{background:#FBF6EA}
 /* Kanban row colours (kanban.js): the whole row, every column. */
 .mi-table tr.kb-low > td,.mi-table tr.kb-low:hover > td{background:#FEF3C7; color:#92400E}
@@ -2191,7 +2194,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
         <table class="fp-table mi-table" id="miItemsTable">
           <thead><tr>
             <th>Item</th><th class="num">Qty</th><th class="num">Unit cost (AED)</th><th class="num">Value (AED)</th>
-            <th>Status</th><th>Last change</th><th><span class="sr-only">Actions</span></th>
+            <th>Status</th><th class="num" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th><th>Last change</th><th><span class="sr-only">Actions</span></th>
           </tr></thead>
           <tbody id="miItemsBody"></tbody>
         </table>
