@@ -382,6 +382,24 @@ product lines — never treat one family's item as a match for another's:
   `transitSummary` in report.js (tested in tests/monthly-report.test.js).
 - Browser test: `tests/browser/transit-flow.js --node-modules <dir>
   [--docs <dir with the PO / quote PDFs>]` (stand-in backend; staff + Admin).
+- IN MASTER INVENTORY (2026-11-06, owner: "is it possible to have the
+  materials in transit reflected in the Master Inventory?"; answers: qty +
+  PO on hover, Kanban status NOT affected, Freedom and Renson, link the
+  unlinked lines in the PO): column "In transit" after Status in the Freedom
+  list (fp-inventory.js `loadInTransit` / `inTransitCell`) and the Renson
+  list (renson.js `transitCell`, last column) = pending qty of OPEN POs'
+  lines LINKED to that item (`transitByItem` / `loadTransitByItem` in
+  ORYX_TRANSIT_CORE); hover = one line per PO (`transitTitle`: PO, qty,
+  status, expected); click = Materials in Transit filtered on the code
+  (`ORYX_TRANSIT.showMaterial`), never the item panel. Display only: stock,
+  value, Kanban, Extract unchanged. Unlinked lines: the PO window offers
+  "Link to Master item…" (`poLinkCell`; only items with the SAME code, e.g.
+  the bar lengths of 310028; no code / no such item in Master = "not in
+  Master" as before) -> `transit_link_line(line, item)`
+  (`supabase/sql/transit_link_line.sql`, staff, same code only, only an
+  unlinked line, logged 'link'; tested `tests/sql/transit-link-line.test.sql`
+  after the transit SQL test). NOTE transit.js already has a `linkCell` (New
+  PO form): a second function with that name silently replaced it.
 
 ## Hidden items (not on the official stock list, 2026-10-30)
 

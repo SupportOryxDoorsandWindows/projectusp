@@ -874,10 +874,13 @@
 
   async function load() {
     ui.loading = true; ui.loadError = ""; render();
-    const [items, imports] = await Promise.all([
+    const [items, imports, inTransit] = await Promise.all([
       sb.from("renson_items").select("*").order("item_code").order("id"),
       sb.from("renson_imports").select("*").order("created_at", { ascending: false }).limit(1),
+      // "In transit" column (2026-11-06): open POs' pending qty linked to each item (display only).
+      (async () => { const C = window.ORYX_TRANSIT_CORE; return C && C.loadTransitByItem ? C.loadTransitByItem(sb, "renson") : new Map(); })(),
     ]);
+    ui.inTransit = inTransit;
     ui.loading = false;
     const bad = items.error || imports.error;
     if (bad) { ui.loadError = bad.message; return render(); }
@@ -941,7 +944,7 @@
         <span class="muted">${rows.length} of ${all.length} items</span>
         <button type="button" class="btn-outline" data-rn-act="extract">Extract (.xlsx)</button></div>
       <div class="rn-wrap"><table class="rn-table"><thead><tr>
-        <th>Code</th><th>Description</th><th>Size</th><th>Colour</th><th>Unit</th><th class="r">Stock</th><th class="r">Unit cost</th><th class="r">Value</th><th>Status</th></tr></thead>
+        <th>Code</th><th>Description</th><th>Size</th><th>Colour</th><th>Unit</th><th class="r">Stock</th><th class="r">Unit cost</th><th class="r">Value</th><th>Status</th><th class="r" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th></tr></thead>
         <tbody>${rows.map((i) => { const s = statusOf(i); const cls = !s.out && (s.kanban === "low" || s.kanban === "critical") ? "kb-" + s.kanban : (Number(i.current_qty) > 0 ? "" : "rn-zero");
           return `<tr class="${cls}" data-rn-item="${i.id}" title="Open ${esc(i.item_code)}">
           <td class="mono">${esc(i.item_code)}</td>
@@ -949,9 +952,15 @@
           <td>${esc(i.product_size || "")}</td><td>${esc(i.colour || "")}</td><td>${esc(i.unit || "")}</td>
           <td class="r">${qtyFmt(i.current_qty)}</td>
           <td class="r">${i.unit_cost == null ? `<span class="muted">No cost</span>` : aed(i.unit_cost)}</td>
-          <td class="r">${aed(i.current_value)}</td><td>${badges(i)}</td></tr>`; }).join("")}</tbody>
-        <tfoot><tr><td colspan="7">${rows.length < all.length ? "Total of the items shown" : "Total stock value"}</td><td class="r">${aed(shownValue)}</td><td></td></tr></tfoot>
+          <td class="r">${aed(i.current_value)}</td><td>${badges(i)}</td>${transitCell(i)}</tr>`; }).join("")}</tbody>
+        <tfoot><tr><td colspan="7">${rows.length < all.length ? "Total of the items shown" : "Total stock value"}</td><td class="r">${aed(shownValue)}</td><td></td><td></td></tr></tfoot>
       </table></div>`;
+  }
+
+  function transitCell(i) {
+    const e = ui.inTransit && ui.inTransit.get(String(i.id)), C = window.ORYX_TRANSIT_CORE;
+    if (!e) return `<td class="r muted">—</td>`;
+    return `<td class="r"><button type="button" class="mi-tr-btn" data-rn-transit="${esc(i.item_code)}" title="${esc(C ? C.transitTitle(e) : "")}">${qtyFmt(e.qty)}</button></td>`;
   }
 
   async function extract() {
@@ -1085,6 +1094,8 @@
   function onClick(e) {
     const t = e.target.closest("[data-rn-tab],[data-rn-act]");
     if (!t) {
+      const tr = e.target.closest("[data-rn-transit]");
+      if (tr) { if (window.ORYX_TRANSIT && window.ORYX_TRANSIT.showMaterial) window.ORYX_TRANSIT.showMaterial(tr.dataset.rnTransit); return; }
       const row = e.target.closest("tr[data-rn-item]");
       if (row) openItem(row.dataset.rnItem);
       return;

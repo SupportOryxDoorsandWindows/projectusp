@@ -96,10 +96,10 @@
     }
   }
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes, aliases, photos, lastChange] = await Promise.all([
+      const [itemsRes, txRes, aliases, photos, lastChange, inTransit] = await Promise.all([
         // Items no longer on the official stock list are kept (history) but
         // hidden: status 'inactive' and no stock (CLAUDE.md "Hidden items").
         sb.from("inventory_items").select("*").or("status.neq.inactive,current_qty.neq.0").order("item_code"),
@@ -111,14 +111,15 @@
         loadSupplierAliases(),
         loadItemPhotos(),
         loadLastChangeByItem(),
+        loadInTransit(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
-      renderMasterInventoryView(itemsRes.data, txRes.data, photos, lastChange);
+      renderMasterInventoryView(itemsRes.data, txRes.data, photos, lastChange, inTransit);
       renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="7" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
   }
@@ -139,6 +140,20 @@
       }
     } catch (e) { console.error("last change", e); }
     return last;
+  }
+  // "In transit" column (2026-11-06, owner's request): pending quantity on
+  // open POs whose line is linked to this item (transit.js
+  // ORYX_TRANSIT_CORE.loadTransitByItem). Display only; never stock. transit.js
+  // is added by boot.js, so wait for it briefly.
+  async function loadInTransit() {
+    for (let i = 0; i < 50 && !(window.ORYX_TRANSIT_CORE && window.ORYX_TRANSIT_CORE.loadTransitByItem); i++) await new Promise((r) => setTimeout(r, 100));
+    const C = window.ORYX_TRANSIT_CORE;
+    return C && C.loadTransitByItem ? C.loadTransitByItem(sb, "freedom") : new Map();
+  }
+  function inTransitCell(e, it) {
+    if (!e) return `<td class="num mono mi-transit muted">—</td>`;
+    const C = window.ORYX_TRANSIT_CORE;
+    return `<td class="num mono mi-transit"><button type="button" class="mi-tr-btn" data-mi-transit="${esc(it.item_code)}" title="${esc(C ? C.transitTitle(e) : "")}">${fmt(e.qty)}</button></td>`;
   }
   function lastChangeCell(t) {
     if (!t) return `<td class="mi-last muted">—</td>`;
@@ -352,7 +367,8 @@
   const sortForList = (items) => [...items].sort((a, b) =>
     LAST_PAGE_ITEMS.test(a.description || "") - LAST_PAGE_ITEMS.test(b.description || ""));
 
-  function renderMasterInventoryView(items, txs, photos, lastChange) {
+  function renderMasterInventoryView(items, txs, photos, lastChange, inTransit) {
+    inTransit = inTransit || new Map();
     items = sortForList(items);
     lastChange = lastChange || new Map();
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
@@ -419,11 +435,12 @@
           <td class="num mono">${Number(it.unit_cost || 0).toFixed(2)}</td>
           <td class="num mono">${Number(it.current_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
           <td>${miStatus(it).html}</td>
+          ${inTransitCell(inTransit.get(String(it.id)), it)}
           ${lastChangeCell(lastChange.get(it.id))}
           <td class="mi-actions"><button class="btn-outline btn-sm" type="button" data-mi-timeline="${esc(it.id)}">Timeline</button>
             <button class="btn-outline btn-sm" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="7" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="8" class="small muted">No items match.</td></tr>`;
 
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-photo]")) {
         btn.onclick = (e) => { e.stopPropagation(); openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap); };
@@ -434,6 +451,9 @@
         window.ORYX_ITEM.open(item, { onAdjust: (fresh) => openMiAdjustDialog(fresh || item) });
         for (const tr of $("#miItemsBody").querySelectorAll("tr[data-mi-row]")) tr.classList.toggle("sel", tr.dataset.miRow === id);
       };
+      for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-transit]")) {
+        btn.onclick = (e) => { e.stopPropagation(); if (window.ORYX_TRANSIT && window.ORYX_TRANSIT.showMaterial) window.ORYX_TRANSIT.showMaterial(btn.dataset.miTransit); };
+      }
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-timeline]")) {
         btn.onclick = (e) => { e.stopPropagation(); openTimeline(btn.dataset.miTimeline); };
       }
