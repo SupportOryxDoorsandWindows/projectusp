@@ -28,6 +28,9 @@
     profile: null,
     isAdmin() { return !!(this.profile && this.profile.active && this.profile.role === "admin"); },
     canDelete() { return !!(this.profile && this.profile.active && (this.profile.role === "admin" || this.profile.can_delete)); },
+    // Kanban trigger / critical levels (Freedom + Renson): Admins, and people
+    // an Admin made a "Kanban editor" (supabase/sql/kanban_editors.sql).
+    canEditKanban() { return !!(this.profile && this.profile.active && (this.profile.role === "admin" || this.profile.can_edit_kanban)); },
     // Headers for the Edge Functions: the person's own (fresh) sign-in token.
     async fnHeaders() {
       const { data } = await sb.auth.getSession();

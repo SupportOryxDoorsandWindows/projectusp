@@ -606,6 +606,19 @@ product lines — never treat one family's item as a match for another's:
   after Adjust and every time Master Inventory is opened (after Check-in /
   Check-out). It does not live-update from other people's changes.
   SQL: `supabase/sql/item_minimum_level.sql`, `supabase/sql/item_kanban_levels.sql`.
+- KANBAN EDITORS (2026-11-06, owner: "give anshad permission to edit the
+  kanban"; answers "Kanban only", "Freedom and Renson"):
+  `supabase/sql/kanban_editors.sql` adds `user_profiles.can_edit_kanban` and
+  `can_edit_kanban()` (= active AND (Admin OR the flag)); the access check of
+  `set_item_kanban_levels` and `renson_set_levels` is now `can_edit_kanban()`
+  (only that line changed from the live definitions). Admins switch it per
+  person in User Management (column "Kanban levels", `admin.js`) through
+  `admin_set_kanban_editor(user, on)` (Admins only; logged to
+  `account_activity_log` as 'kanban_access', shown on Activity). Browser:
+  `ORYX_AUTH.canEditKanban()` (boot.js v=19) in item-timeline.js and
+  renson.js. No other Admin power. Anshad Ellikkal switched on. Tests:
+  `tests/sql/kanban-editors.test.sql` (after renson-release.test.sql; header
+  says the stand-in columns to add), `tests/browser/kanban-editor.js`.
 
 ## What's New & Updates (bell, panel, history page, publishing)
 

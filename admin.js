@@ -65,12 +65,15 @@
         <td>${isAdmin
           ? `<label class="um-toggle" title="Admins can always delete"><input type="checkbox" checked disabled> Always</label>`
           : `<label class="um-toggle"><input type="checkbox" data-set="can_delete" ${u.can_delete ? "checked" : ""} aria-label="Allow Delete for ${esc(name)}"> ${u.can_delete ? "On" : "Off"}</label>`}</td>
+        <td>${isAdmin
+          ? `<label class="um-toggle" title="Admins can always set Kanban levels"><input type="checkbox" checked disabled> Always</label>`
+          : `<label class="um-toggle"><input type="checkbox" data-set="can_edit_kanban" ${u.can_edit_kanban ? "checked" : ""} aria-label="Allow ${esc(name)} to set Kanban levels"> ${u.can_edit_kanban ? "On" : "Off"}</label>`}</td>
         <td class="um-last">${lastActiveText(u.user_id)}</td>
         <td>${self ? `<span class="badge ok">Active</span>`
           : `<select class="um-pick status ${u.active ? "" : "off"}" data-set="active" aria-label="Status for ${esc(name)}"><option value="true" ${u.active ? "selected" : ""}>Active</option><option value="false" ${u.active ? "" : "selected"}>Turned off</option></select>`}</td>
         <td class="um-actions"><button class="btn-outline btn-sm" type="button" data-link>New password link</button>${self ? "" : `<button class="btn-outline btn-sm um-remove" type="button" data-remove>Remove</button>`}</td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6" class="muted">No accounts yet.</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">No accounts yet.</td></tr>`;
 
     $("#umRows").querySelectorAll("[data-set]").forEach((box) => {
       box.onchange = async () => {
@@ -87,8 +90,14 @@
         if (field === "active" && !on && !confirm(`Turn off ${u.full_name || u.email}'s account? They will be signed out and can't sign in.`)) { undo(); return; }
         box.disabled = true;
         try {
-          await call(body);
+          if (field === "can_edit_kanban") {
+            // Not an Edge Function change: admin_set_kanban_editor() checks
+            // is_admin() itself and logs to account_activity_log.
+            const { data, error } = await AUTH.sb.rpc("admin_set_kanban_editor", { p_user_id: id, p_on: on });
+            if (error || !data || !data.ok) throw new Error(error ? error.message : (data && data.error) === "not_admin" ? "Only an Admin can change this." : "The change was not saved.");
+          } else await call(body);
           const label = { can_delete: on ? "can now delete" : "can no longer delete",
+                          can_edit_kanban: on ? "can now set Kanban levels" : "can no longer set Kanban levels",
                           role: on ? "is now an Admin" : "is no longer an Admin",
                           active: on ? "can sign in again" : "is turned off" }[field];
           status(`${u.full_name || u.email} ${label}.`);

@@ -402,7 +402,7 @@ const freedomWrites = (reqs) => reqs.filter((r) => r.role && r.method !== "GET" 
     await p.selectOption("#rnInventory", "renson"); await p.waitForTimeout(1000);
     check(/of 100 items/.test(await p.innerText("#rnBody")) || /of 101 items/.test(await p.innerText("#rnBody")), "regular user: Renson list shown");
     await p.click('tr[data-rn-item] >> text="22874"'); await p.waitForSelector("#rnItemDlg[open]");
-    check(!(await p.$("#rnLvT")) && !!(await p.$("#rnLvRead")) && /Only Admins change these/.test(await p.innerText("#rnItemBody")), "regular user: Kanban levels read-only");
+    check(!(await p.$("#rnLvT")) && !!(await p.$("#rnLvRead")) && /Only Admins and Kanban editors change these/.test(await p.innerText("#rnItemBody")), "regular user: Kanban levels read-only");
     const adjBefore = db.lastAdjust;
     await p.fill("#rnAdjQty", "13"); await p.fill("#rnAdjReason", "Staff count"); await p.waitForTimeout(150);
     await p.click('[data-rn-dlg="adjust"]'); await p.waitForTimeout(800);

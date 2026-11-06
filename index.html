@@ -2386,9 +2386,9 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
     <div class="um-scroll">
       <table class="um-grid um-people">
         <thead><tr>
-          <th>Person</th><th>Role</th><th>Allow Delete</th><th>Last active</th><th>Status</th><th><span class="sr-only">Actions</span></th>
+          <th>Person</th><th>Role</th><th>Allow Delete</th><th>Kanban levels</th><th>Last active</th><th>Status</th><th><span class="sr-only">Actions</span></th>
         </tr></thead>
-        <tbody id="umRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+        <tbody id="umRows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -2396,6 +2396,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
     <div class="card"><b>Admin</b><p>Everything, plus invite people, change permissions and remove accounts. Can always delete.</p></div>
     <div class="card"><b>User + Allow Delete</b><p>Check-in, Check-out and adjust stock, and delete lines (every delete is logged).</p></div>
     <div class="card"><b>User</b><p>Check-in, Check-out and adjust stock. The Delete button is greyed out.</p></div>
+    <div class="card"><b>Kanban levels</b><p>On = this person may set Kanban trigger and critical levels (Freedom and Renson), without other Admin rights. Every change is logged with their name.</p></div>
   </div>
 
   <dialog id="umInviteDialog" aria-labelledby="umInviteTitle">
@@ -2503,6 +2504,6 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 <script src="kanban.js?v=1"></script>
 <!-- price-history.js: purchase price history (Check-in "last bought at", item panel). -->
 <script src="price-history.js?v=1"></script>
-<script src="boot.js?v=18"></script>
+<script src="boot.js?v=19"></script>
 </body>
 </html>
