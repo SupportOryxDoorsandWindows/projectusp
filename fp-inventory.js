@@ -96,10 +96,10 @@
     }
   }
   async function loadMasterInventoryView() {
-    $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small muted">Loading…</td></tr>`;
+    $("#miItemsBody").innerHTML = `<tr><td colspan="10" class="small muted">Loading…</td></tr>`;
     $("#miTxBody").innerHTML = `<tr><td colspan="7" class="small muted">Loading…</td></tr>`;
     try {
-      const [itemsRes, txRes, aliases, photos, lastChange, inTransit] = await Promise.all([
+      const [itemsRes, txRes, aliases, photos, lastChange, inTransit, allocated] = await Promise.all([
         // Items no longer on the official stock list are kept (history) but
         // hidden: status 'inactive' and no stock (CLAUDE.md "Hidden items").
         sb.from("inventory_items").select("*").or("status.neq.inactive,current_qty.neq.0").order("item_code"),
@@ -112,14 +112,15 @@
         loadItemPhotos(),
         loadLastChangeByItem(),
         loadInTransit(),
+        loadAllocated(),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (txRes.error) throw txRes.error;
-      renderMasterInventoryView(itemsRes.data, txRes.data, photos, lastChange, inTransit);
+      renderMasterInventoryView(itemsRes.data, txRes.data, photos, lastChange, inTransit, allocated);
       renderRememberedMatches(aliases, itemsRes.data);
     } catch (err) {
       console.error(err);
-      $("#miItemsBody").innerHTML = `<tr><td colspan="8" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
+      $("#miItemsBody").innerHTML = `<tr><td colspan="10" class="small" style="color:var(--danger)">Could not load: ${esc(err.message)}</td></tr>`;
       $("#miTxBody").innerHTML = "";
     }
   }
@@ -149,6 +150,21 @@
     for (let i = 0; i < 50 && !(window.ORYX_TRANSIT_CORE && window.ORYX_TRANSIT_CORE.loadTransitByItem); i++) await new Promise((r) => setTimeout(r, 100));
     const C = window.ORYX_TRANSIT_CORE;
     return C && C.loadTransitByItem ? C.loadTransitByItem(sb, "freedom") : new Map();
+  }
+  // "Allocated" / "Available" columns (2026-11-06, Allocated Materials):
+  // reserved for jobs (allocations.js ORYX_ALLOC_CORE), still in stock.
+  // Available = Total stock - Allocated. Display only.
+  async function loadAllocated() {
+    for (let i = 0; i < 50 && !(window.ORYX_ALLOC_CORE && window.ORYX_ALLOC_CORE.loadAllocatedByItem); i++) await new Promise((r) => setTimeout(r, 100));
+    const C = window.ORYX_ALLOC_CORE;
+    return C && C.loadAllocatedByItem ? C.loadAllocatedByItem(sb, "freedom") : new Map();
+  }
+  function allocatedCells(e, it) {
+    const C = window.ORYX_ALLOC_CORE, q = e ? e.qty : 0;
+    const avail = Math.round(((Number(it.current_qty) || 0) - q) * 10000) / 10000;
+    return (e ? `<td class="num mono"><button type="button" class="mi-al-btn" data-mi-alloc="${esc(it.item_code)}" title="${esc(C ? C.allocTitle(e) : "")}">${fmt(q)}</button></td>`
+      : `<td class="num mono muted">—</td>`)
+      + `<td class="num mono${avail < 0 ? " mi-avail-neg" : ""}">${fmt(avail)}</td>`;
   }
   function inTransitCell(e, it) {
     if (!e) return `<td class="num mono mi-transit muted">—</td>`;
@@ -367,8 +383,9 @@
   const sortForList = (items) => [...items].sort((a, b) =>
     LAST_PAGE_ITEMS.test(a.description || "") - LAST_PAGE_ITEMS.test(b.description || ""));
 
-  function renderMasterInventoryView(items, txs, photos, lastChange, inTransit) {
+  function renderMasterInventoryView(items, txs, photos, lastChange, inTransit, allocated) {
     inTransit = inTransit || new Map();
+    allocated = allocated || new Map();
     items = sortForList(items);
     lastChange = lastChange || new Map();
     const totalValue = items.reduce((s, it) => s + (it.current_value || 0), 0);
@@ -432,6 +449,7 @@
         return `<tr class="mi-row${kb} ${it.id === openId ? "sel" : ""}" data-mi-row="${esc(it.id)}">
           <td><div class="mi-item">${itemPhotoButton(photos, it)}<div><div class="mi-name">${esc(it.description || it.item_code)}</div><div class="mi-code mono">${sub}</div></div></div></td>
           <td class="num mono">${fmt(it.current_qty)}</td>
+          ${allocatedCells(allocated.get(String(it.id)), it)}
           <td class="num mono">${Number(it.unit_cost || 0).toFixed(2)}</td>
           <td class="num mono">${Number(it.current_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
           <td>${miStatus(it).html}</td>
@@ -440,7 +458,7 @@
           <td class="mi-actions"><button class="btn-outline btn-sm" type="button" data-mi-timeline="${esc(it.id)}">Timeline</button>
             <button class="btn-outline btn-sm" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>
         </tr>`;
-      }).join("") || `<tr><td colspan="8" class="small muted">No items match.</td></tr>`;
+      }).join("") || `<tr><td colspan="10" class="small muted">No items match.</td></tr>`;
 
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-photo]")) {
         btn.onclick = (e) => { e.stopPropagation(); openItemPhoto(btn.dataset.miPhoto, btn.dataset.miPhotoCap); };
@@ -451,6 +469,9 @@
         window.ORYX_ITEM.open(item, { onAdjust: (fresh) => openMiAdjustDialog(fresh || item) });
         for (const tr of $("#miItemsBody").querySelectorAll("tr[data-mi-row]")) tr.classList.toggle("sel", tr.dataset.miRow === id);
       };
+      for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-alloc]")) {
+        btn.onclick = (e) => { e.stopPropagation(); if (window.ORYX_ALLOC && window.ORYX_ALLOC.showItem) window.ORYX_ALLOC.showItem(btn.dataset.miAlloc); };
+      }
       for (const btn of $("#miItemsBody").querySelectorAll("[data-mi-transit]")) {
         btn.onclick = (e) => { e.stopPropagation(); if (window.ORYX_TRANSIT && window.ORYX_TRANSIT.showMaterial) window.ORYX_TRANSIT.showMaterial(btn.dataset.miTransit); };
       }

@@ -360,6 +360,9 @@
       (missing ? ` · ${missing.label} needed` : "");
     $("#fpConfirmBar").hidden = state.done;
     $("#fpConfirm").disabled = !canConfirm;
+    // "Allocate instead" (Allocated Materials): same lines, nothing taken off.
+    const alBtn = $("#fpAllocate");
+    if (alBtn) { alBtn.hidden = !window.ORYX_ALLOC; alBtn.disabled = !canConfirm; }
 
     document.querySelectorAll("#fpOut .fp-row-actions button, #fpOut .fp-batch-actions button").forEach((b) => {
       b.addEventListener("click", () => applyRowAction(+b.dataset.i, b.dataset.act));
@@ -485,11 +488,48 @@
     // Delivery notes (delivery-notes.js): prepared from the same job list now
     // that the Check-out is saved. Never affects it; a failure only shows
     // "Try again" below the done message. Hand entry (no PDF) has none.
+    // Allocated Materials: this job's reservation follows what was checked
+    // out (server matches the saved stock lines; never twice). Silent when the
+    // job has no allocation; never affects the Check-out.
+    if (window.ORYX_ALLOC) {
+      try { window.ORYX_ALLOC.afterCheckout({ job: jobRef, container: $("#fpDone .fp-done") }); } catch (e) { console.error("allocation", e); }
+    }
     if (data && pdfHash && window.ORYX_DN) {
       try {
         window.ORYX_DN.afterCheckout({ container: $("#fpDone .fp-done"), file: pdfFile, hash: pdfHash, job: jobRef, client });
       } catch (e) { console.error("delivery notes", e); }
     }
+  }
+
+  // Allocated Materials (2026-11-06): reserve this job list's lines for the
+  // job instead of taking them off. allocations.js shows what is available
+  // and saves; the stock is not touched. Check-out itself is unchanged.
+  async function allocateInstead() {
+    const jobRef = $("#fpJobNumber").value.trim();
+    if (!jobRef) { setJobFieldInvalid("fpJobNumber", true); $("#fpJobNumber").focus(); status("Enter the job number before allocating.", "err"); return; }
+    if (!window.ORYX_ALLOC) return;
+    const ren = rensonCount() > 0 ? rensonCheckout() : null;
+    const freedom = state.rows.filter((r) => r.action === "deduct" && r.itemId).map((r) => ({ item_id: r.itemId, qty: r.requiredQty }));
+    const renson = ren && ren.takeLines ? ren.takeLines() : [];
+    await window.ORYX_ALLOC.fromCheckout({
+      job: jobRef, client: $("#fpClient").value.trim(), documentName: state.pdfFile ? state.pdfFile.name : null, documentHash: state.pdfHash || null,
+      freedom, renson,
+      done(res) {
+        state.done = true;
+        $("#fpConfirmBar").hidden = true;
+        document.querySelectorAll("#fpOut button").forEach((b) => { b.disabled = true; });
+        $("#fpDone").innerHTML = `
+          <div class="fp-done">
+            <h3>Allocated — ${res.lines} material${res.lines === 1 ? "" : "s"} reserved for job ${esc(res.job_number)}</h3>
+            <p class="small">Nothing was taken off the stock. These quantities are now <b>Allocated</b> in Master Inventory (not Available to other jobs).
+            When this job is checked out, the reservation is cleared by itself.</p>
+            <div class="fp-done-actions"><button class="ghost" id="fpNew">Start another Check-out</button>
+              <button class="ghost" id="fpGoAlloc">Open Allocated Materials</button></div>
+          </div>`;
+        $("#fpNew").addEventListener("click", resetAll);
+        $("#fpGoAlloc").addEventListener("click", () => { const b = document.querySelector('nav button[data-v="allocations"]'); if (b) b.click(); });
+      },
+    });
   }
 
   /* --------------------------- Analyse pipeline -------------- */
@@ -718,7 +758,7 @@
   }
 
   // Used by the other stock-screen files.
-  Object.assign(FP, { TRASH_ICON, isRensonJobList, analyse, applyCombinedStock, ciStatusChip, confirmAllocation, deleteRowAt,
+  Object.assign(FP, { TRASH_ICON, isRensonJobList, analyse, allocateInstead, applyCombinedStock, ciStatusChip, confirmAllocation, deleteRowAt,
     deletedItemsBox, fpManualAddRow, fpManualToggle, fpManualUse, promptForMissingJobDetails,
     render, resetAll, restoreDeleted, setJobFieldInvalid, status, wireDrop });
 })();

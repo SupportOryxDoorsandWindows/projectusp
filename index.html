@@ -1185,6 +1185,13 @@ th{font-family:var(--font-body); font-size:13px; font-weight:500; letter-spacing
 .mi-table th,.mi-table td{padding:12px 14px; vertical-align:middle}
 .mi-table thead th{position:static; background:var(--white)}
 .mi-row{cursor:pointer}
+.mi-al-btn{background:#FDF1D8; color:#8A5A0F; border:1px solid #F1D9A6; border-radius:999px; padding:2px 10px; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap}
+.mi-al-btn:hover,.mi-al-btn:focus-visible{background:#F9E3B5; border-color:#8A5A0F}
+.mi-avail-neg{color:#991B1B; font-weight:700}
+.fp-confirm-btns{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+.al-rel{width:80px; min-height:30px; text-align:right}
+.al-danger{color:#991B1B}
+.al-done-note{margin-top:8px}
 .mi-tr-btn{background:#E1ECF7; color:#1D4F86; border:1px solid #C3D7EE; border-radius:999px; padding:2px 10px; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap}
 .mi-tr-btn:hover,.mi-tr-btn:focus-visible{background:#CFE0F3; border-color:#1D4F86}
 .tr-link{display:flex; flex-direction:column; gap:3px; margin-top:4px} .tr-link select{max-width:280px; min-height:32px; font-size:13px}
@@ -1843,6 +1850,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
     <button type="button" data-v="dashboard" id="navDashboard" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>Dashboard</button>
     <button type="button" data-v="master-inventory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></svg>Master Inventory</button>
     <button type="button" data-v="transit" id="navTransit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5 9 4.5l6 3v7l-6 3-6-3z"/><path d="m3 7.5 6 3 6-3M9 10.5v7"/><path d="M17 9h4M18 12.5h3M17 16h4"/></svg>Materials in Transit</button>
+    <button type="button" data-v="allocations" id="navAllocations"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/><path d="m9 15 2 2 4-4"/></svg>Allocated Materials</button>
     <button type="button" data-v="checkin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Check-in</button>
     <button type="button" data-v="fp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Check-out</button>
     <button type="button" data-v="delivery-notes" id="navDeliveryNotes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>Delivery Notes</button>
@@ -2038,7 +2046,8 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
         <div class="fp-confirmbar-title">Ready to check out</div>
         <div class="small muted" id="fpConfirmSummary"></div>
       </div>
-      <button class="btn-accent" id="fpConfirm" disabled>Confirm Check-out</button>
+      <span class="fp-confirm-btns"><button class="btn-outline" id="fpAllocate" type="button" disabled title="Reserve these materials for the job instead. Nothing is taken off the stock.">Allocate instead</button>
+      <button class="btn-accent" id="fpConfirm" disabled>Confirm Check-out</button></span>
     </div>
 
     <div id="fpDone"></div>
@@ -2193,7 +2202,7 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
       <div class="fp-scroll mi-scroll">
         <table class="fp-table mi-table" id="miItemsTable">
           <thead><tr>
-            <th>Item</th><th class="num">Qty</th><th class="num">Unit cost (AED)</th><th class="num">Value (AED)</th>
+            <th>Item</th><th class="num" title="Physical stock">Total stock</th><th class="num" title="Reserved for jobs (Allocated Materials), still in stock">Allocated</th><th class="num" title="Total stock minus Allocated">Available</th><th class="num">Unit cost (AED)</th><th class="num">Value (AED)</th>
             <th>Status</th><th class="num" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th><th>Last change</th><th><span class="sr-only">Actions</span></th>
           </tr></thead>
           <tbody id="miItemsBody"></tbody>
@@ -2289,6 +2298,26 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
   <dialog id="trDlg" class="tr-dlg" aria-label="Purchase order"></dialog>
   <dialog id="trNewDlg" class="tr-dlg" aria-label="New purchase order"></dialog>
   <dialog id="trRcvDlg" class="tr-dlg" aria-label="Receive from Transit"></dialog>
+</section>
+
+<!-- ================== ALLOCATED MATERIALS (allocations.js, all active staff) ================== -->
+<section id="v-allocations" class="view">
+  <div class="page-head">
+    <div><h1>Allocated Materials</h1><p>Stock reserved for jobs, not yet checked out. Still in stock, but not Available to other jobs.</p></div>
+    <div class="page-actions">
+      <button type="button" class="btn-outline" id="alManual">+ Allocate by hand</button>
+      <button type="button" class="btn-yellow" id="alFromList">Allocate a job list</button>
+    </div>
+  </div>
+  <div class="page-body tr-body">
+    <div id="alStatus" class="small muted" role="status"></div>
+    <div class="db-tiles tr-cards" id="alCards"></div>
+    <div class="tr-filters" id="alFilters"></div>
+    <div id="alTable"></div>
+    <p><button type="button" class="btn-outline btn-sm" id="alReload">Reload</button></p>
+  </div>
+  <dialog id="alDlg" class="tr-dlg" aria-label="Allocation"></dialog>
+  <dialog id="alNewDlg" class="tr-dlg" aria-label="Allocate materials"></dialog>
 </section>
 
 <!-- ================== FILM CUTTING (film-cutting.js, all active staff) ================== -->
@@ -2507,6 +2536,6 @@ input.dn-need{border:2px solid #E9B53C; background:#FFFBEB}
 <script src="kanban.js?v=1"></script>
 <!-- price-history.js: purchase price history (Check-in "last bought at", item panel). -->
 <script src="price-history.js?v=1"></script>
-<script src="boot.js?v=19"></script>
+<script src="boot.js?v=20"></script>
 </body>
 </html>

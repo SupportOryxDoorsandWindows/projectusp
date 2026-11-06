@@ -543,6 +543,7 @@
     const typed = t.id === "trSearch" || t.id === "trFMaterial";
     if (map[t.id]) {
       if (e.type === "input" && !typed) return;          // selects / dates: on change
+      if ((f[map[t.id]] || "") === t.value) return;     // "change" on leaving a search box: no redraw (it ate the next click)
       f[map[t.id]] = t.value;
       if (t.id === "trFSupplier") f.group = "";
       ui.linePage = {}; ui.collapsed.clear();
