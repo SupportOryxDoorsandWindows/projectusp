@@ -950,14 +950,14 @@
         <button type="button" class="btn-outline" data-rn-act="extract">Extract (.xlsx)</button></div>
       <div class="rn-wrap"><table class="rn-table"><thead><tr>
         <th>Code</th><th>Description</th><th>Size</th><th>Colour</th><th>Unit</th><th class="r" title="Physical stock in the store">Physical stock</th><th class="r" title="Reserved for jobs, still in stock">Allocated</th><th class="r" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th><th class="r" title="Physical stock minus Allocated">Available</th><th class="r" title="Available plus In transit">Forecast available</th><th class="r">Unit cost</th><th class="r">Value</th><th>Status</th></tr></thead>
-        <tbody>${rows.map((i) => { const s = statusOf(i); const cls = !s.out && (s.kanban === "low" || s.kanban === "critical") ? "kb-" + s.kanban : (Number(i.current_qty) > 0 ? "" : "rn-zero");
+        <tbody>${rows.map((i) => { const s = statusOf(i), fg = figures(i); const cls = !s.out && (s.kanban === "low" || s.kanban === "critical") ? "kb-" + s.kanban : fg.triggered ? "kb-avail" : (Number(i.current_qty) > 0 ? "" : "rn-zero");
           return `<tr class="${cls}" data-rn-item="${i.id}" title="Open ${esc(i.item_code)}">
           <td class="mono">${esc(i.item_code)}</td>
           <td>${withPhoto(i.item_code, i.description, esc(i.description) + (i.alt_codes ? `<span class="rn-alt">Also ${esc(i.alt_codes)}</span>` : ""))}</td>
           <td>${esc(i.product_size || "")}</td><td>${esc(i.colour || "")}</td><td>${esc(i.unit || "")}</td>
           <td class="r">${qtyFmt(i.current_qty)}</td>${allocCells(i)}
           <td class="r">${i.unit_cost == null ? `<span class="muted">No cost</span>` : aed(i.unit_cost)}</td>
-          <td class="r">${aed(i.current_value)}</td><td>${badges(i)}</td></tr>`; }).join("")}</tbody>
+          <td class="r">${aed(i.current_value)}</td><td>${badges(i)}${fg.triggered ? ` <span class="badge kb-avail-badge" title="Available ${esc(qtyFmt(fg.available))} is at or below the Kanban trigger ${esc(qtyFmt(fg.trigger))}">Kanban triggered</span>` : ""}</td></tr>`; }).join("")}</tbody>
         <tfoot><tr><td colspan="11">${rows.length < all.length ? "Total of the items shown" : "Total stock value"}</td><td class="r">${aed(shownValue)}</td><td></td></tr></tfoot>
       </table></div>`;
   }
@@ -967,7 +967,9 @@
     const a = ui.allocated && ui.allocated.get(String(i.id)), t = ui.inTransit && ui.inTransit.get(String(i.id));
     const r4 = (v) => Math.round(v * 10000) / 10000, physical = Number(i.current_qty) || 0;
     const allocated = a ? a.qty : 0, transit = t ? t.qty : 0, available = r4(physical - allocated);
-    return { a, t, physical, allocated, transit, available, forecast: r4(available + transit) };
+    const trigger = i.buffer_level == null ? null : Number(i.buffer_level);
+    // "Kanban triggered" on Available (Pau's sheet): extra flag; the status stays on physical stock.
+    return { a, t, physical, allocated, transit, available, forecast: r4(available + transit), trigger, triggered: trigger != null && trigger > 0 && available <= trigger };
   }
   function allocCells(i) {
     const f = figures(i), C = window.ORYX_ALLOC_CORE;
@@ -990,7 +992,8 @@
       ...(() => { const f = figures(i); return { "Physical Stock Qty": f.physical, "Allocated Materials Qty": f.allocated || "", "Materials in Transit Qty": f.transit || "",
         "Available Stock Qty": f.available, "Forecast Available Stock Qty": f.forecast }; })(), "Unit cost (AED)": i.unit_cost == null ? "" : Number(i.unit_cost), "Value (AED)": Number(i.current_value),
       "Kanban trigger": i.buffer_level == null ? "" : Number(i.buffer_level), "Critical level": i.critical_level == null ? "" : Number(i.critical_level),
-      Status: s.out ? "Out of stock" : s.kanban === "critical" ? "Critical stock" : s.kanban === "low" ? "Low stock" : s.noCost ? "No cost" : "" }; });
+      Status: s.out ? "Out of stock" : s.kanban === "critical" ? "Critical stock" : s.kanban === "low" ? "Low stock" : s.noCost ? "No cost" : "",
+      Note: figures(i).triggered ? "Kanban triggered" : "" }; });
     const wb = X.utils.book_new();
     X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), "Renson inventory");
     X.writeFile(wb, `Renson inventory ${today()}.xlsx`);

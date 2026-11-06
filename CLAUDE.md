@@ -461,6 +461,14 @@ product lines — never treat one family's item as a match for another's:
   in red), Unit cost, Value, Kanban trigger, Critical level, Status; the
   Renson Extract has the same 5 quantity columns. Kanban status / value
   still on physical stock.
+- "KANBAN TRIGGERED" ON AVAILABLE (2026-11-06, owner: "yes", from Pau's
+  orange row): Available <= Kanban trigger (trigger set) = orange row
+  (`kb-avail`, only when not already Low / Critical, whose colours win) +
+  badge "Kanban triggered" beside the status; Extract: orange row fill and
+  "Kanban triggered" in a last column "Note" (Renson Extract: Note). The
+  Kanban STATUS (Low / Critical / Show filter / Dashboard) is unchanged:
+  still physical stock. `stockFigures().triggered` (fp-inventory.js),
+  `figures().triggered` (renson.js).
 - Found while testing: leaving a search box fired "change" and redrew the
   table, so the next click on a row was lost (Materials in Transit too) --
   onFilter now skips an unchanged value.

@@ -17,7 +17,8 @@
   // Layout of Pau's sheet (2026-11-06, owner's request): the five quantity
   // columns, headings in red. Forecast = Available + In transit.
   const INVENTORY_COLS = ["Code", "Description", "Category", "Bar length (mm)", "Unit", "Physical Stock Qty", "Allocated Materials Qty",
-    "Materials in Transit Qty", "Available Stock Qty", "Forecast Available Stock Qty", "Unit cost (AED)", "Value (AED)", "Kanban trigger", "Critical level", "Status"];
+    "Materials in Transit Qty", "Available Stock Qty", "Forecast Available Stock Qty", "Unit cost (AED)", "Value (AED)", "Kanban trigger", "Critical level", "Status", "Note"];
+  const ORANGE_ROW = { fill: { fgColor: { rgb: "FCE4D6" } } };
   const QTY_COLS = [5, 6, 7, 8, 9];
   // Quantities of one item (display only): allocated / in transit from the
   // maps read with the list (allocations.js, transit.js).
@@ -28,7 +29,12 @@
     const a = miAllocated.get(String(it.id)), t = miTransit.get(String(it.id));
     const allocated = a ? a.qty : 0, transit = t ? t.qty : 0;
     const available = r4(physical - allocated);
-    return { physical, allocated, transit, available, forecast: r4(available + transit), a, t };
+    const trigger = it.buffer_level == null ? null : Number(it.buffer_level);
+    // "Kanban triggered" on AVAILABLE (Pau's sheet, owner's yes 2026-11-06):
+    // Available <= Kanban trigger. Extra flag only: the Kanban status
+    // (Low / Critical) stays on physical stock.
+    const triggered = trigger != null && trigger > 0 && available <= trigger;
+    return { physical, allocated, transit, available, forecast: r4(available + transit), a, t, trigger, triggered };
   }
   // Same Kanban rule as the rows (kanban.js).
   function inventoryStatus(it) {
@@ -53,6 +59,7 @@
         it.unit_of_measure || "", ...(() => { const f = stockFigures(it); return [f.physical, f.allocated || "", f.transit || "", f.available, f.forecast]; })(),
         it.unit_cost, it.current_value,
         it.buffer_level != null ? it.buffer_level : "", it.critical_level != null ? it.critical_level : "", inventoryStatus(it),
+        stockFigures(it).triggered ? "Kanban triggered" : "",
       ]);
     }
     const totalRow = aoa.length;
@@ -61,7 +68,7 @@
 
     const ws = window.XLSX.utils.aoa_to_sheet(aoa);
     ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: n - 1 } }];
-    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 17 }, { wch: 21 }, { wch: 21 }, { wch: 18 }, { wch: 26 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 9 }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 44 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 17 }, { wch: 21 }, { wch: 21 }, { wch: 18 }, { wch: 26 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 9 }, { wch: 18 }];
     ws["!rows"] = [{ hpt: 22 }];
     ws["!autofilter"] = { ref: window.XLSX.utils.encode_range({ s: { r: firstDataRow - 1, c: 0 }, e: { r: totalRow - 1, c: n - 1 } }) };
     const cell = (r, c) => {
@@ -76,6 +83,14 @@
     for (let r = firstDataRow; r <= totalRow; r++) {
       for (const c of [10, 11]) if (typeof cell(r, c).v === "number") cell(r, c).z = '"AED" #,##0.00';
     }
+    // Pau's orange rows: Available at or below the Kanban trigger.
+    items.forEach((it, i) => {
+      if (!stockFigures(it).triggered) return;
+      for (let c = 0; c < n; c++) {
+        const x = cell(firstDataRow + i, c);
+        x.s = { ...(x.s || {}), ...ORANGE_ROW, ...(c === n - 1 ? { font: { color: { rgb: "C00000" } } } : {}) };
+      }
+    });
     cell(totalRow, 10).s = STYLE_LABEL;
     cell(totalRow, 11).s = STYLE_LABEL;
     return ws;
@@ -466,14 +481,15 @@
         const sub = [esc(it.item_code), it.bar_length_mm ? `${esc(fmt(it.bar_length_mm))} mm` : "", hasPhoto(it) ? "" : "no photo yet"].filter(Boolean).join(" · ");
         // Whole-row Kanban colour: kb-low (yellow) / kb-critical (red).
         const k = kanbanOf(it);
-        const kb = k === "low" || k === "critical" ? ` kb-${k}` : "";
+        const fig = stockFigures(it);
+        const kb = k === "low" || k === "critical" ? ` kb-${k}` : fig.triggered ? " kb-avail" : "";
         return `<tr class="mi-row${kb} ${it.id === openId ? "sel" : ""}" data-mi-row="${esc(it.id)}">
           <td><div class="mi-item">${itemPhotoButton(photos, it)}<div><div class="mi-name">${esc(it.description || it.item_code)}</div><div class="mi-code mono">${sub}</div></div></div></td>
           <td class="num mono">${fmt(it.current_qty)}</td>
           ${quantityCells(it)}
           <td class="num mono">${Number(it.unit_cost || 0).toFixed(2)}</td>
           <td class="num mono">${Number(it.current_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-          <td>${miStatus(it).html}</td>
+          <td>${miStatus(it).html}${fig.triggered ? ` <span class="badge kb-avail-badge" title="Available ${esc(fmt(fig.available))} is at or below the Kanban trigger ${esc(fmt(fig.trigger))}">Kanban triggered</span>` : ""}</td>
           ${lastChangeCell(lastChange.get(it.id))}
           <td class="mi-actions"><button class="btn-outline btn-sm" type="button" data-mi-timeline="${esc(it.id)}">Timeline</button>
             <button class="btn-outline btn-sm" type="button" data-mi-adjust="${esc(it.id)}">Adjust</button></td>

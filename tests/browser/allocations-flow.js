@@ -29,7 +29,7 @@ const cdn = {
 const ITEMS = [
   { id: "f-330068", item_code: "330068", description: "ZLS1-Brake Lever-01", current_qty: 100, unit_cost: 2.47, status: "active", bar_length_mm: null, unit_of_measure: "pcs" },
   { id: "f-620001", item_code: "620001", description: "IZLX Drawbar Mohair Holder", current_qty: 20, unit_cost: 30, status: "active", bar_length_mm: 5100, unit_of_measure: "pcs" },
-  { id: "f-310004-5100", item_code: "310004", description: "ZLS1 Housing 60 IS 01 MILL", current_qty: 40, unit_cost: 50, status: "active", bar_length_mm: 5100, unit_of_measure: "pcs" },
+  { id: "f-310004-5100", item_code: "310004", description: "ZLS1 Housing 60 IS 01 MILL", current_qty: 40, unit_cost: 50, status: "active", bar_length_mm: 5100, unit_of_measure: "pcs", buffer_level: 39 },
   { id: "f-310004-2900", item_code: "310004", description: "ZLS1 Housing 60 IS 01 MILL", current_qty: 10, unit_cost: 30, status: "active", bar_length_mm: 2900, unit_of_measure: "pcs" },
 ];
 const RENSON = [{ id: 7, item_code: "R7", description: "Renson part (made up)", unit: "pc", current_qty: 12, unit_cost: 3 }];
@@ -192,6 +192,13 @@ async function readJobList(p) {
   check(m.join("|") === "20|20|300|0|300", "620001: 20 physical, 20 allocated (other job), 300 in transit, 0 available, 300 forecast (" + m.join("|") + ")");
   const free = await cells("f-330068");
   check(free.join("|") === "100|—|—|100|100", "330068 (unticked): nothing allocated or in transit, all available (" + free.join("|") + ")");
+  // Kanban triggered on Available: 310004 5100 mm has 40 (above its trigger 39), 2 allocated -> 38 available
+  {
+    const cls = await p.getAttribute('tr[data-mi-row="f-310004-5100"]', "class");
+    const st = await p.innerText('tr[data-mi-row="f-310004-5100"]');
+    check(/kb-avail/.test(cls) && /In stock/.test(st) && /Kanban triggered/.test(st), "310004: orange row, still \"In stock\" + \"Kanban triggered\" (available 38 <= trigger 39)");
+    check(!/kb-avail/.test(await p.getAttribute('tr[data-mi-row="f-330068"]', "class")), "330068 (no trigger): not orange");
+  }
   // Extract (.xlsx) in Pau's layout
   {
     const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#miExtractBtn")]);
@@ -203,6 +210,8 @@ async function readJobList(p) {
     check(head.slice(5, 10).join("|") === "Physical Stock Qty|Allocated Materials Qty|Materials in Transit Qty|Available Stock Qty|Forecast Available Stock Qty"
       && /Oryx Doors & Windows — Master Inventory/.test(rows[0][0]) && /^Generated /.test(rows[1][0]), "Extract: title, date, the five quantity headings in order");
     check(row && row.slice(5, 10).join("|") === "20|20|300|0|300" && head[14] === "Status", "Extract 620001: 20|20|300|0|300 (" + (row && row.slice(5, 10).join("|")) + ")");
+    const hr = rows.find((r) => r[0] === "310004" && r[3] === 5100);
+    check(head[15] === "Note" && hr && hr[15] === "Kanban triggered" && hr[14] === "OK" && !rows.filter((r) => r[0] === "330068").some((r) => r[15]), "Extract: \"Kanban triggered\" note on 310004 only, status still OK");
     const styles = require("child_process").execFileSync("unzip", ["-p", file, "xl/styles.xml"]).toString();
     check(/FF4D4D/i.test(styles), "Extract: quantity headings in red (red font in the file's styles)");
   }
