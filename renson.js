@@ -402,7 +402,8 @@
   "use strict";
   if (typeof document === "undefined" || !window.ORYX_AUTH) return;
   const AUTH = window.ORYX_AUTH;
-  const isAdmin = () => !!(AUTH.isAdmin && AUTH.isAdmin());  // Kanban levels, import, reset
+  const isAdmin = () => !!(AUTH.isAdmin && AUTH.isAdmin());  // import, reset
+  const canKanban = () => !!(AUTH.canEditKanban ? AUTH.canEditKanban() : isAdmin());  // Kanban levels (Admins + Kanban editors)
   const R = window.ORYX_RENSON_CORE;
   const sb = AUTH.sb;
   const $ = (s, root) => (root || document).querySelector(s);
@@ -1011,11 +1012,11 @@
       <p class="muted" id="rnAdjPreview">${esc(adjPreview())}</p>
       <div class="rn-actions" style="margin-top:0"><button type="button" class="btn-yellow" data-rn-dlg="adjust" ${panel.busy ? "disabled" : ""}>Save adjustment</button></div>
       <h3>Kanban levels</h3>
-      ${isAdmin() ? `<div class="rn-grid"><label>Kanban trigger level<input class="rn-in" id="rnLvT" inputmode="decimal" value="${esc(panel.lv.t)}" placeholder="none"></label>
+      ${canKanban() ? `<div class="rn-grid"><label>Kanban trigger level<input class="rn-in" id="rnLvT" inputmode="decimal" value="${esc(panel.lv.t)}" placeholder="none"></label>
         <label>Critical level (optional)<input class="rn-in" id="rnLvC" inputmode="decimal" value="${esc(panel.lv.c)}" placeholder="none"></label></div>
       <div class="rn-actions" style="margin-top:0"><button type="button" class="btn-outline" data-rn-dlg="levels" ${panel.busy ? "disabled" : ""}>Save levels</button>
         <button type="button" class="rn-link" data-rn-dlg="levels-clear">Remove both</button></div>`
-        : `<p class="muted" id="rnLvRead">Trigger level: <b>${esc(panel.lv.t || "none")}</b> · Critical level: <b>${esc(panel.lv.c || "none")}</b>. Only Admins change these (same as Freedom).</p>`}
+        : `<p class="muted" id="rnLvRead">Trigger level: <b>${esc(panel.lv.t || "none")}</b> · Critical level: <b>${esc(panel.lv.c || "none")}</b>. Only Admins and Kanban editors change these (same as Freedom).</p>`}
       <h3>History</h3>
       ${panel.history == null ? `<p class="muted">Loading…</p>` : !panel.history.length ? `<p class="muted">No movements yet.</p>` :
         `<div class="rn-wrap"><table class="rn-table"><thead><tr><th>When</th><th>What</th><th class="r">Change</th><th class="r">Stock after</th><th class="r">Value</th><th>By</th></tr></thead><tbody>

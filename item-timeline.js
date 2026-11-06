@@ -180,7 +180,8 @@
     const item = s.item;
     const unit = esc(item.unit_of_measure || "");
     const { trigger, critical, state: st } = K().kanbanState(item);
-    const admin = !!(window.ORYX_AUTH && window.ORYX_AUTH.isAdmin && window.ORYX_AUTH.isAdmin());
+    // Admins + Kanban editors (ORYX_AUTH.canEditKanban; the server checks can_edit_kanban()).
+    const admin = !!(window.ORYX_AUTH && (window.ORYX_AUTH.canEditKanban ? window.ORYX_AUTH.canEditKanban() : window.ORYX_AUTH.isAdmin && window.ORYX_AUTH.isAdmin()));
     const stock = `Stock is ${num(item.current_qty)} ${unit}`;
     const warn = st === "critical"
       ? `<p class="min-warn crit">${K().BADGE.critical} ${stock} — at or below the critical level of ${num(critical)}. Reorder now.</p>`
@@ -196,7 +197,7 @@
       return;
     }
     const dis = s.minSaving ? " disabled" : "";
-    box.innerHTML = `<div class="min-top"><label class="min-label" for="idMinIn">Kanban trigger level <span class="min-admin">· Admins only</span></label>
+    box.innerHTML = `<div class="min-top"><label class="min-label" for="idMinIn">Kanban trigger level <span class="min-admin">· Admins and Kanban editors</span></label>
       <span class="min-in"><input id="idMinIn" type="text" inputmode="decimal" autocomplete="off" placeholder="Not set" value="${trigger == null ? "" : esc(String(trigger))}" aria-describedby="idMinHelp">
       <span class="unit">${unit}</span></span></div>
       <div class="min-top"><label class="min-label min-sub" for="idCritIn">Critical level <span class="min-admin">· optional</span></label>

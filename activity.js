@@ -104,13 +104,14 @@
   }
 
   function accountEvents(rows) {
-    const label = { invite: "invited", password_link: "made a new password link for", access_changed: "changed access for", removed: "removed", first_admin: "set up the first Admin" };
+    const label = { invite: "invited", password_link: "made a new password link for", access_changed: "changed access for", kanban_access: "changed Kanban access for", removed: "removed", first_admin: "set up the first Admin" };
     return rows.map((r) => {
       const d = r.detail || {};
       const bits = [];
       if (typeof d.can_delete === "boolean") bits.push(`Allow Delete ${d.can_delete ? "on" : "off"}`);
       if (d.role) bits.push(d.role === "admin" ? "made Admin" : "Admin removed");
       if (typeof d.active === "boolean") bits.push(d.active ? "turned on" : "turned off");
+      if (typeof d.can_edit_kanban === "boolean") bits.push(`Kanban levels ${d.can_edit_kanban ? "on" : "off"}`);
       return { key: "acc|" + r.id, at: new Date(r.happened_at), kind: "acc", tag: "Account",
         who: r.actor_name || r.actor_email || "System", whoEmail: r.actor_email || "",
         did: `${label[r.action] || r.action} ${r.target_name || r.target_email || ""}`.trim(),
