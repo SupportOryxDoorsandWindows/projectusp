@@ -387,7 +387,7 @@ const check = (ok, t) => { console.log((ok ? "ok  " : "FAIL") + " · " + t); if 
 
   const staffCalls = db.calls.filter((c) => /^transit_(admin|cancel|delete)/.test(c.name)).length;
   check(staffCalls === 0, "staff never called an Admin function");
-  const stockWrites = requests.filter((r) => r.method !== "GET" && !/\/rest\/v1\/rpc\/(transit_|renson_access)|\/storage\/v1\/object\/transit-documents\//.test(r.url));
+  const stockWrites = requests.filter((r) => r.method !== "GET" && !/\/rest\/v1\/rpc\/(transit_|renson_access|allocation_sync)|\/storage\/v1\/object\/transit-documents\//.test(r.url));
   check(stockWrites.every((r) => /^\/functions\/v1\/checkin/.test(r.url)) && stockWrites.length === 2, "only stock writes = the 2 normal Check-ins " + JSON.stringify(stockWrites.map((r) => r.url)));
   check(!errors.length, "no page errors " + errors.join(" | "));
   await p.close();

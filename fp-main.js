@@ -61,6 +61,12 @@
     $("#fpManualToggle").addEventListener("click", fpManualToggle);
     $("#fpManualAddRow").addEventListener("click", fpManualAddRow);
     $("#fpManualUse").addEventListener("click", fpManualUse);
+    // Allocated Materials: "Allocate instead" (fp-checkout.js); nothing taken off.
+    const alBtn = $("#fpAllocate");
+    if (alBtn) alBtn.addEventListener("click", async () => {
+      if (state.confirming || state.done || !FP.allocateInstead) return;
+      try { await FP.allocateInstead(); } catch (err) { console.error(err); status("Could not allocate: " + err.message, "err"); }
+    });
     $("#fpConfirm").addEventListener("click", async () => {
       if (state.confirming || state.done) return;
       if (promptForMissingJobDetails()) return;

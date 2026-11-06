@@ -333,6 +333,11 @@
       const tr = document.createElement("script");
       tr.src = "transit.js?v=" + Date.now();
       document.body.appendChild(tr);
+      // Allocated Materials (all active staff; 2026-11-06): stock reserved for
+      // a job before Check-out. Never changes stock.
+      const al = document.createElement("script");
+      al.src = "allocations.js?v=" + Date.now();
+      document.body.appendChild(al);
       // Film Cutting (Admins only; its own tab, hidden for everyone else).
       const fc = document.createElement("script");
       fc.src = "film-cutting.js?v=" + Date.now();

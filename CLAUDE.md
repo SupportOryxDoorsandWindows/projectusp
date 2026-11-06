@@ -148,8 +148,9 @@ product lines — never treat one family's item as a match for another's:
 ## UI layout (approved "Oryx Inventory — New UI Proposal", 12 pages)
 
 - Sidebar Stock order (2026-11-05, user's request + the Materials in Transit
-  spec): Dashboard, Master Inventory, Materials in Transit, Check-in,
-  Check-out, Delivery Notes, Activity, Reports (Soon).
+  spec; Allocated Materials added 2026-11-06): Dashboard, Master Inventory,
+  Materials in Transit, Allocated Materials, Check-in, Check-out, Delivery
+  Notes, Activity, Reports (Soon).
 - Shell: left sidebar (`.side`, `nav.side-nav`; Products / Stock / Admin,
   Reports is a disabled "Soon" item) and a `.page-head` band
   (title, subtitle, action) + `.page-body` per view. Tabs are still
@@ -400,6 +401,69 @@ product lines — never treat one family's item as a match for another's:
   unlinked line, logged 'link'; tested `tests/sql/transit-link-line.test.sql`
   after the transit SQL test). NOTE transit.js already has a `linkCell` (New
   PO form): a second function with that name silently replaced it.
+
+## Allocated Materials (2026-11-06, tab "Allocated Materials")
+
+- Owner's "Feature Request: Allocated Materials in Master Inventory" +
+  answers: allocate from a job list (Check-out page, "Allocate instead") AND
+  by hand; cleared AUTOMATICALLY by job number after a Check-out; BLOCK more
+  than Available; own sidebar page (after Materials in Transit); Freedom and
+  Renson; any staff reduces / cancels WITH A REASON (logged); Master
+  Inventory "Qty" -> "Total stock" + "Allocated" + "Available" (value and
+  Kanban stay on total stock); lines can be unticked, short lines capped.
+- NEVER stock: nothing writes inventory_* / renson_*; physical stock changes
+  only at Check-out as before. Available = current_qty - open allocated.
+- SQL `supabase/sql/allocations.sql` (no DROP; re-run safe): `allocations`
+  (job_number, `job_key` = letters+digits upper, client, notes, status open /
+  closed (something checked out) / cancelled; ONE open allocation per job,
+  topping up adds to it), `allocation_lines` (inventory freedom|renson, item
+  id, qty allocated / checked out / released, generated `qty_open`; one line
+  per item per allocation), `allocation_checkout_links` (each Check-out stock
+  line used ONCE, unique kind+tx_id), `allocation_log` (no FK). Staff-only
+  read; writes only via `allocation_create(p)` (staff; locks the items, every
+  line <= Available or NOTHING saved: 'more_than_available: CODE (available
+  x, asked y)'; same item summed; syncs the job's Check-outs first),
+  `allocation_release(p)` (staff, reason required, lines or all; status
+  refreshed) and `allocation_sync(job|null)` (staff; matches check_out lines
+  of inventory_transactions / renson_transactions with the same job key,
+  entered AFTER the allocation was created, to the open lines; records every
+  tx considered). Tested on local Postgres: `tests/sql/allocations.test.sql`
+  (load order in its header).
+- Browser `allocations.js` (boot.js v=20; pure part `ORYX_ALLOC_CORE`, tests
+  `tests/allocations.test.js`): page like Materials in Transit (cards, one
+  row per job, materials underneath 10 per page, job window with Release /
+  Cancel + reason + history, "+ Allocate by hand" with a datalist of Master
+  items, "Allocate a job list" -> Check-out page). fp-checkout.js
+  `allocateInstead` (button `#fpAllocate` beside Confirm, same enable rule;
+  Freedom rows to deduct + Renson ticked lines via
+  `ORYX_RENSON_CHECKOUT.takeLines()`) -> `ORYX_ALLOC.fromCheckout` window
+  (`capLines`) -> done message, NOTHING sent to the checkout function. After
+  a saved Check-out, fp-checkout.js calls `ORYX_ALLOC.afterCheckout` ->
+  `allocation_sync(job)`; silent when no allocation (Check-out / Check-in
+  IDENTICAL old vs new: checkout-same-freedom.js, checkin-same-freedom.js).
+  Master Inventory Freedom (fp-inventory.js `loadAllocated` /
+  `allocatedCells`) and Renson (renson.js `allocCells`): Allocated (hover =
+  jobs, click = this page searching the code) + Available (red below 0);
+  `loadAllocatedByItem` runs `allocation_sync(null)` first (self-healing if
+  a browser missed it). Browser test: `tests/browser/allocations-flow.js
+  --pdf <made-up Freedom job list> --node-modules <dir>`.
+- MASTER INVENTORY LAYOUT (2026-11-06, Pau's Excel via the owner; answers:
+  screen + Extract, quantity columns only on screen, Forecast = Available +
+  In transit): screen columns Item, Physical stock, Allocated, In transit,
+  Available, Forecast available, Unit cost, Value, Status, Last change,
+  buttons (fp-inventory.js `stockFigures` / `quantityCells`; the In transit
+  column moved here from after Status). Renson list: Code, Description, Size,
+  Colour, Unit, Physical stock, Allocated, In transit, Available, Forecast
+  available, Unit cost, Value, Status (renson.js `figures` / `allocCells`).
+  Extract (.xlsx, `INVENTORY_COLS`): Code, Description, Category, Bar length,
+  Unit, Physical Stock Qty, Allocated Materials Qty, Materials in Transit
+  Qty, Available Stock Qty, Forecast Available Stock Qty (these 5 headings
+  in red), Unit cost, Value, Kanban trigger, Critical level, Status; the
+  Renson Extract has the same 5 quantity columns. Kanban status / value
+  still on physical stock.
+- Found while testing: leaving a search box fired "change" and redrew the
+  table, so the next click on a row was lost (Materials in Transit too) --
+  onFilter now skips an unchanged value.
 
 ## Hidden items (not on the official stock list, 2026-10-30)
 

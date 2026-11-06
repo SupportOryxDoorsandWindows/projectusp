@@ -651,6 +651,8 @@
       return R.splitRensonRows(rows, co.lines);
     },
     count() { return co.lines.filter((l) => !co.skip.has(l.item_code)).length; },
+    // The ticked Renson lines, for "Allocate instead" (allocations.js). Read only.
+    takeLines() { return co.lines.filter((l) => !co.skip.has(l.item_code)).map((l) => ({ item_code: l.item_code, qty: l.qty, unit: l.unit, description: l.description })); },
     async commit({ job }) {
       const r = await coSend(job);
       if (!r.ok) co.retry = job;
@@ -874,13 +876,16 @@
 
   async function load() {
     ui.loading = true; ui.loadError = ""; render();
-    const [items, imports, inTransit] = await Promise.all([
+    const [items, imports, inTransit, allocated] = await Promise.all([
       sb.from("renson_items").select("*").order("item_code").order("id"),
       sb.from("renson_imports").select("*").order("created_at", { ascending: false }).limit(1),
       // "In transit" column (2026-11-06): open POs' pending qty linked to each item (display only).
       (async () => { const C = window.ORYX_TRANSIT_CORE; return C && C.loadTransitByItem ? C.loadTransitByItem(sb, "renson") : new Map(); })(),
+      // Allocated / Available columns (2026-11-06): reserved for jobs (display only).
+      (async () => { const C = window.ORYX_ALLOC_CORE; return C && C.loadAllocatedByItem ? C.loadAllocatedByItem(sb, "renson") : new Map(); })(),
     ]);
     ui.inTransit = inTransit;
+    ui.allocated = allocated;
     ui.loading = false;
     const bad = items.error || imports.error;
     if (bad) { ui.loadError = bad.message; return render(); }
@@ -944,19 +949,33 @@
         <span class="muted">${rows.length} of ${all.length} items</span>
         <button type="button" class="btn-outline" data-rn-act="extract">Extract (.xlsx)</button></div>
       <div class="rn-wrap"><table class="rn-table"><thead><tr>
-        <th>Code</th><th>Description</th><th>Size</th><th>Colour</th><th>Unit</th><th class="r">Stock</th><th class="r">Unit cost</th><th class="r">Value</th><th>Status</th><th class="r" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th></tr></thead>
+        <th>Code</th><th>Description</th><th>Size</th><th>Colour</th><th>Unit</th><th class="r" title="Physical stock in the store">Physical stock</th><th class="r" title="Reserved for jobs, still in stock">Allocated</th><th class="r" title="Pending on open purchase orders (Materials in Transit). Not in stock yet.">In transit</th><th class="r" title="Physical stock minus Allocated">Available</th><th class="r" title="Available plus In transit">Forecast available</th><th class="r">Unit cost</th><th class="r">Value</th><th>Status</th></tr></thead>
         <tbody>${rows.map((i) => { const s = statusOf(i); const cls = !s.out && (s.kanban === "low" || s.kanban === "critical") ? "kb-" + s.kanban : (Number(i.current_qty) > 0 ? "" : "rn-zero");
           return `<tr class="${cls}" data-rn-item="${i.id}" title="Open ${esc(i.item_code)}">
           <td class="mono">${esc(i.item_code)}</td>
           <td>${withPhoto(i.item_code, i.description, esc(i.description) + (i.alt_codes ? `<span class="rn-alt">Also ${esc(i.alt_codes)}</span>` : ""))}</td>
           <td>${esc(i.product_size || "")}</td><td>${esc(i.colour || "")}</td><td>${esc(i.unit || "")}</td>
-          <td class="r">${qtyFmt(i.current_qty)}</td>
+          <td class="r">${qtyFmt(i.current_qty)}</td>${allocCells(i)}
           <td class="r">${i.unit_cost == null ? `<span class="muted">No cost</span>` : aed(i.unit_cost)}</td>
-          <td class="r">${aed(i.current_value)}</td><td>${badges(i)}</td>${transitCell(i)}</tr>`; }).join("")}</tbody>
-        <tfoot><tr><td colspan="7">${rows.length < all.length ? "Total of the items shown" : "Total stock value"}</td><td class="r">${aed(shownValue)}</td><td></td><td></td></tr></tfoot>
+          <td class="r">${aed(i.current_value)}</td><td>${badges(i)}</td></tr>`; }).join("")}</tbody>
+        <tfoot><tr><td colspan="11">${rows.length < all.length ? "Total of the items shown" : "Total stock value"}</td><td class="r">${aed(shownValue)}</td><td></td></tr></tfoot>
       </table></div>`;
   }
 
+  // Allocated · In transit · Available · Forecast available (Pau's layout, 2026-11-06).
+  function figures(i) {
+    const a = ui.allocated && ui.allocated.get(String(i.id)), t = ui.inTransit && ui.inTransit.get(String(i.id));
+    const r4 = (v) => Math.round(v * 10000) / 10000, physical = Number(i.current_qty) || 0;
+    const allocated = a ? a.qty : 0, transit = t ? t.qty : 0, available = r4(physical - allocated);
+    return { a, t, physical, allocated, transit, available, forecast: r4(available + transit) };
+  }
+  function allocCells(i) {
+    const f = figures(i), C = window.ORYX_ALLOC_CORE;
+    return (f.a ? `<td class="r"><button type="button" class="mi-al-btn" data-rn-alloc="${esc(i.item_code)}" title="${esc(C ? C.allocTitle(f.a) : "")}">${qtyFmt(f.allocated)}</button></td>` : `<td class="r muted">—</td>`)
+      + transitCell(i)
+      + `<td class="r${f.available < 0 ? " mi-avail-neg" : ""}">${qtyFmt(f.available)}</td>`
+      + `<td class="r${f.forecast < 0 ? " mi-avail-neg" : ""}">${qtyFmt(f.forecast)}</td>`;
+  }
   function transitCell(i) {
     const e = ui.inTransit && ui.inTransit.get(String(i.id)), C = window.ORYX_TRANSIT_CORE;
     if (!e) return `<td class="r muted">—</td>`;
@@ -968,7 +987,8 @@
     const X = window.XLSX;
     const rows = shownItems().map((i) => { const s = statusOf(i); return {
       Code: i.item_code, "Other code": i.alt_codes || "", Description: i.description, Size: i.product_size || "", Colour: i.colour || "", Unit: i.unit || "",
-      Stock: Number(i.current_qty), "Unit cost (AED)": i.unit_cost == null ? "" : Number(i.unit_cost), "Value (AED)": Number(i.current_value),
+      ...(() => { const f = figures(i); return { "Physical Stock Qty": f.physical, "Allocated Materials Qty": f.allocated || "", "Materials in Transit Qty": f.transit || "",
+        "Available Stock Qty": f.available, "Forecast Available Stock Qty": f.forecast }; })(), "Unit cost (AED)": i.unit_cost == null ? "" : Number(i.unit_cost), "Value (AED)": Number(i.current_value),
       "Kanban trigger": i.buffer_level == null ? "" : Number(i.buffer_level), "Critical level": i.critical_level == null ? "" : Number(i.critical_level),
       Status: s.out ? "Out of stock" : s.kanban === "critical" ? "Critical stock" : s.kanban === "low" ? "Low stock" : s.noCost ? "No cost" : "" }; });
     const wb = X.utils.book_new();
@@ -1094,6 +1114,8 @@
   function onClick(e) {
     const t = e.target.closest("[data-rn-tab],[data-rn-act]");
     if (!t) {
+      const alc = e.target.closest("[data-rn-alloc]");
+      if (alc) { if (window.ORYX_ALLOC && window.ORYX_ALLOC.showItem) window.ORYX_ALLOC.showItem(alc.dataset.rnAlloc); return; }
       const tr = e.target.closest("[data-rn-transit]");
       if (tr) { if (window.ORYX_TRANSIT && window.ORYX_TRANSIT.showMaterial) window.ORYX_TRANSIT.showMaterial(tr.dataset.rnTransit); return; }
       const row = e.target.closest("tr[data-rn-item]");
